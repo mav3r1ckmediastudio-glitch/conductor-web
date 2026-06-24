@@ -11,7 +11,7 @@
       container: 'map',
       style: 'https://api.maptiler.com/maps/dataviz-dark/style.json?key=7DkZfFXHsvdG3ZMivAV6',
       center: [-3.77, 56.71],
-      zoom: 14,
+      zoom: 15,
       pitch: 0,
       bearing: 0
     });
@@ -28,13 +28,19 @@
         exaggeration: 1.5
       });
 
+      console.log('Available sources:', Object.keys(map.getStyle().sources));
+
       map.addLayer({
-        id: 'sky',
-        type: 'sky',
+        id: 'buildings-3d',
+        source: 'maptiler_planet',
+        'source-layer': 'building',
+        type: 'fill-extrusion',
+        minzoom: 14,
         paint: {
-          'sky-type': 'atmosphere',
-          'sky-atmosphere-sun': [0.0, 90.0],
-          'sky-atmosphere-sun-intensity': 15
+          'fill-extrusion-color': '#1a1a2e',
+          'fill-extrusion-height': ['get', 'render_height'],
+          'fill-extrusion-base': ['get', 'render_min_height'],
+          'fill-extrusion-opacity': 0.8
         }
       });
     });
