@@ -4,21 +4,60 @@
   import 'maplibre-gl/dist/maplibre-gl.css';
 
   let map;
+  let is3D = false;
 
   onMount(() => {
     map = new maplibregl.Map({
       container: 'map',
       style: 'https://api.maptiler.com/maps/dataviz-dark/style.json?key=7DkZfFXHsvdG3ZMivAV6',
       center: [-3.77, 56.71],
-      zoom: 12
+      zoom: 14,
+      pitch: 0,
+      bearing: 0
+    });
+
+    map.on('load', () => {
+      map.addSource('terrain', {
+        type: 'raster-dem',
+        url: 'https://api.maptiler.com/tiles/terrain-rgb-v2/tiles.json?key=7DkZfFXHsvdG3ZMivAV6',
+        tileSize: 256
+      });
+
+      map.setTerrain({
+        source: 'terrain',
+        exaggeration: 1.5
+      });
+
+      map.addLayer({
+        id: 'sky',
+        type: 'sky',
+        paint: {
+          'sky-type': 'atmosphere',
+          'sky-atmosphere-sun': [0.0, 90.0],
+          'sky-atmosphere-sun-intensity': 15
+        }
+      });
     });
   });
+
+  function toggleView() {
+    if (!map) return;
+    is3D = !is3D;
+    map.easeTo({
+      pitch: is3D ? 60 : 0,
+      bearing: is3D ? -30 : 0,
+      duration: 1200
+    });
+  }
 </script>
 
 <div id="app">
   <nav id="topbar">
     <span class="logo">CONDUCTOR</span>
     <span class="project">No project loaded</span>
+    <button class="view-toggle" on:click={toggleView}>
+      {is3D ? '2D' : '3D'}
+    </button>
     <span class="status-dot"></span>
   </nav>
 
@@ -72,12 +111,28 @@
     letter-spacing: 1px;
   }
 
+  .view-toggle {
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid #00ffcc;
+    color: #00ffcc;
+    font-size: 11px;
+    letter-spacing: 2px;
+    padding: 4px 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .view-toggle:hover {
+    background: #00ffcc;
+    color: #000;
+  }
+
   .status-dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
     background: #00ffcc;
-    margin-left: auto;
     box-shadow: 0 0 6px #00ffcc;
   }
 
@@ -88,7 +143,7 @@
   }
 
   #left-panel {
-    width: 240px;
+    width: 200px;
     background: #0a0a0a;
     border-right: 1px solid #1a1a1a;
     z-index: 10;
@@ -96,7 +151,7 @@
   }
 
   #right-panel {
-    width: 280px;
+    width: 260px;
     background: #0a0a0a;
     border-left: 1px solid #1a1a1a;
     z-index: 10;
