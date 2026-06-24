@@ -9,20 +9,110 @@
     map = new maplibregl.Map({
       container: 'map',
       style: 'https://api.maptiler.com/maps/dataviz-dark/style.json?key=7DkZfFXHsvdG3ZMivAV6',
-      center: [-2.89, 56.39],
+      center: [-3.77, 56.71],
       zoom: 12
     });
   });
 </script>
 
-<div id="map"></div>
+<div id="app">
+  <nav id="topbar">
+    <span class="logo">CONDUCTOR</span>
+    <span class="project">No project loaded</span>
+    <span class="status-dot"></span>
+  </nav>
+
+  <div id="layout">
+    <aside id="left-panel">
+      <div class="panel-section">Tools</div>
+    </aside>
+
+    <div id="map"></div>
+
+    <aside id="right-panel">
+      <div class="panel-section">Design Data</div>
+    </aside>
+  </div>
+</div>
 
 <style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  #app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    width: 100vw;
+    background: #000;
+    color: #fff;
+    font-family: 'Inter', monospace;
+  }
+
+  #topbar {
+    height: 48px;
+    background: #0a0a0a;
+    border-bottom: 1px solid #1a1a1a;
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    gap: 20px;
+    z-index: 100;
+  }
+
+  .logo {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 4px;
+    color: #00ffcc;
+  }
+
+  .project {
+    font-size: 12px;
+    color: #444;
+    letter-spacing: 1px;
+  }
+
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #00ffcc;
+    margin-left: auto;
+    box-shadow: 0 0 6px #00ffcc;
+  }
+
+  #layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  #left-panel {
+    width: 240px;
+    background: #0a0a0a;
+    border-right: 1px solid #1a1a1a;
+    z-index: 10;
+    flex-shrink: 0;
+  }
+
+  #right-panel {
+    width: 280px;
+    background: #0a0a0a;
+    border-left: 1px solid #1a1a1a;
+    z-index: 10;
+    flex-shrink: 0;
+  }
+
+  .panel-section {
+    padding: 16px;
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: #333;
+    text-transform: uppercase;
+    border-bottom: 1px solid #1a1a1a;
+  }
+
   #map {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
+    flex: 1;
   }
 </style>
