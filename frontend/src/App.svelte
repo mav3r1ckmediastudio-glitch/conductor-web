@@ -3,6 +3,12 @@
   import maplibregl from 'maplibre-gl';
   import 'maplibre-gl/dist/maplibre-gl.css';
   import RadialWheel from './RadialWheel.svelte';
+  import CabinetForm from './CabinetForm.svelte';
+  import ProjectSetup from './ProjectSetup.svelte';
+  import AddressImporter from './AddressImporter.svelte';
+  import BuildAreaForm from './BuildAreaForm.svelte';
+  import { projectStore } from './projectStore.js';
+  import { ensureSources, syncToMap, activateCabinetTool, activateBuildAreaTool, applyCookieCutter, clearTool } from './mapTools.js';
 
   const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY;
 
@@ -10,7 +16,25 @@
   let is3D = true;
   let drawerOpen = false;
 
-  // Routes data
+  // Reactive stage from store
+  let stage = projectStore.stage;
+  let project = projectStore.project;
+  projectStore.on(() => {
+    stage = projectStore.stage;
+    project = projectStore.project;
+    if (map) syncToMap(map);
+  });
+
+  // Right panel mode
+  let rpMode = 'default'; // 'default' | 'cabinet-form' | 'build-area-form' | 'address-import'
+  let pendingCabinet = null;
+  let pendingBuildArea = null;
+
+  // Tool label
+  let activeToolLabel = '';
+  let activeCat = 'civil';
+
+  // Routes + asset data (demo)
   const ROUTES = [
     {id:'ENG-CH3-TAIL-002',status:'Routed',  from:'ENG-CH3-CBT-002',to:'ENG-CH3-JNT-005',len:'0.20 km',assets:'1',fibres:'1',cap:'100%',updated:'12/05/2024',eng:'—'},
     {id:'ENG-CH3-RTE-001', status:'Unserved',from:'ENG-CH3-JNT-001',to:'ENG-CH3-PRE-012',len:'73 m',   assets:'—',fibres:'—',cap:'0%',  updated:'—',       eng:'—'},
@@ -19,32 +43,15 @@
     {id:'ENG-CH3-RTE-004', status:'Unserved',from:'ENG-CH3-JNT-002',to:'ENG-CH3-PRE-078',len:'78 m',   assets:'—',fibres:'—',cap:'0%',  updated:'—',       eng:'—'},
     {id:'ENG-CH3-RTE-005', status:'Partial', from:'ENG-CH3-JNT-003',to:'ENG-CH3-PRE-090',len:'112 m',  assets:'2',fibres:'1',cap:'50%', updated:'12/05/2024',eng:'PW'},
   ];
-
   let selectedRoute = 'ENG-CH3-TAIL-002';
-  let activeToolLabel = 'Civil — Place Chamber';
-  let activeCat = 'civil';   
-
-  function onToolSelected(e) {
-    const { label, category } = e.detail;
-    const catLabel = category.charAt(0).toUpperCase() + category.slice(1);
-    activeToolLabel = `${catLabel} — ${label}`;
-  }
 
   const ASSET_ROWS = [
-    ['ID',          'ENG-CH3-JNT-004', ''],
-    ['Type',        'Splice', ''],
-    ['Closure',     'Prysmian CMJ', ''],
-    ['Has Splitter','True', 'ok'],
-    ['Split Ratio', '1:8', ''],
-    ['Cascade Lvl', '2', ''],
-    ['Status',      'In Service', 'ok'],
-    ['Notes',       '—', ''],
+    ['ID','ENG-CH3-JNT-004',''],['Type','Splice',''],['Closure','Prysmian CMJ',''],
+    ['Has Splitter','True','ok'],['Split Ratio','1:8',''],['Cascade Lvl','2',''],
+    ['Status','In Service','ok'],['Notes','—',''],
   ];
 
-  function statusClass(s) {
-    return s === 'Routed' ? 'routed' : s === 'Partial' ? 'partial' : 'unserved';
-  }
-
+  function statusClass(s) { return s === 'Routed' ? 'routed' : s === 'Partial' ? 'partial' : 'unserved'; }
   function capStyle(cap) {
     if (cap === '100%') return 'color:#4dc8ff;';
     if (cap === '0%') return 'color:#ff5555;';
@@ -58,73 +65,156 @@
       center: [-3.77, 56.71],
       zoom: 15,
       pitch: 60,
-      bearing: -30
+      bearing: -30,
     });
 
     map.on('load', () => {
+      ensureSources(map);
+
       map.addSource('terrain', {
         type: 'raster-dem',
         url: `https://api.maptiler.com/tiles/terrain-rgb-v2/tiles.json?key=${MAPTILER_KEY}`,
-        tileSize: 256
+        tileSize: 256,
       });
-
       map.setTerrain({ source: 'terrain', exaggeration: 1.5 });
 
       map.addLayer({
-        id: 'buildings-3d',
-        source: 'maptiler_planet',
-        'source-layer': 'building',
-        type: 'fill-extrusion',
-        minzoom: 14,
-        paint: {
-          'fill-extrusion-color': '#ffffff',
-          'fill-extrusion-height': ['get', 'render_height'],
-          'fill-extrusion-base': ['get', 'render_min_height'],
-          'fill-extrusion-opacity': 0.3
-        }
+        id: 'buildings-3d', source: 'maptiler_planet', 'source-layer': 'building',
+        type: 'fill-extrusion', minzoom: 14,
+        paint: { 'fill-extrusion-color': '#ffffff', 'fill-extrusion-height': ['get', 'render_height'], 'fill-extrusion-base': ['get', 'render_min_height'], 'fill-extrusion-opacity': 0.3 }
+      });
+      map.addLayer({
+        id: 'roads-glow', source: 'maptiler_planet', 'source-layer': 'transportation',
+        type: 'line', filter: ['in', 'class', 'motorway', 'primary', 'secondary', 'tertiary', 'residential'],
+        paint: { 'line-color': '#00aaff', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 6, 16, 16], 'line-blur': 10, 'line-opacity': 0.6 }
+      });
+      map.addLayer({
+        id: 'roads-neon', source: 'maptiler_planet', 'source-layer': 'transportation',
+        type: 'line', filter: ['in', 'class', 'motorway', 'primary', 'secondary', 'tertiary', 'residential'],
+        paint: { 'line-color': '#00ccff', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 1, 16, 2], 'line-opacity': 0.9 }
       });
 
-      map.addLayer({
-        id: 'roads-glow',
-        source: 'maptiler_planet',
-        'source-layer': 'transportation',
-        type: 'line',
-        filter: ['in', 'class', 'motorway', 'primary', 'secondary', 'tertiary', 'residential'],
-        paint: {
-          'line-color': '#00aaff',
-          'line-width': ['interpolate', ['linear'], ['zoom'], 12, 6, 16, 16],
-          'line-blur': 10,
-          'line-opacity': 0.6
-        }
-      });
+      // Restore state from localStorage
+      syncToMap(map);
 
-      map.addLayer({
-        id: 'roads-neon',
-        source: 'maptiler_planet',
-        'source-layer': 'transportation',
-        type: 'line',
-        filter: ['in', 'class', 'motorway', 'primary', 'secondary', 'tertiary', 'residential'],
-        paint: {
-          'line-color': '#00ccff',
-          'line-width': ['interpolate', ['linear'], ['zoom'], 12, 1, 16, 2],
-          'line-opacity': 0.9
-        }
-      });
+      // If we were mid-flow, show the correct right panel
+      if (projectStore.stage === 'import') rpMode = 'address-import';
     });
   });
+
+  // ── Workflow handlers ────────────────────────────────────────────────────
+
+  function onProjectCreated(e) {
+    projectStore.setupProject(e.detail);
+    rpMode = 'address-import';
+  }
+
+  function onAddressImported(e) {
+    projectStore.setAddressPoints(e.detail);
+    syncToMap(map);
+    rpMode = 'default';
+    // Zoom to the data extent
+    if (e.detail.length > 0) {
+      const lngs = e.detail.map(f => f.geometry.coordinates[0]);
+      const lats = e.detail.map(f => f.geometry.coordinates[1]);
+      map.fitBounds([
+        [Math.min(...lngs), Math.min(...lats)],
+        [Math.max(...lngs), Math.max(...lats)],
+      ], { padding: 60, duration: 1200 });
+    }
+  }
+
+  function onAddressSkipped() {
+    projectStore.setAddressPoints([]);
+    rpMode = 'default';
+  }
+
+  function onDrawBuildArea() {
+    clearTool(map);
+    activeToolLabel = 'Draw Build Area';
+    activateBuildAreaTool(map, (feature) => {
+      pendingBuildArea = feature;
+      rpMode = 'build-area-form';
+      activeToolLabel = '';
+    });
+  }
+
+  function onBuildAreaSaved(e) {
+    const attrs = e.detail;
+    const feature = { ...pendingBuildArea, properties: attrs };
+    projectStore.setBuildArea(feature);
+    applyCookieCutter(map, feature);
+    syncToMap(map);
+    rpMode = 'default';
+    pendingBuildArea = null;
+  }
+
+  function onBuildAreaCancelled() {
+    pendingBuildArea = null;
+    rpMode = 'default';
+    clearTool(map);
+    // Clear the preview polygon that was drawn on right-click
+    if (map && map.getSource('build-area-src')) {
+      map.getSource('build-area-src').setData({ type: 'FeatureCollection', features: [] });
+    }
+  }
+
+  function onPlaceCabinet() {
+    clearTool(map);
+    activeToolLabel = 'Place Cabinet / POP';
+    activateCabinetTool(map, (pending) => {
+      pendingCabinet = pending;
+      rpMode = 'cabinet-form';
+      activeToolLabel = '';
+    });
+  }
+
+  function onCabinetSaved(e) {
+    const attrs = e.detail;
+    projectStore.setCabinet({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [attrs.lng, attrs.lat] },
+      properties: attrs,
+    });
+    syncToMap(map);
+    rpMode = 'default';
+    pendingCabinet = null;
+  }
+
+  function onCabinetCancelled() {
+    rpMode = 'default';
+    pendingCabinet = null;
+    clearTool(map);
+  }
+
+  function onToolSelected(e) {
+    const { label, category, toolId } = e.detail;
+    const catLabel = category.charAt(0).toUpperCase() + category.slice(1);
+    activeToolLabel = `${catLabel} — ${label}`;
+    // Additional tool wiring goes here in the next iteration
+  }
 
   function setView(threeD) {
     is3D = threeD;
     if (!map) return;
-    map.easeTo({
-      pitch: threeD ? 60 : 0,
-      bearing: threeD ? -30 : 0,
-      duration: 1200
-    });
+    map.easeTo({ pitch: threeD ? 60 : 0, bearing: threeD ? -30 : 0, duration: 1200 });
+  }
+
+  function newProject() {
+    if (!confirm('Start a new project? This will clear all current data.')) return;
+    projectStore.resetProject();
+    rpMode = 'default';
+    activeToolLabel = '';
+    if (map) syncToMap(map);
   }
 </script>
 
 <div class="screen">
+
+  <!-- PROJECT SETUP MODAL -->
+  {#if stage === 'setup'}
+    <ProjectSetup on:create={onProjectCreated} />
+  {/if}
 
   <!-- TOPBAR -->
   <div class="topbar">
@@ -133,32 +223,34 @@
       <div class="logo-sub">FTTP DESIGN</div>
     </div>
     <div class="tb-stats">
-      <div class="stat"><div class="sv neu" style="font-size:11px;">TARVIN VILLAGE 002</div><div class="sl">ENG-CH3</div></div>
-      <div class="stat"><div class="sv neu">1189</div><div class="sl">Premises</div></div>
-      <div class="stat"><div class="sv ok">31</div><div class="sl">Routed</div></div>
-      <div class="stat"><div class="sv wrn">0</div><div class="sl">Partial</div></div>
-      <div class="stat"><div class="sv bad">1158</div><div class="sl">Unserved</div></div>
-      <div class="stat"><div class="sv neu">1.6 km</div><div class="sl">Fibre</div></div>
-      <div class="stat"><div class="sv neu">1.5 km</div><div class="sl">Duct</div></div>
-      <div class="stat" style="border-right:none;"><div class="sv neu">£22,827</div><div class="sl">Est. Materials</div></div>
+      {#if project}
+        <div class="stat"><div class="sv neu" style="font-size:11px;">{project.name}</div><div class="sl">{project.areaId}</div></div>
+      {:else}
+        <div class="stat"><div class="sv neu" style="font-size:11px;">No Project</div><div class="sl">—</div></div>
+      {/if}
+      <div class="stat"><div class="sv neu">—</div><div class="sl">Premises</div></div>
+      <div class="stat"><div class="sv ok">—</div><div class="sl">Routed</div></div>
+      <div class="stat"><div class="sv wrn">—</div><div class="sl">Partial</div></div>
+      <div class="stat"><div class="sv bad">—</div><div class="sl">Unserved</div></div>
+      <div class="stat"><div class="sv neu">—</div><div class="sl">Fibre</div></div>
+      <div class="stat"><div class="sv neu">—</div><div class="sl">Duct</div></div>
+      <div class="stat" style="border-right:none;"><div class="sv neu">—</div><div class="sl">Est. Materials</div></div>
     </div>
     <div class="tb-centre">
       <div class="tb-grp-wrap">
         <div class="tb-grp-lbl">Validation</div>
         <div class="tb-grp">
-          <button class="tb-btn hi">✓ Validate Routes</button>
-          <button class="tb-btn hi">⚡ Design Health</button>
+          <button class="tb-btn hi" disabled={stage !== 'design'}>✓ Validate Routes</button>
+          <button class="tb-btn hi" disabled={stage !== 'design'}>⚡ Design Health</button>
         </div>
       </div>
       <div class="tb-sep"></div>
       <div class="tb-grp-wrap">
         <div class="tb-grp-lbl">Outputs</div>
         <div class="tb-grp">
-          <button class="tb-btn">Splice Plan</button>
-          <button class="tb-btn">Route Splice</button>
-          <button class="tb-btn">Single Line Diagram</button>
-          <button class="tb-btn">Bill of Materials</button>
-          <button class="tb-btn">Cabinet Cost</button>
+          <button class="tb-btn" disabled={stage !== 'design'}>Splice Plan</button>
+          <button class="tb-btn" disabled={stage !== 'design'}>SLD</button>
+          <button class="tb-btn" disabled={stage !== 'design'}>Bill of Materials</button>
         </div>
       </div>
     </div>
@@ -171,45 +263,75 @@
         <button class="vt" class:on={is3D} on:click={() => setView(true)}>3D</button>
         <button class="vt" class:on={!is3D} on:click={() => setView(false)}>2D</button>
       </div>
+      <button class="tb-new" on:click={newProject} title="New Project">↺ New</button>
     </div>
   </div>
 
   <div class="body">
 
-    <!-- SIDEBAR -->
+    <!-- SIDEBAR — stage-gated -->
     <div class="sidebar">
-      <div class="sid-lbl">Build Tools</div>
-      <button class="cat-pill" class:on={activeCat==='civil'}  on:click={() => activeCat='civil'}>⬡ Civil</button>
-      <button class="cat-pill" class:on={activeCat==='fibre'}  on:click={() => activeCat='fibre'}>⌁ Fibre</button>
-      <button class="cat-pill" class:on={activeCat==='aerial'} on:click={() => activeCat='aerial'}>⌒ Aerial &amp; Poles</button>
-      <button class="cat-pill" class:on={activeCat==='pia'}    on:click={() => activeCat='pia'}>⬛ PIA Underground</button>
-      <div class="sid-div"></div>
-      <div class="sid-lbl">Asset Tools</div>
-      <button class="asset-btn">✎ Edit Asset</button>
-      <button class="asset-btn">✕ Delete Asset</button>
-      <button class="asset-btn">⇄ Move Asset</button>
+
+      {#if stage === 'import'}
+        <div class="sid-lbl">Step 1</div>
+        <button class="cat-pill on" on:click={() => rpMode = 'address-import'}>⬆ Import Address Data</button>
+        <div class="sid-hint">Import a CSV or SHP of address data to inform your build area boundary.</div>
+
+      {:else if stage === 'build-area'}
+        <div class="sid-lbl">Step 2</div>
+        <button class="cat-pill on" on:click={onDrawBuildArea}>⬡ Draw Build Area</button>
+        <div class="sid-hint">Click corners on the map to define your build area polygon. Right-click to finish.</div>
+
+      {:else if stage === 'cabinet'}
+        <div class="sid-lbl">Step 3</div>
+        <button class="cat-pill on" on:click={onPlaceCabinet}>■ Place Cabinet / POP</button>
+        <div class="sid-hint">Place your cabinet or POP. All design tools unlock after this step.</div>
+
+      {:else if stage === 'design'}
+        <div class="sid-lbl">Build Tools</div>
+        <button class="cat-pill" class:on={activeCat==='civil'}  on:click={() => activeCat='civil'}>⬡ Civil</button>
+        <button class="cat-pill" class:on={activeCat==='fibre'}  on:click={() => activeCat='fibre'}>⌁ Fibre</button>
+        <button class="cat-pill" class:on={activeCat==='aerial'} on:click={() => activeCat='aerial'}>⌒ Aerial &amp; Poles</button>
+        <button class="cat-pill" class:on={activeCat==='pia'}    on:click={() => activeCat='pia'}>⬛ PIA Underground</button>
+        <div class="sid-div"></div>
+        <div class="sid-lbl">Asset Tools</div>
+        <button class="asset-btn">✎ Edit Asset</button>
+        <button class="asset-btn">✕ Delete Asset</button>
+        <button class="asset-btn">⇄ Move Asset</button>
+      {/if}
+
     </div>
 
     <!-- MAP + ROUTES DRAWER -->
     <div class="map-wrap">
       <div id="map"></div>
 
-      <!-- Radial tool wheel -->
-     <RadialWheel {activeCat} on:tool-selected={onToolSelected} />
+      {#if stage === 'design'}
+        <RadialWheel {activeCat} on:tool-selected={onToolSelected} />
+      {/if}
 
-      <div class="active-chip"><div class="chip-dot"></div><span>{activeToolLabel}</span></div>
+      {#if activeToolLabel}
+        <div class="active-chip">
+          <div class="chip-dot"></div>
+          <span>{activeToolLabel}</span>
+          <button class="chip-cancel" on:click={() => {
+            clearTool(map);
+            activeToolLabel = '';
+            rpMode = 'default';
+            pendingBuildArea = null;
+            pendingCabinet = null;
+            if (map.getSource('ba-rubber-src')) map.getSource('ba-rubber-src').setData({ type: 'FeatureCollection', features: [] });
+          }}>✕</button>
+        </div>
+      {/if}
 
       <!-- Routes drawer -->
       <div class="routes-drawer" style="height:{drawerOpen ? '220px' : '36px'};">
         <div class="routes-handle" on:click={() => drawerOpen = !drawerOpen}>
           <span class="handle-title">Routes</span>
-          <span class="handle-count">12</span>
-          <span style="font-size:8px;color:#3a5a70;margin-left:4px;letter-spacing:0.06em;">{selectedRoute} selected</span>
+          <span class="handle-count">{ROUTES.length}</span>
           <select class="handle-filter" on:click|stopPropagation>
-            <option>All Routes</option>
-            <option>Routed</option>
-            <option>Partial</option>
-            <option>Unserved</option>
+            <option>All Routes</option><option>Routed</option><option>Partial</option><option>Unserved</option>
           </select>
           <input class="handle-search" placeholder="Search routes..." on:click|stopPropagation />
           <button class="handle-csv" on:click|stopPropagation>↓ CSV</button>
@@ -218,13 +340,11 @@
         {#if drawerOpen}
         <div class="routes-table-wrap">
           <table class="routes-table">
-            <thead>
-              <tr>
-                <th>Route ID</th><th>Status</th><th>From</th><th>To</th>
-                <th>Length</th><th>Assets</th><th>Fibres</th><th>Capacity</th>
-                <th>Updated</th><th>Engineer</th>
-              </tr>
-            </thead>
+            <thead><tr>
+              <th>Route ID</th><th>Status</th><th>From</th><th>To</th>
+              <th>Length</th><th>Assets</th><th>Fibres</th><th>Capacity</th>
+              <th>Updated</th><th>Engineer</th>
+            </tr></thead>
             <tbody>
               {#each ROUTES as r}
                 <tr class:sel={selectedRoute === r.id} on:click={() => selectedRoute = r.id}>
@@ -246,77 +366,101 @@
     <!-- RIGHT PANEL -->
     <div class="rpanel">
 
-      <div class="rp-hdr">
-        <span class="rp-hdr-title">Validation Summary</span>
-        <span class="rp-timestamp">Updated 21:18</span>
-        <button class="rp-refresh">↻</button>
-        <button class="health-btn">✓ Health</button>
-      </div>
+      {#if rpMode === 'address-import'}
+        <AddressImporter
+          on:imported={onAddressImported}
+          on:skip={onAddressSkipped}
+        />
 
-      <div class="val-body">
-        <div class="val-counts">
-          <div class="vc"><div class="vc-val bad">0</div><div class="vc-lbl">Critical</div></div>
-          <div class="vc"><div class="vc-val bad">0</div><div class="vc-lbl">Errors</div></div>
-          <div class="vc"><div class="vc-val wrn">0</div><div class="vc-lbl">Warnings</div></div>
-          <div class="vc"><div class="vc-val neu">1158</div><div class="vc-lbl">Total</div></div>
+      {:else if rpMode === 'build-area-form'}
+        <BuildAreaForm
+          areaId={project?.areaId || ''}
+          on:save={onBuildAreaSaved}
+          on:cancel={onBuildAreaCancelled}
+        />
+
+      {:else if rpMode === 'cabinet-form'}
+        <CabinetForm
+          pending={pendingCabinet}
+          on:save={onCabinetSaved}
+          on:cancel={onCabinetCancelled}
+        />
+
+      {:else}
+        <div class="rp-hdr">
+          <span class="rp-hdr-title">Validation Summary</span>
+          <span class="rp-timestamp">—</span>
+          <button class="rp-refresh">↻</button>
+          <button class="health-btn" disabled={stage !== 'design'}>✓ Health</button>
         </div>
-        <div class="int-row"><span class="int-k">Network Integrity</span><span class="int-v">3%</span></div>
-        <div class="int-bar"><div class="int-fill"></div></div>
-        <div class="checks-note">1,978 of 1,978 checks passed · 1,158 premises not yet connected</div>
-      </div>
-
-      <div class="health-banner caution">
-        ⚠ CAUTION — 1,158 unserved premises. Cabinet placed, civil routes traced but fibre not yet assigned. Run Assign Fibre Roles to progress.
-      </div>
-
-      <div class="outputs-section">
-        <div class="outputs-lbl">Engineer Outputs</div>
-        <button class="out-btn">↗ Splice Plan Export</button>
-        <button class="out-btn">↗ Route Splice Export</button>
-        <button class="out-btn">↗ Single Line Diagram</button>
-        <button class="out-btn">↗ Bill of Materials</button>
-        <button class="out-btn">↗ Cabinet Cost Calculator</button>
-      </div>
-
-      <div class="rp-splitter"></div>
-
-      <div class="asset-section">
-        <div class="asset-hdr">
-          <div class="asset-hdr-lbl">Selected Asset</div>
-          <div class="asset-type">Joint / Closure</div>
-          <div class="asset-id">ENG-CH3-JNT-004</div>
-        </div>
-        <div class="asset-body">
-          {#each ASSET_ROWS as [k, v, cls]}
-            <div class="arow"><span class="ak">{k}</span><span class="av {cls}">{v}</span></div>
-          {/each}
-        </div>
-        <div class="asset-actions">
-          <button class="act-btn">✎ Edit</button>
-          <button class="act-btn">⇄ Move</button>
-          <button class="act-btn">✕ Delete</button>
-          <button class="act-btn">◎ Trace</button>
-        </div>
-      </div>
-
-      <div class="rp-splitter"></div>
-
-      <div class="ri-section">
-        <div class="ri-hdr">
-          <div>
-            <div class="ri-lbl" style="margin-bottom:4px;">Route Inspector</div>
-            <div class="ri-id">ENG-CH3-TAIL-002</div>
+        <div class="val-body">
+          <div class="val-counts">
+            <div class="vc"><div class="vc-val bad">0</div><div class="vc-lbl">Critical</div></div>
+            <div class="vc"><div class="vc-val bad">0</div><div class="vc-lbl">Errors</div></div>
+            <div class="vc"><div class="vc-val wrn">0</div><div class="vc-lbl">Warnings</div></div>
+            <div class="vc"><div class="vc-val neu">—</div><div class="vc-lbl">Total</div></div>
           </div>
-          <span class="ri-badge">Routed</span>
+          <div class="int-row"><span class="int-k">Network Integrity</span><span class="int-v">—</span></div>
+          <div class="int-bar"><div class="int-fill"></div></div>
+          <div class="checks-note">
+            {#if stage === 'setup' || stage === 'import'}
+              Create a project and import address data to begin.
+            {:else if stage === 'build-area'}
+              Draw your build area boundary to continue.
+            {:else if stage === 'cabinet'}
+              Place a cabinet to unlock all design tools.
+            {:else}
+              Run validation to see results.
+            {/if}
+          </div>
         </div>
-        <div class="ri-from">ENG-CH3-CBT-002 → ENG-CH3-JNT-005</div>
-        <div class="ri-stats">
-          <div class="ri-stat"><div class="ri-sv">0.20 km</div><div class="ri-sl">Length</div></div>
-          <div class="ri-stat"><div class="ri-sv">1</div><div class="ri-sl">Fibres</div></div>
-          <div class="ri-stat"><div class="ri-sv">—</div><div class="ri-sl">Assets</div></div>
-          <div class="ri-stat"><div class="ri-sv ok">100%</div><div class="ri-sl">Capacity</div></div>
+
+        <div class="outputs-section">
+          <div class="outputs-lbl">Engineer Outputs</div>
+          <button class="out-btn" disabled={stage !== 'design'}>↗ Splice Plan Export</button>
+          <button class="out-btn" disabled={stage !== 'design'}>↗ Single Line Diagram</button>
+          <button class="out-btn" disabled={stage !== 'design'}>↗ Bill of Materials</button>
+          <button class="out-btn" disabled={stage !== 'design'}>↗ Cabinet Cost Calculator</button>
         </div>
-      </div>
+
+        <div class="rp-splitter"></div>
+
+        <div class="asset-section">
+          <div class="asset-hdr">
+            <div class="asset-hdr-lbl">Selected Asset</div>
+            <div class="asset-type">—</div>
+            <div class="asset-id">—</div>
+          </div>
+          <div class="asset-body">
+            {#each ASSET_ROWS as [k, v, cls]}
+              <div class="arow"><span class="ak">{k}</span><span class="av {cls}">{v}</span></div>
+            {/each}
+          </div>
+          <div class="asset-actions">
+            <button class="act-btn" disabled={stage !== 'design'}>✎ Edit</button>
+            <button class="act-btn" disabled={stage !== 'design'}>⇄ Move</button>
+            <button class="act-btn" disabled={stage !== 'design'}>✕ Delete</button>
+            <button class="act-btn" disabled={stage !== 'design'}>◎ Trace</button>
+          </div>
+        </div>
+
+        <div class="rp-splitter"></div>
+
+        <div class="ri-section">
+          <div class="ri-hdr">
+            <div>
+              <div class="ri-lbl" style="margin-bottom:4px;">Route Inspector</div>
+              <div class="ri-id">—</div>
+            </div>
+          </div>
+          <div class="ri-stats">
+            <div class="ri-stat"><div class="ri-sv">—</div><div class="ri-sl">Length</div></div>
+            <div class="ri-stat"><div class="ri-sv">—</div><div class="ri-sl">Fibres</div></div>
+            <div class="ri-stat"><div class="ri-sv">—</div><div class="ri-sl">Assets</div></div>
+            <div class="ri-stat"><div class="ri-sv">—</div><div class="ri-sl">Capacity</div></div>
+          </div>
+        </div>
+      {/if}
 
     </div>
   </div>
@@ -361,6 +505,9 @@
   .srch { background: #080e14; border: 1px solid #1a2d40; color: #7ab8d4; font-family: 'Courier New', monospace; font-size: 10px; padding: 6px 12px; border-radius: 5px; width: 210px; outline: none; }
   .srch::placeholder { color: #2a4050; }
   .go { background: #00aaff14; border: 1px solid #00aaff44; color: #4dc8ff; font-family: 'Courier New', monospace; font-size: 9px; padding: 6px 12px; border-radius: 5px; cursor: pointer; }
+  .tb-new { background: transparent; border: 1px solid #1a2d40; color: #3a5a70; font-family: 'Courier New', monospace; font-size: 8px; letter-spacing: 0.06em; padding: 5px 10px; border-radius: 4px; cursor: pointer; margin-left: 6px; }
+  .tb-new:hover { border-color: #ff555544; color: #ff5555; }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
   .vtog { display: flex; border: 1px solid #1a2d40; border-radius: 5px; overflow: hidden; }
   .vt { background: #0f1c28; border: none; color: #6a8fa8; font-family: 'Courier New', monospace; font-size: 9px; padding: 6px 12px; cursor: pointer; }
   .vt.on { background: #1a2d40; color: #4dc8ff; }
@@ -383,6 +530,8 @@
   #map { width: 100%; height: 100%; }
   .active-chip { position: absolute; bottom: 60px; left: 50%; transform: translateX(-50%); background: #0d1520ee; border: 1px solid #00aaff44; border-radius: 20px; padding: 7px 18px 7px 12px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: #4dc8ff; display: flex; align-items: center; gap: 8px; white-space: nowrap; z-index: 5; }
   .chip-dot { width: 6px; height: 6px; border-radius: 50%; background: #4dc8ff; box-shadow: 0 0 6px #00aaff; animation: pulse 1.5s ease-in-out infinite; }
+  .chip-cancel { background: transparent; border: none; color: #3a5a70; font-size: 11px; cursor: pointer; padding: 0 0 0 8px; line-height: 1; }
+  .chip-cancel:hover { color: #ff5555; }
   @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: .3 } }
 
   /* ROUTES DRAWER */
