@@ -409,10 +409,6 @@ The original Conductor plugin was developed as a QGIS-based FTTP design tool. Th
 
 No open-source licence is currently included.
 
-Unless a licence is added, this project should be treated as private and proprietary.
-
-Suggested wording for a private commercial repo:
-
 ```text
 Copyright © Mav3r1ck Media Studio.
 All rights reserved.
@@ -424,14 +420,4 @@ agreement with the owner.
 
 ---
 
-## Suggested GitHub description
-
-```text
-Web-based FTTP network design platform for premises import, civils planning, fibre routing, PIA/aerial design, validation, optical budget checks and build outputs.
-```
-
-## Suggested GitHub topics
-
-```text
-fttp fibre-broadband gis maplibre svelte vite fastapi network-design telecoms fibre-planning pia gpon
 ```
