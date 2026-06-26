@@ -6,11 +6,19 @@
   import CabinetForm from './CabinetForm.svelte';
   import ChamberForm from './ChamberForm.svelte';
   import DuctForm from './DuctForm.svelte';
+  import JointForm from './JointForm.svelte';
+  import CableForm from './CableForm.svelte';
   import ProjectSetup from './ProjectSetup.svelte';
   import AddressImporter from './AddressImporter.svelte';
   import BuildAreaForm from './BuildAreaForm.svelte';
   import { projectStore } from './projectStore.js';
-  import { ensureSources, ensureTerrainLayers, syncToMap, activateCabinetTool, activateBuildAreaTool, activateChamberTool, activateDuctTool, applyCookieCutter, clearTool } from './mapTools.js';
+  import {
+    ensureSources, ensureTerrainLayers, syncToMap,
+    activateCabinetTool, activateBuildAreaTool, activateChamberTool,
+    activateDuctTool, activateJointTool, activateDropDuctTool,
+    activateCableTool, activateBundleTool,
+    applyCookieCutter, clearTool
+  } from './mapTools.js';
 
   const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY;
 
@@ -18,7 +26,6 @@
   let is3D = true;
   let drawerOpen = false;
 
-  // Reactive stage from store
   let stage = projectStore.stage;
   let project = projectStore.project;
   projectStore.on(() => {
@@ -27,18 +34,17 @@
     if (map) syncToMap(map);
   });
 
-  // Right panel mode
-  let rpMode = 'default'; // 'default' | 'cabinet-form' | 'build-area-form' | 'address-import'
-  let pendingCabinet = null;
-  let pendingChamber = null;
-  let pendingDuct = null;
+  let rpMode = 'default';
+  let pendingCabinet   = null;
+  let pendingChamber   = null;
+  let pendingDuct      = null;
+  let pendingJoint     = null;
+  let pendingCable     = null;
   let pendingBuildArea = null;
 
-  // Tool label
   let activeToolLabel = '';
   let activeCat = 'civil';
 
-  // Routes + asset data (demo)
   const ROUTES = [
     {id:'ENG-CH3-TAIL-002',status:'Routed',  from:'ENG-CH3-CBT-002',to:'ENG-CH3-JNT-005',len:'0.20 km',assets:'1',fibres:'1',cap:'100%',updated:'12/05/2024',eng:'—'},
     {id:'ENG-CH3-RTE-001', status:'Unserved',from:'ENG-CH3-JNT-001',to:'ENG-CH3-PRE-012',len:'73 m',   assets:'—',fibres:'—',cap:'0%',  updated:'—',       eng:'—'},
@@ -99,10 +105,8 @@
         paint: { 'line-color': '#00ccff', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 1, 16, 2], 'line-opacity': 0.9 }
       });
 
-      // Restore state from localStorage
       syncToMap(map);
 
-      // If we were mid-flow, show the correct right panel
       if (projectStore.stage === 'import') rpMode = 'address-import';
     });
   });
@@ -118,7 +122,6 @@
     projectStore.setAddressPoints(e.detail);
     syncToMap(map);
     rpMode = 'default';
-    // Zoom to the data extent
     if (e.detail.length > 0) {
       const lngs = e.detail.map(f => f.geometry.coordinates[0]);
       const lats = e.detail.map(f => f.geometry.coordinates[1]);
@@ -147,9 +150,7 @@
   function onBuildAreaSaved(e) {
     const attrs = e.detail;
     const feature = { ...pendingBuildArea, properties: attrs };
-    // Apply cookie cutter first — this updates store.addressPoints to clipped set
     applyCookieCutter(map, feature);
-    // Then save build area — store listener will call syncToMap, which uses clipped set
     projectStore.setBuildArea(feature);
     rpMode = 'default';
     pendingBuildArea = null;
@@ -159,7 +160,6 @@
     pendingBuildArea = null;
     rpMode = 'default';
     clearTool(map);
-    // Clear the preview polygon that was drawn on right-click
     if (map && map.getSource('build-area-src')) {
       map.getSource('build-area-src').setData({ type: 'FeatureCollection', features: [] });
     }
@@ -252,12 +252,102 @@
     if (map.getSource('rubberband-src')) map.getSource('rubberband-src').setData({ type: 'FeatureCollection', features: [] });
   }
 
+  function onPlaceJoint() {
+    clearTool(map);
+    activeToolLabel = 'Place Joint — click a chamber';
+    const err = activateJointTool(map, (pending) => {
+      pendingJoint = pending;
+      rpMode = 'joint-form';
+      activeToolLabel = '';
+    });
+    if (err) alert(err.error);
+  }
+
+  function onJointSaved(e) {
+    const attrs = e.detail;
+    projectStore.addJoint({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [attrs.lng, attrs.lat] },
+      properties: attrs,
+    });
+    if (attrs.joint_type === 'SPLICE') {
+      projectStore.updateChamberFunction(attrs.chamber_id, 'JOINT');
+    }
+    syncToMap(map);
+    rpMode = 'default';
+    pendingJoint = null;
+  }
+
+  function onJointCancelled() {
+    rpMode = 'default';
+    pendingJoint = null;
+    clearTool(map);
+  }
+
+  // Drop duct — no form, auto-saves each line, tool stays active
+  function onPlaceDropDuct() {
+    clearTool(map);
+    activeToolLabel = 'Drop Duct — click start, click end (RMB cancels line)';
+    const err = activateDropDuctTool(map, (feature) => {
+      projectStore.addDropDuct(feature);
+      syncToMap(map);
+      // Tool stays active — activeToolLabel stays visible
+    });
+    if (err) { alert(err.error); activeToolLabel = ''; }
+  }
+
+  // Cable — multi-vertex, opens form on RMB
+  function onPlaceCable() {
+    clearTool(map);
+    activeToolLabel = 'Digitise Cable — click vertices, right-click to finish';
+    const err = activateCableTool(map, (pending) => {
+      pendingCable = pending;
+      rpMode = 'cable-form';
+      activeToolLabel = '';
+    });
+    if (err) alert(err.error);
+  }
+
+  function onCableSaved(e) {
+    const attrs = e.detail;
+    projectStore.addCable({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: attrs.coordinates },
+      properties: attrs,
+    });
+    syncToMap(map);
+    rpMode = 'default';
+    pendingCable = null;
+  }
+
+  function onCableCancelled() {
+    rpMode = 'default';
+    pendingCable = null;
+    clearTool(map);
+    if (map.getSource('rubberband-src')) map.getSource('rubberband-src').setData({ type: 'FeatureCollection', features: [] });
+  }
+
+  // Bundle — no form, auto-saves each line, tool stays active
+  function onPlaceBundle() {
+    clearTool(map);
+    activeToolLabel = 'Bundle — click joint, click premise (RMB cancels line)';
+    const err = activateBundleTool(map, (feature) => {
+      projectStore.addBundle(feature);
+      syncToMap(map);
+    });
+    if (err) { alert(err.error); activeToolLabel = ''; }
+  }
+
   function onToolSelected(e) {
     const { label, category, toolId } = e.detail;
     const catLabel = category.charAt(0).toUpperCase() + category.slice(1);
     activeToolLabel = `${catLabel} — ${label}`;
-    if (toolId === 'civil-chamber') onPlaceChamber();
-    if (toolId === 'civil-duct') onPlaceDuct();
+    if (toolId === 'civil-chamber')  onPlaceChamber();
+    if (toolId === 'civil-duct')     onPlaceDuct();
+    if (toolId === 'civil-dropduct') onPlaceDropDuct();
+    if (toolId === 'fibre-joint')    onPlaceJoint();
+    if (toolId === 'fibre-cable')    onPlaceCable();
+    if (toolId === 'fibre-bundle')   onPlaceBundle();
     // Additional tool wiring goes here in the next iteration
   }
 
@@ -278,12 +368,10 @@
 
 <div class="screen">
 
-  <!-- PROJECT SETUP MODAL -->
   {#if stage === 'setup'}
     <ProjectSetup on:create={onProjectCreated} />
   {/if}
 
-  <!-- TOPBAR -->
   <div class="topbar">
     <div class="tb-logo">
       <div class="logo-main">CONDUCTOR</div>
@@ -336,24 +424,19 @@
 
   <div class="body">
 
-    <!-- SIDEBAR — stage-gated -->
     <div class="sidebar">
-
       {#if stage === 'import'}
         <div class="sid-lbl">Step 1</div>
         <button class="cat-pill on" on:click={() => rpMode = 'address-import'}>⬆ Import Address Data</button>
         <div class="sid-hint">Import a CSV or SHP of address data to inform your build area boundary.</div>
-
       {:else if stage === 'build-area'}
         <div class="sid-lbl">Step 2</div>
         <button class="cat-pill on" on:click={onDrawBuildArea}>⬡ Draw Build Area</button>
         <div class="sid-hint">Click corners on the map to define your build area polygon. Right-click to finish.</div>
-
       {:else if stage === 'cabinet'}
         <div class="sid-lbl">Step 3</div>
         <button class="cat-pill on" on:click={onPlaceCabinet}>■ Place Cabinet / POP</button>
         <div class="sid-hint">Place your cabinet or POP. All design tools unlock after this step.</div>
-
       {:else if stage === 'design'}
         <div class="sid-lbl">Build Tools</div>
         <button class="cat-pill" class:on={activeCat==='civil'}  on:click={() => activeCat='civil'}>⬡ Civil</button>
@@ -366,10 +449,8 @@
         <button class="asset-btn">✕ Delete Asset</button>
         <button class="asset-btn">⇄ Move Asset</button>
       {/if}
-
     </div>
 
-    <!-- MAP + ROUTES DRAWER -->
     <div class="map-wrap">
       <div id="map"></div>
 
@@ -392,7 +473,6 @@
         </div>
       {/if}
 
-      <!-- Routes drawer -->
       <div class="routes-drawer" style="height:{drawerOpen ? '220px' : '36px'};">
         <div class="routes-handle" on:click={() => drawerOpen = !drawerOpen}>
           <span class="handle-title">Routes</span>
@@ -430,42 +510,28 @@
       </div>
     </div>
 
-    <!-- RIGHT PANEL -->
     <div class="rpanel">
 
       {#if rpMode === 'address-import'}
-        <AddressImporter
-          on:imported={onAddressImported}
-          on:skip={onAddressSkipped}
-        />
+        <AddressImporter on:imported={onAddressImported} on:skip={onAddressSkipped} />
 
       {:else if rpMode === 'build-area-form'}
-        <BuildAreaForm
-          areaId={project?.areaId || ''}
-          on:save={onBuildAreaSaved}
-          on:cancel={onBuildAreaCancelled}
-        />
-
-      {:else if rpMode === 'duct-form'}
-        <DuctForm
-          pending={pendingDuct}
-          on:save={onDuctSaved}
-          on:cancel={onDuctCancelled}
-        />
-
-      {:else if rpMode === 'chamber-form'}
-        <ChamberForm
-          pending={pendingChamber}
-          on:save={onChamberSaved}
-          on:cancel={onChamberCancelled}
-        />
+        <BuildAreaForm areaId={project?.areaId || ''} on:save={onBuildAreaSaved} on:cancel={onBuildAreaCancelled} />
 
       {:else if rpMode === 'cabinet-form'}
-        <CabinetForm
-          pending={pendingCabinet}
-          on:save={onCabinetSaved}
-          on:cancel={onCabinetCancelled}
-        />
+        <CabinetForm pending={pendingCabinet} on:save={onCabinetSaved} on:cancel={onCabinetCancelled} />
+
+      {:else if rpMode === 'chamber-form'}
+        <ChamberForm pending={pendingChamber} on:save={onChamberSaved} on:cancel={onChamberCancelled} />
+
+      {:else if rpMode === 'duct-form'}
+        <DuctForm pending={pendingDuct} on:save={onDuctSaved} on:cancel={onDuctCancelled} />
+
+      {:else if rpMode === 'joint-form'}
+        <JointForm pending={pendingJoint} on:save={onJointSaved} on:cancel={onJointCancelled} />
+
+      {:else if rpMode === 'cable-form'}
+        <CableForm pending={pendingCable} on:save={onCableSaved} on:cancel={onCableCancelled} />
 
       {:else}
         <div class="rp-hdr">
@@ -552,17 +618,8 @@
   :global(body) { margin: 0; }
   * { box-sizing: border-box; }
 
-  .screen {
-    width: 100vw;
-    height: 100vh;
-    background: #0a0f14;
-    display: flex;
-    flex-direction: column;
-    font-family: 'Courier New', Courier, monospace;
-    overflow: hidden;
-  }
+  .screen { width: 100vw; height: 100vh; background: #0a0f14; display: flex; flex-direction: column; font-family: 'Courier New', Courier, monospace; overflow: hidden; }
 
-  /* TOPBAR */
   .topbar { height: 52px; background: #0d1520; border-bottom: 1px solid #1a2d40; display: flex; align-items: stretch; flex-shrink: 0; }
   .tb-logo { display: flex; flex-direction: column; justify-content: center; padding: 0 16px 0 14px; border-right: 1px solid #1a2d40; }
   .logo-main { color: #4dc8ff; font-size: 13px; font-weight: 700; letter-spacing: 0.16em; text-shadow: 0 0 12px #00aaff66; }
@@ -595,7 +652,6 @@
 
   .body { display: flex; flex: 1; overflow: hidden; position: relative; }
 
-  /* SIDEBAR */
   .sidebar { width: 140px; background: #0d1520; border-right: 1px solid #1a2d40; display: flex; flex-direction: column; justify-content: center; flex-shrink: 0; z-index: 10; }
   .sid-lbl { font-size: 8px; color: #3a5a70; letter-spacing: 0.12em; text-transform: uppercase; padding: 12px 12px 6px 12px; }
   .sid-div { height: 1px; background: #1a2d40; margin: 8px 12px; }
@@ -606,7 +662,6 @@
   .asset-btn { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-left: 2px solid transparent; color: #6a8fa8; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; transition: all 0.15s; background: transparent; border-top: none; border-right: none; border-bottom: none; width: 100%; text-align: left; font-family: 'Courier New', monospace; }
   .asset-btn:hover { background: #0f1c28; color: #a0c4d8; border-left-color: #2a4a5e; }
 
-  /* MAP */
   .map-wrap { flex: 1; position: relative; overflow: hidden; }
   #map { width: 100%; height: 100%; }
   .active-chip { position: absolute; bottom: 60px; left: 50%; transform: translateX(-50%); background: #0d1520ee; border: 1px solid #00aaff44; border-radius: 20px; padding: 7px 18px 7px 12px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: #4dc8ff; display: flex; align-items: center; gap: 8px; white-space: nowrap; z-index: 5; }
@@ -615,7 +670,6 @@
   .chip-cancel:hover { color: #ff5555; }
   @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: .3 } }
 
-  /* ROUTES DRAWER */
   .routes-drawer { position: absolute; bottom: 0; left: 0; right: 0; z-index: 20; display: flex; flex-direction: column; transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
   .routes-handle { height: 36px; background: #0d1520; border-top: 1px solid #1a2d40; display: flex; align-items: center; padding: 0 16px; gap: 12px; cursor: pointer; flex-shrink: 0; user-select: none; }
   .routes-handle:hover { background: #111c28; }
@@ -640,7 +694,6 @@
   .status-pill.partial { background: #ffaa4414; color: #ffaa44; border: 1px solid #ffaa4433; }
   .status-pill.unserved { background: #ff555514; color: #ff5555; border: 1px solid #ff555533; }
 
-  /* RIGHT PANEL */
   .rpanel { width: 300px; background: #0d1520; border-left: 1px solid #1a2d40; display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden; z-index: 10; }
   .rp-hdr { height: 44px; background: #0d1520; border-bottom: 1px solid #1a2d40; display: flex; align-items: center; padding: 0 14px; gap: 8px; flex-shrink: 0; }
   .rp-hdr-title { font-size: 9px; color: #a0c4d8; letter-spacing: 0.14em; text-transform: uppercase; flex: 1; font-weight: 600; }

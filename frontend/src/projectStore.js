@@ -5,9 +5,7 @@
 const STORAGE_KEY = 'conductor_web_project';
 
 // ── BNG → WGS84 conversion (Helmert transform approximation) ─────────────────
-// Accurate to ~5m for GB — sufficient for design purposes.
 function bngToWgs84(easting, northing) {
-  // OSGB36 to WGS84 via approximate Helmert parameters
   const a = 6377563.396, b = 6356256.909;
   const F0 = 0.9996012717;
   const lat0 = 49 * Math.PI / 180;
@@ -35,22 +33,21 @@ function bngToWgs84(easting, northing) {
   const rho = a * F0 * (1 - e2) / Math.pow(1 - e2 * sinLat * sinLat, 1.5);
   const eta2 = nu / rho - 1;
 
-  const VII = tanLat / (2 * rho * nu);
+  const VII  = tanLat / (2 * rho * nu);
   const VIII = tanLat / (24 * rho * nu * nu * nu) * (5 + 3 * tanLat * tanLat + eta2 - 9 * tanLat * tanLat * eta2);
-  const IX = tanLat / (720 * rho * Math.pow(nu, 5)) * (61 + 90 * tanLat * tanLat + 45 * Math.pow(tanLat, 4));
-  const X = 1 / (cosLat * nu);
-  const XI = 1 / (cosLat * 6 * nu * nu * nu) * (nu / rho + 2 * tanLat * tanLat);
-  const XII = 1 / (cosLat * 120 * Math.pow(nu, 5)) * (5 + 28 * tanLat * tanLat + 24 * Math.pow(tanLat, 4));
+  const IX   = tanLat / (720 * rho * Math.pow(nu, 5)) * (61 + 90 * tanLat * tanLat + 45 * Math.pow(tanLat, 4));
+  const X    = 1 / (cosLat * nu);
+  const XI   = 1 / (cosLat * 6 * nu * nu * nu) * (nu / rho + 2 * tanLat * tanLat);
+  const XII  = 1 / (cosLat * 120 * Math.pow(nu, 5)) * (5 + 28 * tanLat * tanLat + 24 * Math.pow(tanLat, 4));
   const XIIA = 1 / (cosLat * 5040 * Math.pow(nu, 7)) * (61 + 662 * tanLat * tanLat + 1320 * Math.pow(tanLat, 4) + 720 * Math.pow(tanLat, 6));
 
   const dE = easting - E0;
   const latRad = lat - VII * dE * dE + VIII * Math.pow(dE, 4) - IX * Math.pow(dE, 6);
   const lonRad = lon0 + X * dE - XI * Math.pow(dE, 3) + XII * Math.pow(dE, 5) - XIIA * Math.pow(dE, 7);
 
-  // Helmert shift OSGB36 → WGS84
   const latDeg = latRad * 180 / Math.PI;
   const lonDeg = lonRad * 180 / Math.PI;
-  return { lat: latDeg + 0.0001, lng: lonDeg + 0.0002 }; // ~5m shift approx
+  return { lat: latDeg + 0.0001, lng: lonDeg + 0.0002 };
 }
 
 // ── Column detection ─────────────────────────────────────────────────────────
@@ -82,7 +79,6 @@ export function parseAddressCsv(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) throw new Error('CSV has no data rows');
 
-  // Simple CSV split respecting quoted fields
   function splitRow(line) {
     const result = [];
     let current = '';
@@ -143,13 +139,17 @@ export function parseAddressCsv(text) {
 // ── Store ────────────────────────────────────────────────────────────────────
 
 const DEFAULT_STATE = {
-  stage: 'setup',        // 'setup' | 'import' | 'build-area' | 'cabinet' | 'design'
-  project: null,         // { name, countryCode, buildCode, areaId }
-  buildArea: null,       // GeoJSON Polygon Feature
-  cabinet: null,         // GeoJSON Point Feature
+  stage: 'setup',
+  project: null,
+  buildArea: null,
+  cabinet: null,
   chambers: [],
   ducts: [],
-  addressPoints: [],     // GeoJSON Feature[] — address/UPRN points
+  joints: [],
+  dropDucts: [],
+  cables: [],
+  bundles: [],
+  addressPoints: [],
 };
 
 function load() {
@@ -172,13 +172,17 @@ class ProjectStore {
     this._listeners = [];
   }
 
-  get state() { return this._state; }
-  get stage() { return this._state.stage; }
-  get project() { return this._state.project; }
-  get buildArea() { return this._state.buildArea; }
-  get cabinet() { return this._state.cabinet; }
-  get chambers() { return this._state.chambers; }
-  get ducts() { return this._state.ducts; }
+  get state()         { return this._state; }
+  get stage()         { return this._state.stage; }
+  get project()       { return this._state.project; }
+  get buildArea()     { return this._state.buildArea; }
+  get cabinet()       { return this._state.cabinet; }
+  get chambers()      { return this._state.chambers; }
+  get ducts()         { return this._state.ducts; }
+  get joints()        { return this._state.joints; }
+  get dropDucts()     { return this._state.dropDucts; }
+  get cables()        { return this._state.cables; }
+  get bundles()       { return this._state.bundles; }
   get addressPoints() { return this._state.addressPoints; }
 
   on(fn) { this._listeners.push(fn); return () => { this._listeners = this._listeners.filter(l => l !== fn); }; }
@@ -216,6 +220,32 @@ class ProjectStore {
 
   addDuct(feature) {
     this._update({ ducts: [...this._state.ducts, feature] });
+  }
+
+  addJoint(feature) {
+    this._update({ joints: [...this._state.joints, feature] });
+  }
+
+  addDropDuct(feature) {
+    this._update({ dropDucts: [...this._state.dropDucts, feature] });
+  }
+
+  addCable(feature) {
+    this._update({ cables: [...this._state.cables, feature] });
+  }
+
+  addBundle(feature) {
+    this._update({ bundles: [...this._state.bundles, feature] });
+  }
+
+  updateChamberFunction(chamberId, newFunction) {
+    const updated = this._state.chambers.map(ch => {
+      if (ch.properties.chamber_id === chamberId) {
+        return { ...ch, properties: { ...ch.properties, chamber_type: newFunction } };
+      }
+      return ch;
+    });
+    this._update({ chambers: updated });
   }
 
   resetProject() {
