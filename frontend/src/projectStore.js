@@ -190,6 +190,10 @@ class ProjectStore {
     this._emit('change');
   }
 
+  _save() {
+    save(this._state);
+  }
+
   setupProject(project) {
     this._update({ project, stage: 'import' });
   }

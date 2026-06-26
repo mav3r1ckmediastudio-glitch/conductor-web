@@ -4,11 +4,13 @@
   import 'maplibre-gl/dist/maplibre-gl.css';
   import RadialWheel from './RadialWheel.svelte';
   import CabinetForm from './CabinetForm.svelte';
+  import ChamberForm from './ChamberForm.svelte';
+  import DuctForm from './DuctForm.svelte';
   import ProjectSetup from './ProjectSetup.svelte';
   import AddressImporter from './AddressImporter.svelte';
   import BuildAreaForm from './BuildAreaForm.svelte';
   import { projectStore } from './projectStore.js';
-  import { ensureSources, syncToMap, activateCabinetTool, activateBuildAreaTool, applyCookieCutter, clearTool } from './mapTools.js';
+  import { ensureSources, ensureTerrainLayers, syncToMap, activateCabinetTool, activateBuildAreaTool, activateChamberTool, activateDuctTool, applyCookieCutter, clearTool } from './mapTools.js';
 
   const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY;
 
@@ -28,6 +30,8 @@
   // Right panel mode
   let rpMode = 'default'; // 'default' | 'cabinet-form' | 'build-area-form' | 'address-import'
   let pendingCabinet = null;
+  let pendingChamber = null;
+  let pendingDuct = null;
   let pendingBuildArea = null;
 
   // Tool label
@@ -77,6 +81,7 @@
         tileSize: 256,
       });
       map.setTerrain({ source: 'terrain', exaggeration: 1.5 });
+      ensureTerrainLayers(map);
 
       map.addLayer({
         id: 'buildings-3d', source: 'maptiler_planet', 'source-layer': 'building',
@@ -142,9 +147,10 @@
   function onBuildAreaSaved(e) {
     const attrs = e.detail;
     const feature = { ...pendingBuildArea, properties: attrs };
-    projectStore.setBuildArea(feature);
+    // Apply cookie cutter first — this updates store.addressPoints to clipped set
     applyCookieCutter(map, feature);
-    syncToMap(map);
+    // Then save build area — store listener will call syncToMap, which uses clipped set
+    projectStore.setBuildArea(feature);
     rpMode = 'default';
     pendingBuildArea = null;
   }
@@ -187,10 +193,71 @@
     clearTool(map);
   }
 
+  function onPlaceChamber() {
+    clearTool(map);
+    activeToolLabel = 'Place Chamber';
+    const err = activateChamberTool(map, (pending) => {
+      pendingChamber = pending;
+      rpMode = 'chamber-form';
+      activeToolLabel = '';
+    });
+    if (err) alert(err.error);
+  }
+
+  function onChamberSaved(e) {
+    const attrs = e.detail;
+    projectStore.addChamber({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [attrs.lng, attrs.lat] },
+      properties: attrs,
+    });
+    syncToMap(map);
+    rpMode = 'default';
+    pendingChamber = null;
+  }
+
+  function onChamberCancelled() {
+    rpMode = 'default';
+    pendingChamber = null;
+    clearTool(map);
+  }
+
+  function onPlaceDuct() {
+    clearTool(map);
+    activeToolLabel = 'Digitise Duct — click vertices, right-click to finish';
+    const err = activateDuctTool(map, (pending) => {
+      pendingDuct = pending;
+      rpMode = 'duct-form';
+      activeToolLabel = '';
+    });
+    if (err) alert(err.error);
+  }
+
+  function onDuctSaved(e) {
+    const attrs = e.detail;
+    projectStore.addDuct({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: attrs.coordinates },
+      properties: attrs,
+    });
+    syncToMap(map);
+    rpMode = 'default';
+    pendingDuct = null;
+  }
+
+  function onDuctCancelled() {
+    rpMode = 'default';
+    pendingDuct = null;
+    clearTool(map);
+    if (map.getSource('rubberband-src')) map.getSource('rubberband-src').setData({ type: 'FeatureCollection', features: [] });
+  }
+
   function onToolSelected(e) {
     const { label, category, toolId } = e.detail;
     const catLabel = category.charAt(0).toUpperCase() + category.slice(1);
     activeToolLabel = `${catLabel} — ${label}`;
+    if (toolId === 'civil-chamber') onPlaceChamber();
+    if (toolId === 'civil-duct') onPlaceDuct();
     // Additional tool wiring goes here in the next iteration
   }
 
@@ -377,6 +444,20 @@
           areaId={project?.areaId || ''}
           on:save={onBuildAreaSaved}
           on:cancel={onBuildAreaCancelled}
+        />
+
+      {:else if rpMode === 'duct-form'}
+        <DuctForm
+          pending={pendingDuct}
+          on:save={onDuctSaved}
+          on:cancel={onDuctCancelled}
+        />
+
+      {:else if rpMode === 'chamber-form'}
+        <ChamberForm
+          pending={pendingChamber}
+          on:save={onChamberSaved}
+          on:cancel={onChamberCancelled}
         />
 
       {:else if rpMode === 'cabinet-form'}

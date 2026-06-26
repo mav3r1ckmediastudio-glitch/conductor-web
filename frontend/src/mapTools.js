@@ -173,39 +173,14 @@ export function ensureSources(map) {
     });
   }
 
-  // ── Ducts ─────────────────────────────────────────────────────────────
+  // ── Ducts — source only, layer added after terrain in ensureTerrainLayers() ──
   if (!map.getSource('ducts-src')) {
     map.addSource('ducts-src', { type: 'geojson', data: emptyFC() });
-    map.addLayer({
-      id: 'ducts-layer',
-      type: 'line',
-      source: 'ducts-src',
-      layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: {
-        'line-color': '#4dc8ff',
-        'line-width': 2.5,
-        'line-opacity': 0.9,
-        'line-elevation-reference': 'sea',
-      }
-    });
   }
 
-  // ── Rubber-band (duct digitising) ─────────────────────────────────────
+  // ── Rubber-band — source only, layer added after terrain ─────────────
   if (!map.getSource('rubberband-src')) {
     map.addSource('rubberband-src', { type: 'geojson', data: emptyFC() });
-    map.addLayer({
-      id: 'rubberband-layer',
-      type: 'line',
-      source: 'rubberband-src',
-      layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: {
-        'line-color': '#4dc8ff',
-        'line-width': 1.5,
-        'line-opacity': 0.45,
-        'line-dasharray': [4, 3],
-        'line-elevation-reference': 'sea',
-      }
-    });
   }
 
   // ── Snap indicator ────────────────────────────────────────────────────
@@ -220,6 +195,40 @@ export function ensureSources(map) {
         'circle-color': 'transparent',
         'circle-stroke-width': 2,
         'circle-stroke-color': '#ffaa44',
+      }
+    });
+  }
+}
+
+// ── TERRAIN-DEPENDENT LAYERS ─────────────────────────────────────────────────
+// Lines drape on terrain automatically when terrain is enabled.
+
+export function ensureTerrainLayers(map) {
+  if (!map.getLayer('ducts-layer')) {
+    map.addLayer({
+      id: 'ducts-layer',
+      type: 'line',
+      source: 'ducts-src',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: {
+        'line-color': '#4dc8ff',
+        'line-width': 2.5,
+        'line-opacity': 0.9,
+      }
+    });
+  }
+
+  if (!map.getLayer('rubberband-layer')) {
+    map.addLayer({
+      id: 'rubberband-layer',
+      type: 'line',
+      source: 'rubberband-src',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: {
+        'line-color': '#4dc8ff',
+        'line-width': 1.5,
+        'line-opacity': 0.5,
+        'line-dasharray': [3, 2],
       }
     });
   }
@@ -365,27 +374,28 @@ export function activateBuildAreaTool(map, onFinish) {
 // Uses a simple point-in-polygon test via a GeoJSON filter expression.
 
 export function applyCookieCutter(map, buildAreaFeature) {
-  if (!map.getLayer('addresses-points')) return;
+  if (!map.getSource('addresses-src')) return;
 
-  // MapLibre can't do point-in-polygon natively in expressions,
-  // so we filter by tagging features as inside/outside and filtering by that.
-  // For large datasets we do this in JS and re-set the source data.
   const ring = buildAreaFeature.geometry.coordinates[0];
-  const current = map.getSource('addresses-src')._data;
-  if (!current?.features) return;
 
-  const inside = current.features.filter(f => {
+  // Filter from the store's full address list — don't read from map source internals
+  const all = projectStore.state.addressPoints || [];
+  if (!all.length) return;
+
+  const inside = all.filter(f => {
     const [lng, lat] = f.geometry.coordinates;
     return pointInPolygon(lng, lat, ring);
   });
 
+  // Update the map source directly
   map.getSource('addresses-src').setData({
     type: 'FeatureCollection',
     features: inside,
   });
 
-  // Update the store too
+  // Persist the clipped set so it survives syncToMap calls
   projectStore._state.addressPoints = inside;
+  projectStore._save();
 }
 
 function pointInPolygon(lng, lat, ring) {
@@ -445,9 +455,96 @@ export function activateCabinetTool(map, onFinish) {
   _activeTool = { cleanup };
 }
 
+// ── CHAMBER TOOL ─────────────────────────────────────────────────────────────
+
+const CHAMBER_BASE = { N: 1,    S: 1001, W: 2001, E: 3001 };
+const CHAMBER_MAX  = { N: 999,  S: 1999, W: 2999, E: 3999 };
+
+function nextChamberId(areaId, direction) {
+  const prefix = `${areaId}-CMBR-`;
+  const base = CHAMBER_BASE[direction];
+  const max  = CHAMBER_MAX[direction];
+  const existing = new Set();
+  for (const ch of projectStore.chambers) {
+    const seq = ch.properties.chamber_seq;
+    if (seq >= base && seq <= max) existing.add(seq);
+  }
+  let n = base;
+  while (existing.has(n) && n <= max) n++;
+  if (n > max) throw new Error(`No available chamber numbers for direction ${direction}`);
+  return { id: `${prefix}${String(n).padStart(4,'0')}`, seq: n };
+}
+
+export function activateChamberTool(map, onFinish) {
+  clearTool(map);
+
+  if (!projectStore.cabinet) {
+    return { error: 'No cabinet placed yet. Place a Cabinet/POP first.' };
+  }
+
+  map.getCanvas().style.cursor = 'crosshair';
+  const [cabLng, cabLat] = projectStore.cabinet.geometry.coordinates;
+  const areaId = projectStore.project?.areaId || 'XX-XX';
+
+  function onMousemove(e) {
+    const snap = _snapToNode(map, e.lngLat);
+    if (snap) {
+      map.getSource('snap-src').setData(pointFC(snap.lngLat.lng, snap.lngLat.lat));
+      map.getCanvas().style.cursor = 'pointer';
+    } else {
+      map.getSource('snap-src').setData(emptyFC());
+      map.getCanvas().style.cursor = 'crosshair';
+    }
+  }
+
+  function onClick(e) {
+    const snap = _snapToNode(map, e.lngLat);
+    const { lng, lat } = snap ? snap.lngLat : e.lngLat;
+    const direction = compassLeg(cabLng, cabLat, lng, lat);
+
+    let chamberId, chamberSeq;
+    try {
+      const result = nextChamberId(areaId, direction);
+      chamberId = result.id;
+      chamberSeq = result.seq;
+    } catch (err) {
+      alert(err.message);
+      return;
+    }
+
+    onFinish({
+      lng, lat,
+      chamber_id:  chamberId,
+      chamber_seq: chamberSeq,
+      compass_dir: direction,
+      area_id:     areaId,
+      pop_id:      projectStore.cabinet.properties.pop_id,
+    });
+    cleanup();
+  }
+
+  function onKeydown(e) {
+    if (e.key === 'Escape') { cleanup(); }
+  }
+
+  function cleanup() {
+    map.off('click', onClick);
+    map.off('mousemove', onMousemove);
+    document.removeEventListener('keydown', onKeydown);
+    map.getSource('snap-src').setData(emptyFC());
+    map.getCanvas().style.cursor = '';
+  }
+
+  map.on('mousemove', onMousemove);
+  map.on('click', onClick);
+  document.addEventListener('keydown', onKeydown);
+  _activeTool = { cleanup };
+  return null;
+}
+
 // ── SNAP HELPER ───────────────────────────────────────────────────────────────
 
-export function snapToNode(map, lngLat, snapPx = 16) {
+function _snapToNode(map, lngLat, snapPx = 16) {
   const pt = map.project(lngLat);
   const candidates = [];
   const cab = projectStore.cabinet;
@@ -469,6 +566,160 @@ export function snapToNode(map, lngLat, snapPx = 16) {
   if (!candidates.length) return null;
   candidates.sort((a, b) => a.dist - b.dist);
   return candidates[0];
+}
+
+export { _snapToNode as snapToNode };
+
+// ── DUCT TOOL ─────────────────────────────────────────────────────────────────
+
+const DUCT_BASE = { N: 1,   S: 100, E: 200, W: 300 };
+const DUCT_MAX  = { N: 99,  S: 199, E: 299, W: 399 };
+
+function nextDuctId(areaId, direction) {
+  const prefix = `${areaId}-DUCT-`;
+  const base = DUCT_BASE[direction];
+  const max  = DUCT_MAX[direction];
+  const existing = new Set();
+  for (const d of projectStore.ducts) {
+    const seq = d.properties.duct_seq;
+    if (seq >= base && seq <= max) existing.add(seq);
+  }
+  let n = base;
+  while (existing.has(n) && n <= max) n++;
+  if (n > max) throw new Error(`No available duct numbers for leg ${direction}`);
+  return { id: `${prefix}${String(n).padStart(3,'0')}`, seq: n };
+}
+
+function haversine(lng1, lat1, lng2, lat2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+function haversineChain(coords) {
+  let total = 0;
+  for (let i = 1; i < coords.length; i++) {
+    total += haversine(coords[i-1][0], coords[i-1][1], coords[i][0], coords[i][1]);
+  }
+  return total;
+}
+
+export function activateDuctTool(map, onFinish) {
+  clearTool(map);
+
+  if (!projectStore.cabinet) {
+    return { error: 'No cabinet placed yet. Place a Cabinet/POP first.' };
+  }
+
+  map.getCanvas().style.cursor = 'crosshair';
+  const [cabLng, cabLat] = projectStore.cabinet.geometry.coordinates;
+  const areaId = projectStore.project?.areaId || 'XX-XX';
+
+  let vertices    = [];
+  let nodeIds     = [];
+  let nodeTypes   = [];
+
+  function updateRubberband(cursorLngLat) {
+    if (!vertices.length) return;
+    const coords = [...vertices, [cursorLngLat.lng, cursorLngLat.lat]];
+    map.getSource('rubberband-src').setData({
+      type: 'FeatureCollection',
+      features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: coords }, properties: {} }]
+    });
+  }
+
+  function onMousemove(e) {
+    const snap = _snapToNode(map, e.lngLat);
+    if (snap) {
+      map.getSource('snap-src').setData(pointFC(snap.lngLat.lng, snap.lngLat.lat));
+      map.getCanvas().style.cursor = 'pointer';
+      if (vertices.length) updateRubberband(snap.lngLat);
+    } else {
+      map.getSource('snap-src').setData(emptyFC());
+      map.getCanvas().style.cursor = 'crosshair';
+      if (vertices.length) updateRubberband(e.lngLat);
+    }
+  }
+
+  function onClick(e) {
+    const snap = _snapToNode(map, e.lngLat);
+    const { lng, lat } = snap ? snap.lngLat : e.lngLat;
+    vertices.push([lng, lat]);
+    nodeIds.push(snap ? snap.id : null);
+    nodeTypes.push(snap ? snap.type : null);
+  }
+
+  function onContextmenu(e) {
+    e.preventDefault();
+    if (vertices.length < 2) {
+      alert('A duct needs at least 2 points. Keep clicking to add vertices, then right-click to finish.');
+      return;
+    }
+    finish();
+  }
+
+  function finish() {
+    map.getSource('rubberband-src').setData(emptyFC());
+    map.getSource('snap-src').setData(emptyFC());
+
+    // Compass leg from midpoint to cabinet
+    const midLng = vertices.reduce((s, v) => s + v[0], 0) / vertices.length;
+    const midLat = vertices.reduce((s, v) => s + v[1], 0) / vertices.length;
+    const direction = compassLeg(cabLng, cabLat, midLng, midLat);
+
+    let ductId, ductSeq;
+    try {
+      const result = nextDuctId(areaId, direction);
+      ductId = result.id;
+      ductSeq = result.seq;
+    } catch (err) {
+      alert(err.message);
+      cleanup();
+      return;
+    }
+
+    const lengthM = Math.round(haversineChain(vertices));
+
+    onFinish({
+      coordinates:    vertices,
+      duct_id:        ductId,
+      duct_seq:       ductSeq,
+      compass_leg:    direction,
+      area_id:        areaId,
+      pop_id:         projectStore.cabinet.properties.pop_id,
+      from_node:      nodeIds[0] || 'unknown',
+      from_node_type: nodeTypes[0] || 'UNKNOWN',
+      to_node:        nodeIds[nodeIds.length-1] || 'unknown',
+      to_node_type:   nodeTypes[nodeTypes.length-1] || 'UNKNOWN',
+      length_m:       lengthM,
+    });
+
+    cleanup();
+  }
+
+  function onKeydown(e) {
+    if (e.key === 'Escape') { cleanup(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+      if (vertices.length) { vertices.pop(); nodeIds.pop(); nodeTypes.pop(); }
+    }
+  }
+
+  function cleanup() {
+    map.off('mousemove', onMousemove);
+    map.off('click', onClick);
+    map.off('contextmenu', onContextmenu);
+    document.removeEventListener('keydown', onKeydown);
+    map.getCanvas().style.cursor = '';
+  }
+
+  map.on('mousemove', onMousemove);
+  map.on('click', onClick);
+  map.on('contextmenu', onContextmenu);
+  document.addEventListener('keydown', onKeydown);
+  _activeTool = { cleanup };
+  return null;
 }
 
 // ── COMPASS LEG ───────────────────────────────────────────────────────────────
