@@ -19,7 +19,7 @@
     activateCabinetTool, activateBuildAreaTool, activateChamberTool,
     activateDuctTool, activateJointTool, activateDropDuctTool,
     activateCableTool, activateBundleTool, activatePoleTool,
-    activateCBTTool,
+    activateCBTTool, activateAerialSpanTool,
     applyCookieCutter, clearTool
   } from './mapTools.js';
 
@@ -401,6 +401,17 @@
     clearTool(map);
   }
 
+  function onPlaceAerialSpan() {
+    clearTool(map);
+    activeToolLabel = 'Aerial Span — click CBTs to add vertices, RMB to finish';
+    const err = activateAerialSpanTool(map, (feature) => {
+      projectStore.addSpan(feature);
+      syncToMap(map);
+      // Tool stays active — don't clearTool or reset activeToolLabel
+    });
+    if (err) { alert(err.error); activeToolLabel = ''; }
+  }
+
   function onToolSelected(e) {
     const { label, category, toolId } = e.detail;
     const catLabel = category.charAt(0).toUpperCase() + category.slice(1);
@@ -409,7 +420,8 @@
     if (toolId === 'civil-duct')     onPlaceDuct();
    if (toolId === 'civil-drop-duct') onPlaceDropDuct();
    if (toolId === 'aerial-pole')     onPlacePole();
-    if (toolId === 'aerial-cbt')     onPlaceCBT();
+    if (toolId === 'aerial-cbt')      onPlaceCBT();
+    if (toolId === 'aerial-span')     onPlaceAerialSpan();
     if (toolId === 'fibre-joint')    onPlaceJoint();
     if (toolId === 'fibre-cable')    onPlaceCable();
     if (toolId === 'fibre-bundle')   onPlaceBundle();

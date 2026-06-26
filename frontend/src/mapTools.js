@@ -266,6 +266,11 @@ export function ensureSources(map) {
     });
   }
 
+  // ── Aerial Spans — source only, layers added after terrain ───────────
+  if (!map.getSource('spans-src')) {
+    map.addSource('spans-src', { type: 'geojson', data: emptyFC() });
+  }
+
   // ── Ducts — source only, layer added after terrain ────────────────────
   if (!map.getSource('ducts-src')) {
     map.addSource('ducts-src', { type: 'geojson', data: emptyFC() });
@@ -563,6 +568,13 @@ export function syncToMap(map) {
       features: s.cbts || [],
     });
   }
+
+  if (map.getSource('spans-src')) {
+    map.getSource('spans-src').setData({
+      type: 'FeatureCollection',
+      features: s.spans || [],
+    });
+  }
 }
 
 // ── TOOL MANAGEMENT ───────────────────────────────────────────────────────────
@@ -851,6 +863,15 @@ function _snapToNode(map, lngLat, snapPx = 16, types = ['POP','CHAMBER','JOINT',
     }
   }
 
+  if (types.includes('CBT')) {
+    for (const cbt of projectStore.cbts) {
+      const [lng, lat] = cbt.geometry.coordinates;
+      const sPt = map.project({ lng, lat });
+      const dist = Math.hypot(pt.x - sPt.x, pt.y - sPt.y);
+      if (dist <= snapPx) candidates.push({ lngLat: { lng, lat }, id: cbt.properties.cbt_id, type: 'CBT', dist });
+    }
+  }
+
   if (types.includes('JOINT')) {
     for (const j of projectStore.joints) {
       const [lng, lat] = j.geometry.coordinates;
@@ -1010,6 +1031,147 @@ export function activateCBTTool(map, onFinish) {
 
   map.on('mousemove', onMousemove);
   map.on('click', onClick);
+  document.addEventListener('keydown', onKeydown);
+  _activeTool = { cleanup };
+  return null;
+}
+
+// ── AERIAL SPAN TOOL ──────────────────────────────────────────────────────────
+// Multi-vertex line between CBTs (or CBT→POP). Stores plain 2D [lng, lat] coords
+// plus from_node/to_node CBT references. The 3D visual is DERIVED in PoleLayers.js
+// from those references — the span line floats at CBT pole-top height automatically,
+// and tracks the CBTs if their poles ever move. No altitude is baked in here.
+// RMB finishes and auto-saves — no form. Tool stays active for the next span.
+
+function nextSpanId(areaId) {
+  const prefix = `${areaId}-SPAN-`;
+  const existing = new Set();
+  for (const s of projectStore.spans) {
+    const id = s.properties.span_id || '';
+    if (id.startsWith(prefix)) {
+      const n = parseInt(id.replace(prefix, ''), 10);
+      if (!isNaN(n)) existing.add(n);
+    }
+  }
+  let n = 1;
+  while (existing.has(n)) n++;
+  return `${prefix}${String(n).padStart(3, '0')}`;
+}
+
+export function activateAerialSpanTool(map, onSaved) {
+  clearTool(map);
+
+  if (!projectStore.cabinet) {
+    return { error: 'No cabinet placed yet.' };
+  }
+  if (!projectStore.cbts.length) {
+    return { error: 'No CBTs placed yet. Place at least one CBT before digitising aerial spans.' };
+  }
+
+  map.getCanvas().style.cursor = 'crosshair';
+  const areaId = projectStore.project?.areaId || 'XX-XX';
+
+  let vertices  = [];  // [lng, lat]
+  let nodeIds   = [];
+  let nodeTypes = [];
+
+  function updateRubberband(cursorLngLat) {
+    if (!vertices.length) return;
+    const coords = [...vertices, [cursorLngLat.lng, cursorLngLat.lat]];
+    map.getSource('rubberband-src').setData({
+      type: 'FeatureCollection',
+      features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: coords }, properties: {} }]
+    });
+  }
+
+  function onMousemove(e) {
+    const snap = _snapToNode(map, e.lngLat, 16, ['CBT', 'POP']);
+    if (snap) {
+      map.getSource('snap-src').setData(pointFC(snap.lngLat.lng, snap.lngLat.lat));
+      map.getCanvas().style.cursor = 'pointer';
+      if (vertices.length) updateRubberband(snap.lngLat);
+    } else {
+      map.getSource('snap-src').setData(emptyFC());
+      map.getCanvas().style.cursor = 'crosshair';
+      if (vertices.length) updateRubberband(e.lngLat);
+    }
+  }
+
+  function onClick(e) {
+    const snap = _snapToNode(map, e.lngLat, 16, ['CBT', 'POP']);
+    const { lng, lat } = snap ? snap.lngLat : e.lngLat;
+    vertices.push([lng, lat]);
+    nodeIds.push(snap ? snap.id : null);
+    nodeTypes.push(snap ? snap.type : null);
+  }
+
+  function onContextmenu(e) {
+    e.preventDefault();
+    if (vertices.length < 2) {
+      alert('A span needs at least 2 points. Click CBTs to add vertices, then right-click to finish.');
+      return;
+    }
+    finish();
+  }
+
+  function finish() {
+    map.getSource('rubberband-src').setData(emptyFC());
+    map.getSource('snap-src').setData(emptyFC());
+
+    const fromNode = nodeIds[0] || 'unknown';
+    const fromType = nodeTypes[0] || 'UNKNOWN';
+    const toNode   = nodeIds[nodeIds.length - 1] || 'unknown';
+    const toType   = nodeTypes[nodeTypes.length - 1] || 'UNKNOWN';
+    const lengthM  = Math.round(haversineChain(vertices));
+    const spanId   = nextSpanId(areaId);
+    const popId    = projectStore.cabinet?.properties.pop_id || '';
+
+    const feature = {
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: vertices }, // 2D coords
+      properties: {
+        span_id:   spanId,
+        area_id:   areaId,
+        pop_id:    popId,
+        from_node: fromNode,
+        from_type: fromType,
+        to_node:   toNode,
+        to_type:   toType,
+        length_m:  lengthM,
+        status:    'PROPOSED',
+        span_type: null,
+        notes:     null,
+      },
+    };
+
+    // Reset vertices — tool stays active for next span
+    vertices  = [];
+    nodeIds   = [];
+    nodeTypes = [];
+
+    onSaved(feature);
+  }
+
+  function onKeydown(e) {
+    if (e.key === 'Escape') cleanup();
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+      if (vertices.length) { vertices.pop(); nodeIds.pop(); nodeTypes.pop(); }
+    }
+  }
+
+  function cleanup() {
+    map.off('mousemove', onMousemove);
+    map.off('click', onClick);
+    map.off('contextmenu', onContextmenu);
+    document.removeEventListener('keydown', onKeydown);
+    map.getSource('rubberband-src').setData(emptyFC());
+    map.getSource('snap-src').setData(emptyFC());
+    map.getCanvas().style.cursor = '';
+  }
+
+  map.on('mousemove', onMousemove);
+  map.on('click', onClick);
+  map.on('contextmenu', onContextmenu);
   document.addEventListener('keydown', onKeydown);
   _activeTool = { cleanup };
   return null;

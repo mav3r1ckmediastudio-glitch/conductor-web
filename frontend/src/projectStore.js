@@ -151,6 +151,7 @@ const DEFAULT_STATE = {
   bundles: [],
   poles: [],
   cbts: [],
+  spans: [],
   addressPoints: [],
 };
 
@@ -187,6 +188,7 @@ class ProjectStore {
   get bundles()       { return this._state.bundles; }
   get poles()         { return this._state.poles; }
   get cbts()          { return this._state.cbts; }
+  get spans()         { return this._state.spans; }
   get addressPoints() { return this._state.addressPoints; }
 
   on(fn) { this._listeners.push(fn); return () => { this._listeners = this._listeners.filter(l => l !== fn); }; }
@@ -248,6 +250,10 @@ class ProjectStore {
 
   addCBT(feature) {
     this._update({ cbts: [...this._state.cbts, feature] });
+  }
+
+  addSpan(feature) {
+    this._update({ spans: [...this._state.spans, feature] });
   }
 
   updateChamberFunction(chamberId, newFunction) {
