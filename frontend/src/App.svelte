@@ -9,6 +9,7 @@
   import JointForm from './JointForm.svelte';
   import CableForm from './CableForm.svelte';
   import PlacePoleForm from './PlacePoleForm.svelte';
+  import CBTForm from './CBTForm.svelte';
   import ProjectSetup from './ProjectSetup.svelte';
   import AddressImporter from './AddressImporter.svelte';
   import BuildAreaForm from './BuildAreaForm.svelte';
@@ -18,6 +19,7 @@
     activateCabinetTool, activateBuildAreaTool, activateChamberTool,
     activateDuctTool, activateJointTool, activateDropDuctTool,
     activateCableTool, activateBundleTool, activatePoleTool,
+    activateCBTTool,
     applyCookieCutter, clearTool
   } from './mapTools.js';
 
@@ -43,6 +45,7 @@
   let pendingCable     = null;
   let pendingBuildArea = null;
   let pendingPole      = null;
+  let pendingCBT       = null;
 
   let activeToolLabel = '';
   let activeCat = 'civil';
@@ -369,6 +372,35 @@
     clearTool(map);
   }
 
+  function onPlaceCBT() {
+    clearTool(map);
+    activeToolLabel = 'Place CBT — click a pole';
+    const err = activateCBTTool(map, (pending) => {
+      pendingCBT = pending;
+      rpMode = 'cbt-form';
+      activeToolLabel = '';
+    });
+    if (err) { alert(err.error); activeToolLabel = ''; }
+  }
+
+  function onCBTSaved(e) {
+    const attrs = e.detail;
+    projectStore.addCBT({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [attrs.lng, attrs.lat] },
+      properties: attrs,
+    });
+    syncToMap(map);
+    rpMode = 'default';
+    pendingCBT = null;
+  }
+
+  function onCBTCancelled() {
+    rpMode = 'default';
+    pendingCBT = null;
+    clearTool(map);
+  }
+
   function onToolSelected(e) {
     const { label, category, toolId } = e.detail;
     const catLabel = category.charAt(0).toUpperCase() + category.slice(1);
@@ -377,6 +409,7 @@
     if (toolId === 'civil-duct')     onPlaceDuct();
    if (toolId === 'civil-drop-duct') onPlaceDropDuct();
    if (toolId === 'aerial-pole')     onPlacePole();
+    if (toolId === 'aerial-cbt')     onPlaceCBT();
     if (toolId === 'fibre-joint')    onPlaceJoint();
     if (toolId === 'fibre-cable')    onPlaceCable();
     if (toolId === 'fibre-bundle')   onPlaceBundle();
@@ -567,6 +600,9 @@
 
       {:else if rpMode === 'pole-form'}
         <PlacePoleForm pending={pendingPole} on:save={onPoleSaved} on:cancel={onPoleCancelled} />
+
+      {:else if rpMode === 'cbt-form'}
+        <CBTForm pending={pendingCBT} on:save={onCBTSaved} on:cancel={onCBTCancelled} />
 
       {:else}
         <div class="rp-hdr">

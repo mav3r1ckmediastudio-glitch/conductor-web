@@ -234,6 +234,38 @@ export function ensureSources(map) {
     });
   }
 
+  // ── CBTs — source + 2D ground-anchor marker ──────────────────────────
+  if (!map.getSource('cbt-src')) {
+    map.addSource('cbt-src', { type: 'geojson', data: emptyFC() });
+
+    map.addLayer({
+      id: 'cbt-layer',
+      type: 'circle',
+      source: 'cbt-src',
+      paint: {
+        'circle-radius': 5,
+        'circle-color': '#4dc8ff',
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#0a0f14',
+      }
+    });
+
+    map.addLayer({
+      id: 'cbt-label',
+      type: 'symbol',
+      source: 'cbt-src',
+      layout: {
+        'text-field': ['get', 'cbt_id'],
+        'text-font': ['Noto Sans Regular'],
+        'text-size': 9,
+        'text-offset': [0, 1.2],
+        'text-anchor': 'top',
+        'text-allow-overlap': true,
+      },
+      paint: { 'text-color': '#a0c4d8', 'text-halo-color': '#0a0f14', 'text-halo-width': 1.5 }
+    });
+  }
+
   // ── Ducts — source only, layer added after terrain ────────────────────
   if (!map.getSource('ducts-src')) {
     map.addSource('ducts-src', { type: 'geojson', data: emptyFC() });
@@ -522,6 +554,13 @@ export function syncToMap(map) {
     map.getSource('poles-src').setData({
       type: 'FeatureCollection',
       features: s.poles || [],
+    });
+  }
+
+  if (map.getSource('cbt-src')) {
+    map.getSource('cbt-src').setData({
+      type: 'FeatureCollection',
+      features: s.cbts || [],
     });
   }
 }
@@ -887,6 +926,89 @@ export function activatePoleTool(map, onFinish) {
     map.getCanvas().style.cursor = '';
   }
 
+  map.on('click', onClick);
+  document.addEventListener('keydown', onKeydown);
+  _activeTool = { cleanup };
+  return null;
+}
+
+// ── CBT TOOL ────────────────────────────────────────────────────────────────
+// Snaps to an existing POLE (required). The CBT shares the pole's coordinates
+// and stores a parent_pole_id reference. Mirrors the JOINT tool pattern.
+
+function nextCBTId(areaId) {
+  const prefix = `${areaId}-CBT-`;
+  const existing = new Set();
+  for (const c of projectStore.cbts) {
+    const id = c.properties.cbt_id || '';
+    if (id.startsWith(prefix)) {
+      const n = parseInt(id.replace(prefix, ''), 10);
+      if (!isNaN(n)) existing.add(n);
+    }
+  }
+  let n = 1;
+  while (existing.has(n)) n++;
+  return `${prefix}${String(n).padStart(3, '0')}`;
+}
+
+export function activateCBTTool(map, onFinish) {
+  clearTool(map);
+
+  if (!projectStore.cabinet) {
+    return { error: 'No cabinet placed yet. Place a Cabinet/POP first.' };
+  }
+  if (!projectStore.poles.length) {
+    return { error: 'No poles placed yet. Place at least one pole before adding CBTs.' };
+  }
+
+  map.getCanvas().style.cursor = 'crosshair';
+  const areaId = projectStore.project?.areaId || 'XX-XX';
+
+  function onMousemove(e) {
+    const snap = _snapToNode(map, e.lngLat, 16, ['POLE']);
+    if (snap) {
+      map.getSource('snap-src').setData(pointFC(snap.lngLat.lng, snap.lngLat.lat));
+      map.getCanvas().style.cursor = 'pointer';
+    } else {
+      map.getSource('snap-src').setData(emptyFC());
+      map.getCanvas().style.cursor = 'crosshair';
+    }
+  }
+
+  function onClick(e) {
+    const snap = _snapToNode(map, e.lngLat, 16, ['POLE']);
+    if (!snap) {
+      alert('Click on or near an existing pole. CBTs must be mounted on a pole.');
+      return;
+    }
+
+    const poleFeature = projectStore.poles.find(p => p.properties.pole_id === snap.id);
+    if (!poleFeature) return;
+
+    onFinish({
+      lng:            snap.lngLat.lng,
+      lat:            snap.lngLat.lat,
+      cbt_id:         nextCBTId(areaId),
+      parent_pole_id: snap.id,
+      pop_id:         poleFeature.properties.pop_id,
+      area_id:        areaId,
+    });
+    cleanup();
+  }
+
+  function onKeydown(e) {
+    if (e.key === 'Escape') cleanup();
+  }
+
+  function cleanup() {
+    map.off('mousemove', onMousemove);
+    map.off('click', onClick);
+    document.removeEventListener('keydown', onKeydown);
+    map.getSource('snap-src').setData(emptyFC());
+    map.getCanvas().style.cursor = '';
+  }
+
+  map.on('mousemove', onMousemove);
   map.on('click', onClick);
   document.addEventListener('keydown', onKeydown);
   _activeTool = { cleanup };
