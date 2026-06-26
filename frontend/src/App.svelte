@@ -8,6 +8,7 @@
   import DuctForm from './DuctForm.svelte';
   import JointForm from './JointForm.svelte';
   import CableForm from './CableForm.svelte';
+  import PlacePoleForm from './PlacePoleForm.svelte';
   import ProjectSetup from './ProjectSetup.svelte';
   import AddressImporter from './AddressImporter.svelte';
   import BuildAreaForm from './BuildAreaForm.svelte';
@@ -16,7 +17,7 @@
     ensureSources, ensureTerrainLayers, syncToMap,
     activateCabinetTool, activateBuildAreaTool, activateChamberTool,
     activateDuctTool, activateJointTool, activateDropDuctTool,
-    activateCableTool, activateBundleTool,
+    activateCableTool, activateBundleTool, activatePoleTool,
     applyCookieCutter, clearTool
   } from './mapTools.js';
 
@@ -41,6 +42,7 @@
   let pendingJoint     = null;
   let pendingCable     = null;
   let pendingBuildArea = null;
+  let pendingPole      = null;
 
   let activeToolLabel = '';
   let activeCat = 'civil';
@@ -338,13 +340,43 @@
     if (err) { alert(err.error); activeToolLabel = ''; }
   }
 
+  function onPlacePole() {
+    clearTool(map);
+    activeToolLabel = 'Place Pole — click to place';
+    const err = activatePoleTool(map, (pending) => {
+      pendingPole = pending;
+      rpMode = 'pole-form';
+      activeToolLabel = '';
+    });
+    if (err) { alert(err.error); activeToolLabel = ''; }
+  }
+
+  function onPoleSaved(e) {
+    const attrs = e.detail;
+    projectStore.addPole({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [attrs.lng, attrs.lat] },
+      properties: attrs,
+    });
+    syncToMap(map);
+    rpMode = 'default';
+    pendingPole = null;
+  }
+
+  function onPoleCancelled() {
+    rpMode = 'default';
+    pendingPole = null;
+    clearTool(map);
+  }
+
   function onToolSelected(e) {
     const { label, category, toolId } = e.detail;
     const catLabel = category.charAt(0).toUpperCase() + category.slice(1);
     activeToolLabel = `${catLabel} — ${label}`;
     if (toolId === 'civil-chamber')  onPlaceChamber();
     if (toolId === 'civil-duct')     onPlaceDuct();
-    if (toolId === 'civil-dropduct') onPlaceDropDuct();
+   if (toolId === 'civil-drop-duct') onPlaceDropDuct();
+   if (toolId === 'aerial-pole')     onPlacePole();
     if (toolId === 'fibre-joint')    onPlaceJoint();
     if (toolId === 'fibre-cable')    onPlaceCable();
     if (toolId === 'fibre-bundle')   onPlaceBundle();
@@ -532,6 +564,9 @@
 
       {:else if rpMode === 'cable-form'}
         <CableForm pending={pendingCable} on:save={onCableSaved} on:cancel={onCableCancelled} />
+
+      {:else if rpMode === 'pole-form'}
+        <PlacePoleForm pending={pendingPole} on:save={onPoleSaved} on:cancel={onPoleCancelled} />
 
       {:else}
         <div class="rp-hdr">

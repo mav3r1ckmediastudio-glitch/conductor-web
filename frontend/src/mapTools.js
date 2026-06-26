@@ -2,6 +2,7 @@
 // Works with projectStore.js for state. All geometry WGS84.
 
 import { projectStore } from './projectStore.js';
+import { createPoleLayer } from './PoleLayers.js';
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 
@@ -201,6 +202,38 @@ export function ensureSources(map) {
     });
   }
 
+  // ── Poles — source + 2D marker ───────────────────────────────────────
+  if (!map.getSource('poles-src')) {
+    map.addSource('poles-src', { type: 'geojson', data: emptyFC() });
+
+    map.addLayer({
+      id: 'poles-layer',
+      type: 'circle',
+      source: 'poles-src',
+      paint: {
+        'circle-radius': 5,
+        'circle-color': '#0a0f14',
+        'circle-stroke-width': 2.5,
+        'circle-stroke-color': '#4dc8ff',
+      }
+    });
+
+    map.addLayer({
+      id: 'poles-label',
+      type: 'symbol',
+      source: 'poles-src',
+      layout: {
+        'text-field': ['get', 'pole_id'],
+        'text-font': ['Noto Sans Regular'],
+        'text-size': 9,
+        'text-offset': [0, 1.2],
+        'text-anchor': 'top',
+        'text-allow-overlap': true,
+      },
+      paint: { 'text-color': '#4dc8ff', 'text-halo-color': '#0a0f14', 'text-halo-width': 1.5 }
+    });
+  }
+
   // ── Ducts — source only, layer added after terrain ────────────────────
   if (!map.getSource('ducts-src')) {
     map.addSource('ducts-src', { type: 'geojson', data: emptyFC() });
@@ -353,6 +386,15 @@ export function ensureTerrainLayers(map) {
     });
   }
 
+  // ── 3D POLE LAYER — CustomLayerInterface ───────────────────────────────
+  console.log('[mapTools] ensureTerrainLayers: adding pole layer, exists?', map.getLayer('poles-3d-layer'));
+  if (!map.getLayer('poles-3d-layer')) {
+    const poleLayer = createPoleLayer(projectStore);
+    console.log('[mapTools] poleLayer object:', poleLayer);
+    map.addLayer(poleLayer);
+    console.log('[mapTools] pole layer added, check:', map.getLayer('poles-3d-layer'));
+  }
+
   // Start the cable pulse animation loop
   startCablePulse(map);
 }
@@ -473,6 +515,13 @@ export function syncToMap(map) {
     map.getSource('bundles-src').setData({
       type: 'FeatureCollection',
       features: s.bundles || [],
+    });
+  }
+
+  if (map.getSource('poles-src')) {
+    map.getSource('poles-src').setData({
+      type: 'FeatureCollection',
+      features: s.poles || [],
     });
   }
 }
@@ -754,6 +803,15 @@ function _snapToNode(map, lngLat, snapPx = 16, types = ['POP','CHAMBER','JOINT',
     }
   }
 
+  if (types.includes('POLE')) {
+    for (const pole of projectStore.poles) {
+      const [lng, lat] = pole.geometry.coordinates;
+      const sPt = map.project({ lng, lat });
+      const dist = Math.hypot(pt.x - sPt.x, pt.y - sPt.y);
+      if (dist <= snapPx) candidates.push({ lngLat: { lng, lat }, id: pole.properties.pole_id, type: 'POLE', dist });
+    }
+  }
+
   if (types.includes('JOINT')) {
     for (const j of projectStore.joints) {
       const [lng, lat] = j.geometry.coordinates;
@@ -778,6 +836,62 @@ function _snapToNode(map, lngLat, snapPx = 16, types = ['POP','CHAMBER','JOINT',
 }
 
 export { _snapToNode as snapToNode };
+
+// ── POLE TOOL ──────────────────────────────────────────────────────────────
+
+function nextPoleId(areaId) {
+  const prefix = `${areaId}-POL-`;
+  const existing = new Set();
+  for (const pole of projectStore.poles) {
+    const id = pole.properties.pole_id || '';
+    if (id.startsWith(prefix)) {
+      const n = parseInt(id.replace(prefix, ''), 10);
+      if (!isNaN(n)) existing.add(n);
+    }
+  }
+  let n = 1;
+  while (existing.has(n)) n++;
+  return `${prefix}${String(n).padStart(3, '0')}`;
+}
+
+export function activatePoleTool(map, onFinish) {
+  clearTool(map);
+
+  if (!projectStore.cabinet) {
+    return { error: 'No cabinet placed yet. Place a Cabinet/POP first.' };
+  }
+
+  map.getCanvas().style.cursor = 'crosshair';
+  const areaId = projectStore.project?.areaId || 'XX-XX';
+  const cabPopId = projectStore.cabinet.properties.pop_id;
+
+  function onClick(e) {
+    const pole_id = nextPoleId(areaId);
+    onFinish({
+      lng:      e.lngLat.lng,
+      lat:      e.lngLat.lat,
+      pole_id:  pole_id,
+      area_id:  areaId,
+      pop_id:   cabPopId,
+    });
+    cleanup();
+  }
+
+  function onKeydown(e) {
+    if (e.key === 'Escape') cleanup();
+  }
+
+  function cleanup() {
+    map.off('click', onClick);
+    document.removeEventListener('keydown', onKeydown);
+    map.getCanvas().style.cursor = '';
+  }
+
+  map.on('click', onClick);
+  document.addEventListener('keydown', onKeydown);
+  _activeTool = { cleanup };
+  return null;
+}
 
 // ── JOINT TOOL ────────────────────────────────────────────────────────────────
 

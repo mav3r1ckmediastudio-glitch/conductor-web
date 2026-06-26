@@ -149,6 +149,8 @@ const DEFAULT_STATE = {
   dropDucts: [],
   cables: [],
   bundles: [],
+  poles: [],
+  cbts: [],
   addressPoints: [],
 };
 
@@ -183,6 +185,8 @@ class ProjectStore {
   get dropDucts()     { return this._state.dropDucts; }
   get cables()        { return this._state.cables; }
   get bundles()       { return this._state.bundles; }
+  get poles()         { return this._state.poles; }
+  get cbts()          { return this._state.cbts; }
   get addressPoints() { return this._state.addressPoints; }
 
   on(fn) { this._listeners.push(fn); return () => { this._listeners = this._listeners.filter(l => l !== fn); }; }
@@ -236,6 +240,14 @@ class ProjectStore {
 
   addBundle(feature) {
     this._update({ bundles: [...this._state.bundles, feature] });
+  }
+
+  addPole(feature) {
+    this._update({ poles: [...this._state.poles, feature] });
+  }
+
+  addCBT(feature) {
+    this._update({ cbts: [...this._state.cbts, feature] });
   }
 
   updateChamberFunction(chamberId, newFunction) {
