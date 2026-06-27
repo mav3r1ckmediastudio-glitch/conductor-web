@@ -31,10 +31,16 @@
 
   let stage = projectStore.stage;
   let project = projectStore.project;
-  projectStore.on(() => {
+  projectStore.on((event) => {
     stage = projectStore.stage;
     project = projectStore.project;
     if (map) syncToMap(map);
+    // On project switch/new/reset, re-open the onboarding panel for the restored stage.
+    if (event === 'reset') {
+      if (stage === 'import')      rpMode = 'address-import';
+      else if (stage === 'setup')  rpMode = 'default';   // ProjectSetup overlay handles setup
+      else                          rpMode = 'default';
+    }
   });
 
   let rpMode = 'default';
@@ -446,14 +452,30 @@
     map.easeTo({ pitch: threeD ? 60 : 0, bearing: threeD ? -30 : 0, duration: 1200 });
   }
 
+  let showOpen = false;
+  let projectList = [];
+
+  function refreshList() { projectList = projectStore.listProjects(); }
+
   function newProject() {
-    if (!confirm('Start a new project? This will clear all current data.')) return;
-    projectStore.resetProject();
+    if (!confirm('Start a new project? Your current project stays saved and can be re-opened.')) return;
+    showOpen = false;
+    projectStore.newProject();
+    rpMode = 'default';
+    activeToolLabel = '';
+    if (map) syncToMap(map);
+  }
+
+  function openProject(id) {
+    showOpen = false;
+    if (!projectStore.openProject(id)) { alert('Could not open that project.'); return; }
     rpMode = 'default';
     activeToolLabel = '';
     if (map) syncToMap(map);
   }
 </script>
+
+<svelte:window on:click={() => showOpen = false} />
 
 <div class="screen">
 
@@ -507,7 +529,24 @@
         <button class="vt" class:on={is3D} on:click={() => setView(true)}>3D</button>
         <button class="vt" class:on={!is3D} on:click={() => setView(false)}>2D</button>
       </div>
-      <button class="tb-new" on:click={newProject} title="New Project">↺ New</button>
+      <button class="tb-new" on:click={newProject} title="New Project">+ New</button>
+      <div class="tb-open-wrap">
+        <button class="tb-new" on:click|stopPropagation={() => { refreshList(); showOpen = !showOpen; }} title="Open Project">Open ▾</button>
+        {#if showOpen}
+          <div class="tb-open-menu" on:click|stopPropagation role="menu" tabindex="-1">
+            {#if projectList.length === 0}
+              <div class="tb-open-empty">No saved projects</div>
+            {:else}
+              {#each projectList as p}
+                <button class="tb-open-item" class:active={p.id === projectStore.activeId()} on:click={() => openProject(p.id)}>
+                  <span class="oi-name">{p.name}</span>
+                  <span class="oi-area">{p.areaId}</span>
+                </button>
+              {/each}
+            {/if}
+          </div>
+        {/if}
+      </div>
     </div>
   </div>
 
@@ -740,6 +779,16 @@
   .go { background: #00aaff14; border: 1px solid #00aaff44; color: #4dc8ff; font-family: 'Courier New', monospace; font-size: 9px; padding: 6px 12px; border-radius: 5px; cursor: pointer; }
   .tb-new { background: transparent; border: 1px solid #1a2d40; color: #3a5a70; font-family: 'Courier New', monospace; font-size: 8px; letter-spacing: 0.06em; padding: 5px 10px; border-radius: 4px; cursor: pointer; margin-left: 6px; }
   .tb-new:hover { border-color: #ff555544; color: #ff5555; }
+  .tb-open-wrap { position: relative; display: inline-block; }
+  .tb-open-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 50; min-width: 230px; background: #0c1320; border: 1px solid #1c2940; border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.55); overflow: hidden; }
+  .tb-open-item { display: flex; justify-content: space-between; gap: 12px; align-items: center; width: 100%; padding: 8px 12px; background: none; border: none; border-bottom: 1px solid #121d2e; color: #cfe3ff; font-family: 'Courier New', monospace; font-size: 11px; cursor: pointer; text-align: left; }
+  .tb-open-item:last-child { border-bottom: none; }
+  .tb-open-item:hover { background: #15233a; }
+  .tb-open-item.active { background: #102033; }
+  .tb-open-item.active .oi-name::before { content: '● '; color: #4dc8ff; }
+  .oi-name { color: #cfe3ff; }
+  .oi-area { color: #4dc8ff; font-size: 10px; letter-spacing: 0.04em; }
+  .tb-open-empty { padding: 10px 12px; color: #5a6b82; font-family: 'Courier New', monospace; font-size: 11px; }
   button:disabled { opacity: 0.35; cursor: not-allowed; }
   .vtog { display: flex; border: 1px solid #1a2d40; border-radius: 5px; overflow: hidden; }
   .vt { background: #0f1c28; border: none; color: #6a8fa8; font-family: 'Courier New', monospace; font-size: 9px; padding: 6px 12px; cursor: pointer; }

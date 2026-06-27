@@ -2,52 +2,66 @@
 // Persists to localStorage on every change.
 // Workflow stages: 'setup' → 'import' → 'build-area' → 'cabinet' → 'design'
 
-const STORAGE_KEY = 'conductor_web_project';
+import proj4 from 'proj4';
 
-// ── BNG → WGS84 conversion (Helmert transform approximation) ─────────────────
+// EPSG:27700 (OSGB36 / British National Grid) → EPSG:4326 (WGS84).
+// Includes the +towgs84 7-parameter datum shift, so output matches QGIS's
+// 27700→4326 reprojection (sub-2m). This is the datum step the old hand-rolled
+// Airy-ellipsoid transform was missing, which left points ~tens of metres off.
+proj4.defs(
+  'EPSG:27700',
+  '+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 ' +
+  '+ellps=airy +towgs84=446.448,-125.157,542.06,0.15,0.247,0.842,-20.489 +units=m +no_defs'
+);
+
+const STORAGE_KEY  = 'conductor_web_project';        // legacy single-project key (migrated, kept as backup)
+const INDEX_KEY    = 'conductor_web_index';          // [{ id, name, areaId, savedAt }]
+const ACTIVE_KEY   = 'conductor_web_active';         // id of currently-open project
+const projectKey   = (id) => `conductor_web_project_${id}`;
+
+function newId() {
+  return 'p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+function readIndex() {
+  try { return JSON.parse(localStorage.getItem(INDEX_KEY)) || []; }
+  catch { return []; }
+}
+function writeIndex(list) {
+  try { localStorage.setItem(INDEX_KEY, JSON.stringify(list)); } catch (e) { /* ignore */ }
+}
+function upsertIndex(id, state) {
+  const list = readIndex();
+  const entry = {
+    id,
+    name:    state.project?.name   || 'Untitled',
+    areaId:  state.project?.areaId || '',
+    savedAt: Date.now(),
+  };
+  const i = list.findIndex(e => e.id === id);
+  if (i >= 0) list[i] = entry; else list.push(entry);
+  writeIndex(list);
+}
+// One-time migration: adopt the legacy single-project blob as the first indexed project.
+function migrateLegacy() {
+  if (readIndex().length) return;                    // already migrated
+  let raw;
+  try { raw = localStorage.getItem(STORAGE_KEY); } catch (e) { return; }
+  if (!raw) return;
+  try {
+    const state = JSON.parse(raw);
+    const id = newId();
+    localStorage.setItem(projectKey(id), raw);
+    upsertIndex(id, state);
+    localStorage.setItem(ACTIVE_KEY, id);
+    // legacy key intentionally left in place as a backup.
+  } catch (e) { /* ignore */ }
+}
+
+// ── BNG (EPSG:27700) → WGS84 (EPSG:4326) conversion via proj4 ────────────────
+// Same reprojection QGIS uses. Returns { lat, lng } in WGS84 degrees.
 function bngToWgs84(easting, northing) {
-  const a = 6377563.396, b = 6356256.909;
-  const F0 = 0.9996012717;
-  const lat0 = 49 * Math.PI / 180;
-  const lon0 = -2 * Math.PI / 180;
-  const N0 = -100000, E0 = 400000;
-
-  const e2 = 1 - (b * b) / (a * a);
-  const n = (a - b) / (a + b);
-  const n2 = n * n, n3 = n * n * n;
-
-  let lat = lat0;
-  let M = 0;
-
-  do {
-    lat = (northing - N0 - M) / (a * F0) + lat;
-    const Ma = (1 + n + (5 / 4) * n2 + (5 / 4) * n3) * (lat - lat0);
-    const Mb = (3 * n + 3 * n2 + (21 / 8) * n3) * Math.sin(lat - lat0) * Math.cos(lat + lat0);
-    const Mc = ((15 / 8) * n2 + (15 / 8) * n3) * Math.sin(2 * (lat - lat0)) * Math.cos(2 * (lat + lat0));
-    const Md = (35 / 24) * n3 * Math.sin(3 * (lat - lat0)) * Math.cos(3 * (lat + lat0));
-    M = b * F0 * (Ma - Mb + Mc - Md);
-  } while (Math.abs(northing - N0 - M) >= 0.00001);
-
-  const cosLat = Math.cos(lat), sinLat = Math.sin(lat), tanLat = Math.tan(lat);
-  const nu = a * F0 / Math.sqrt(1 - e2 * sinLat * sinLat);
-  const rho = a * F0 * (1 - e2) / Math.pow(1 - e2 * sinLat * sinLat, 1.5);
-  const eta2 = nu / rho - 1;
-
-  const VII  = tanLat / (2 * rho * nu);
-  const VIII = tanLat / (24 * rho * nu * nu * nu) * (5 + 3 * tanLat * tanLat + eta2 - 9 * tanLat * tanLat * eta2);
-  const IX   = tanLat / (720 * rho * Math.pow(nu, 5)) * (61 + 90 * tanLat * tanLat + 45 * Math.pow(tanLat, 4));
-  const X    = 1 / (cosLat * nu);
-  const XI   = 1 / (cosLat * 6 * nu * nu * nu) * (nu / rho + 2 * tanLat * tanLat);
-  const XII  = 1 / (cosLat * 120 * Math.pow(nu, 5)) * (5 + 28 * tanLat * tanLat + 24 * Math.pow(tanLat, 4));
-  const XIIA = 1 / (cosLat * 5040 * Math.pow(nu, 7)) * (61 + 662 * tanLat * tanLat + 1320 * Math.pow(tanLat, 4) + 720 * Math.pow(tanLat, 6));
-
-  const dE = easting - E0;
-  const latRad = lat - VII * dE * dE + VIII * Math.pow(dE, 4) - IX * Math.pow(dE, 6);
-  const lonRad = lon0 + X * dE - XI * Math.pow(dE, 3) + XII * Math.pow(dE, 5) - XIIA * Math.pow(dE, 7);
-
-  const latDeg = latRad * 180 / Math.PI;
-  const lonDeg = lonRad * 180 / Math.PI;
-  return { lat: latDeg + 0.0001, lng: lonDeg + 0.0002 };
+  const [lng, lat] = proj4('EPSG:27700', 'EPSG:4326', [easting, northing]);
+  return { lat, lng };
 }
 
 // ── Column detection ─────────────────────────────────────────────────────────
@@ -63,13 +77,15 @@ export function detectColumns(headers) {
   };
 
   return {
-    uprn:     find('UPRN'),
-    address:  find('FULL_ADDRE', 'SINGLE_LINE_ADDRESS', 'ADDRESS', 'FULL_ADDRESS'),
-    postcode: find('POSTCODE', 'POST_CODE'),
-    lat:      find('LATITUDE', 'LAT'),
-    lng:      find('LONGITUDE', 'LNG', 'LONG', 'LON'),
-    easting:  find('EASTING', 'X_COORDINATE', 'X'),
-    northing: find('NORTHING', 'Y_COORDINATE', 'Y'),
+    uprn:      find('UPRN'),
+    address:   find('FULL_ADDRE', 'SINGLE_LINE_ADDRESS', 'ADDRESS', 'FULL_ADDRESS'),
+    postcode:  find('POSTCODE', 'POST_CODE'),
+    lat:       find('LATITUDE', 'LAT'),
+    lng:       find('LONGITUDE', 'LNG', 'LONG', 'LON'),
+    easting:   find('EASTING', 'X_COORDINATE', 'X'),
+    northing:  find('NORTHING', 'Y_COORDINATE', 'Y'),
+    primaryCl: find('PRIMARY_CL', 'CLASSIFICATION_CODE', 'CLASS_CODE'),
+    blpuState: find('BLPU_STATE', 'BLPU_STA_1', 'STATE'),
   };
 }
 
@@ -106,6 +122,18 @@ export function parseAddressCsv(text) {
     if (row.length < 2) continue;
 
     const get = (col) => col ? (row[headers.indexOf(col)] || '').trim() : '';
+
+    // Filter out non-premises: keep only In Use (BLPU_STATE=2) Residential,
+    // Commercial, Miscellaneous, and Military records. Discard Parent Shells (P),
+    // Land/Street records (L), and anything not currently in use.
+    if (cols.blpuState) {
+      const state = parseInt(get(cols.blpuState), 10);
+      if (state !== 2) { skipped++; continue; }
+    }
+    if (cols.primaryCl) {
+      const cl = get(cols.primaryCl);
+      if (!['R', 'C', 'Z', 'M'].includes(cl)) { skipped++; continue; }
+    }
 
     let lng, lat;
 
@@ -152,20 +180,28 @@ const DEFAULT_STATE = {
   poles: [],
   cbts: [],
   spans: [],
+  aerialDrops: [],
   addressPoints: [],
 };
 
 function load() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return { ...DEFAULT_STATE, ...JSON.parse(raw) };
+    migrateLegacy();
+    const id = localStorage.getItem(ACTIVE_KEY);
+    if (id) {
+      const raw = localStorage.getItem(projectKey(id));
+      if (raw) return { ...DEFAULT_STATE, ...JSON.parse(raw) };
+    }
   } catch (e) { /* ignore */ }
   return { ...DEFAULT_STATE };
 }
 
 function save(state) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    let id = localStorage.getItem(ACTIVE_KEY);
+    if (!id) { id = newId(); localStorage.setItem(ACTIVE_KEY, id); }
+    localStorage.setItem(projectKey(id), JSON.stringify(state));
+    upsertIndex(id, state);
   } catch (e) { /* storage full — ignore */ }
 }
 
@@ -189,6 +225,7 @@ class ProjectStore {
   get poles()         { return this._state.poles; }
   get cbts()          { return this._state.cbts; }
   get spans()         { return this._state.spans; }
+  get aerialDrops()   { return this._state.aerialDrops || []; }
   get addressPoints() { return this._state.addressPoints; }
 
   on(fn) { this._listeners.push(fn); return () => { this._listeners = this._listeners.filter(l => l !== fn); }; }
@@ -256,6 +293,10 @@ class ProjectStore {
     this._update({ spans: [...this._state.spans, feature] });
   }
 
+  addAerialDrop(feature) {
+    this._update({ aerialDrops: [...(this._state.aerialDrops || []), feature] });
+  }
+
   updateChamberFunction(chamberId, newFunction) {
     const updated = this._state.chambers.map(ch => {
       if (ch.properties.chamber_id === chamberId) {
@@ -266,9 +307,49 @@ class ProjectStore {
     this._update({ chambers: updated });
   }
 
-  resetProject() {
+  // ── Multi-project management ───────────────────────────────────────────────
+
+  listProjects() {
+    return readIndex().sort((a, b) => b.savedAt - a.savedAt);
+  }
+
+  activeId() {
+    try { return localStorage.getItem(ACTIVE_KEY); } catch (e) { return null; }
+  }
+
+  openProject(id) {
+    let raw;
+    try { raw = localStorage.getItem(projectKey(id)); } catch (e) { return false; }
+    if (!raw) return false;
+    try {
+      localStorage.setItem(ACTIVE_KEY, id);
+      this._state = { ...DEFAULT_STATE, ...JSON.parse(raw) };
+      this._emit('reset');
+      return true;
+    } catch (e) { return false; }
+  }
+
+  // Start a brand-new project. The current project stays saved under its own id.
+  newProject() {
+    const id = newId();
+    try { localStorage.setItem(ACTIVE_KEY, id); } catch (e) { /* ignore */ }
     this._state = { ...DEFAULT_STATE };
-    localStorage.removeItem(STORAGE_KEY);
+    save(this._state);          // create the project key + index entry immediately
+    this._emit('reset');
+  }
+
+  deleteProject(id) {
+    try {
+      localStorage.removeItem(projectKey(id));
+      writeIndex(readIndex().filter(e => e.id !== id));
+      if (this.activeId() === id) localStorage.removeItem(ACTIVE_KEY);
+    } catch (e) { /* ignore */ }
+  }
+
+  resetProject() {
+    // Clears the *current* project in place (keeps it as the active id).
+    this._state = { ...DEFAULT_STATE };
+    save(this._state);
     this._emit('reset');
   }
 }

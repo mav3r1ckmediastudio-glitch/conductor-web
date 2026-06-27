@@ -1226,7 +1226,11 @@ export function activateAerialDropTool(map, onSaved) {
   let cbtId = null;  // cbt_id of the snapped CBT
   let pt2   = null;  // [lng, lat] — premise end
 
+  let _lastMoveT = 0;
   function onMousemove(e) {
+    const now = Date.now();
+    if (now - _lastMoveT < 32) return; // ~30fps — snap + rubberband don't need more
+    _lastMoveT = now;
     // Before first click: snap to CBT only. After first click: snap to premise.
     const types = !pt1 ? ['CBT'] : ['PREMISE'];
     const snap = _snapToNode(map, e.lngLat, 16, types);
@@ -1268,10 +1272,17 @@ export function activateAerialDropTool(map, onSaved) {
 
   function onContextmenu(e) {
     e.preventDefault();
-    // RMB cancels current in-progress drop
-    pt1 = null; cbtId = null; pt2 = null;
-    map.getSource('rubberband-src').setData(emptyFC());
-    map.getSource('snap-src').setData(emptyFC());
+    if (pt1) {
+      // RMB with a drop in progress — save at the current cursor position,
+      // snapping to a premise if close enough (same logic as a left click).
+      const snap = _snapToNode(map, e.lngLat, 16, ['PREMISE']);
+      const { lng, lat } = snap ? snap.lngLat : e.lngLat;
+      pt2 = [lng, lat];
+      save(snap ? snap.id : null);
+    } else {
+      // RMB with nothing started — exit the tool entirely.
+      cleanup();
+    }
   }
 
   function save(uprn) {
