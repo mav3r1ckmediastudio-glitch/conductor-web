@@ -10,13 +10,22 @@
 //     sits ON the ground instead of buried at sea level (depth-occluded).
 //   - render(): camera.projectionMatrix = m.multiply(l)
 //       m = MapLibre's mainMatrix (mercator → clip space)
+//
+// ELEVATION REFRESH (the fix):
+//   queryTerrainElevation returns a COARSE value from a low-zoom parent DEM
+//   tile until the fine tile for that point loads — it does NOT return null in
+//   that window. So we re-read elevation as DEM tiles stream in (the `data`
+//   event). To avoid rebuilding the meshes on terrain's near-continuous data
+//   chatter, each dirty frame does a CHEAP sample of pole elevations into a
+//   signature and only does the EXPENSIVE mesh rebuild when that signature
+//   actually changes (or terrain is still loading, or asset counts changed).
+//   Per-span/drop geometries are disposed on each rebuild so we don't leak.
 
 import * as THREE from 'three';
 import maplibregl from 'maplibre-gl';
 
 const POLE_HEIGHT_M   = 6;
 const POLE_RADIUS_M   = 0.15;
-const TERRAIN_EXAGGERATION = 1.5;  // must match map terrain exaggeration setting
 const POLE_COLOR    = 0x4dc8ff;
 const POLE_OPACITY  = 0.85;
 const POLE_EMISSIVE = 0x0d3a55;
@@ -36,6 +45,11 @@ const CBT_EMISSIVE  = 0x1a5a7a;
 const SPAN_COLOR    = 0x4dc8ff;
 const SPAN_RADIUS_M = 0.12; // rendered as a thin cylinder (LineBasicMaterial can't do width)
 const SPAN_DROP_M   = CBT_SIZE_M / 2; // attach at the CBT cube, just under the anchor
+
+// Aerial drop — 3D line from a CBT pole-top down to a premise at ground level.
+const ADROP_COLOR    = 0x4dc8ff;
+const ADROP_RADIUS_M = 0.08; // thinner than a span — it's a single subscriber drop
+const ADROP_PREMISE_H = 0.3; // land the drop slightly above ground for a clean finish
 
 // Scene origin — central Perthshire (matches map center [-3.77, 56.71]).
 // All pole positions are computed as metre-offsets from this point.
@@ -57,11 +71,15 @@ class PoleLayer {
     this._poleCount    = -1;
     this._cbtCount     = -1;
     this._spanCount    = -1;
+    this._adropCount   = -1;
     this._originMatrix = null;   // matrix `l` — origin world transform (axis swap + scale)
     this._mpu          = 1;      // mercator units per metre at origin
-    this._elevationApplied = false; // false until terrain elevation was readable
-    this._debugged     = false;
-    this._renderCount  = 0;        // force rebuild for first N frames to catch store race
+    this._renderCount  = 0;      // short startup window to catch the store-population race
+
+    this._terrainDirty = true;   // a terrain tile loaded → re-sample elevation
+    this._lastElevSig  = null;   // signature of last sampled pole elevations
+    this._dynamicGeoms = [];     // per-span/drop geometries to dispose each rebuild
+    this._onData       = null;   // bound terrain `data` handler
   }
 
   onAdd(map, gl) {
@@ -90,7 +108,8 @@ class PoleLayer {
       .scale(new THREE.Vector3(this._mpu, -this._mpu, this._mpu))
       .multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2));
 
-    // Shared geometry + material
+    // Shared geometry + material (reused across every rebuild — never disposed
+    // mid-life; only in onRemove).
     this._geometry = new THREE.CylinderGeometry(
       POLE_RADIUS_M, POLE_RADIUS_M, POLE_HEIGHT_M, POLE_SEGMENTS
     );
@@ -102,7 +121,6 @@ class PoleLayer {
       shininess:   20,
     });
 
-    // Pole-top anchor — small flat disc sitting on the very top of each pole.
     this._anchorGeometry = new THREE.CylinderGeometry(
       ANCHOR_RADIUS_M, ANCHOR_RADIUS_M, ANCHOR_HEIGHT_M, 12
     );
@@ -113,7 +131,6 @@ class PoleLayer {
       shininess: 40,
     });
 
-    // CBT box — a small cabinet that mounts at the top of a pole.
     this._cbtGeometry = new THREE.BoxGeometry(CBT_SIZE_M, CBT_SIZE_M, CBT_SIZE_M * 0.6);
     this._cbtMaterial = new THREE.MeshPhongMaterial({
       color:    CBT_COLOR,
@@ -122,11 +139,17 @@ class PoleLayer {
       shininess: 30,
     });
 
-    // Aerial span — cyan material for the span cylinders (built per-span in rebuild).
     this._spanMaterial = new THREE.MeshPhongMaterial({
       color:    SPAN_COLOR,
       emissive: SPAN_COLOR,
       emissiveIntensity: 0.35,
+      shininess: 20,
+    });
+
+    this._adropMaterial = new THREE.MeshPhongMaterial({
+      color:    ADROP_COLOR,
+      emissive: ADROP_COLOR,
+      emissiveIntensity: 0.3,
       shininess: 20,
     });
 
@@ -137,7 +160,20 @@ class PoleLayer {
     });
     this._renderer.autoClear = false;
 
-    this._rebuildMeshes();
+    // Mark dirty when terrain DEM tiles load/refine. The render loop then does a
+    // cheap elevation sample; an unchanged sample costs almost nothing.
+    this._onData = (e) => {
+      const isTerrain =
+        e && (e.sourceId === 'terrain' ||
+              (e.source && e.source.type === 'raster-dem'));
+      if (isTerrain && e.tile) {
+        this._terrainDirty = true;
+        this._map.triggerRepaint();
+      }
+    };
+    map.on('data', this._onData);
+
+    this._update(true);
   }
 
   // Convert a lng/lat to metre-offset (east, north) from SCENE_ORIGIN
@@ -151,41 +187,68 @@ class PoleLayer {
     return { east, north };
   }
 
-  _rebuildMeshes() {
+  // Read ground elevation at a coordinate. Returns a number, or null if terrain
+  // isn't ready for that point yet.
+  _elevAt(lng, lat) {
+    if (this._map && typeof this._map.queryTerrainElevation === 'function') {
+      const e = this._map.queryTerrainElevation([lng, lat]);
+      return (e == null) ? null : e;
+    }
+    return null;
+  }
+
+  // CHEAP pass: query pole elevations into a cache + change-signature. No THREE
+  // objects allocated. `pending` is true if any pole's DEM tile isn't loaded.
+  _samplePoleElevations() {
+    const poles = this.projectStore.poles || [];
+    const poleElev = {};
+    let pending = false;
+    let sig = '';
+    for (const pole of poles) {
+      const [lng, lat] = pole.geometry.coordinates;
+      let g = this._elevAt(lng, lat);
+      if (g == null) { g = 0; pending = true; }
+      poleElev[pole.properties.pole_id] = g;
+      sig += g.toFixed(1) + ';';
+    }
+    return { poleElev, sig, pending };
+  }
+
+  // EXPENSIVE pass: (re)build the THREE group from the pole-elevation cache.
+  _buildGroup(poleElev) {
+    // Dispose the per-span/drop geometries from the previous build first — they
+    // are created fresh every rebuild and would otherwise leak GPU memory.
+    for (const g of this._dynamicGeoms) g.dispose();
+    this._dynamicGeoms = [];
+
     if (this._group) {
       this._scene.remove(this._group);
       this._group = null;
     }
 
-    const poles = this.projectStore.poles || [];
-    const cbts  = this.projectStore.cbts  || [];
-    const spansEarly = this.projectStore.spans || [];
-    this._poleCount = poles.length;
-    this._cbtCount  = cbts.length;
-    if (!poles.length && !cbts.length && !spansEarly.length) {
-      this._elevationApplied = true; // nothing to place
-      return;
+    const poles  = this.projectStore.poles || [];
+    const cbts   = this.projectStore.cbts  || [];
+    const spans  = this.projectStore.spans || [];
+    const adrops = this.projectStore.aerialDrops || [];
+
+    this._poleCount  = poles.length;
+    this._cbtCount   = cbts.length;
+    this._spanCount  = spans.length;
+    this._adropCount = adrops.length;
+
+    if (!poles.length && !cbts.length && !spans.length && !adrops.length) {
+      return; // nothing to place
     }
 
     this._group = new THREE.Group();
-    let elevationReady = true;
-
-    // Cache each pole's ground elevation so CBTs can mount at the right height
-    // without a second terrain query (keyed by pole_id).
-    const poleElev = {};
+    let elevMin = Infinity, elevMax = -Infinity;
 
     for (const pole of poles) {
       const [lng, lat] = pole.geometry.coordinates;
       const { east, north } = this._metresFromOrigin(lng, lat);
-
-      // Ground elevation at the pole so it sits on the terrain, not at sea level.
-      let groundElev = 0;
-      if (this._map && typeof this._map.queryTerrainElevation === 'function') {
-        const e = this._map.queryTerrainElevation([lng, lat]);
-        if (e == null) elevationReady = false;
-        else groundElev = e;
-      }
-      poleElev[pole.properties.pole_id] = groundElev;
+      const groundElev = poleElev[pole.properties.pole_id] ?? 0;
+      elevMin = Math.min(elevMin, groundElev);
+      elevMax = Math.max(elevMax, groundElev);
 
       // Pole cylinder — base on terrain, centre lifted by half height.
       const mesh = new THREE.Mesh(this._geometry, this._material);
@@ -199,7 +262,6 @@ class PoleLayer {
     }
 
     // CBT boxes — mounted just below the top of their parent pole.
-    // Also record each CBT's 3D attach point so spans can connect to them.
     const cbtTop = {}; // cbt_id → THREE.Vector3 at the cube/attach height
     for (const cbt of cbts) {
       const [lng, lat] = cbt.geometry.coordinates;
@@ -208,45 +270,31 @@ class PoleLayer {
       // Prefer the cached parent-pole elevation; fall back to a direct query.
       let groundElev = poleElev[cbt.properties.parent_pole_id];
       if (groundElev == null) {
-        groundElev = 0;
-        if (this._map && typeof this._map.queryTerrainElevation === 'function') {
-          const e = this._map.queryTerrainElevation([lng, lat]);
-          if (e == null) elevationReady = false;
-          else groundElev = e;
-        }
+        groundElev = this._elevAt(lng, lat);
+        if (groundElev == null) groundElev = 0;
       }
 
       const attachY = groundElev + POLE_HEIGHT_M - SPAN_DROP_M;
       const cbtMesh = new THREE.Mesh(this._cbtGeometry, this._cbtMaterial);
-      // Mount the cabinet on the pole, just under the anchor.
       cbtMesh.position.set(east, attachY, -north);
       this._group.add(cbtMesh);
 
       cbtTop[cbt.properties.cbt_id] = new THREE.Vector3(east, attachY, -north);
     }
 
-    // Also allow spans to attach to the cabinet/POP.
+    // Allow spans/drops to attach to the cabinet/POP.
     let popTop = null;
     const cabinet = this.projectStore.cabinet;
     if (cabinet) {
       const [lng, lat] = cabinet.geometry.coordinates;
       const { east, north } = this._metresFromOrigin(lng, lat);
-      let groundElev = 0;
-      if (this._map && typeof this._map.queryTerrainElevation === 'function') {
-        const e = this._map.queryTerrainElevation([lng, lat]);
-        if (e == null) elevationReady = false;
-        else groundElev = e;
-      }
-      // POP sits at ground; attach spans a little above it for a clean run-in.
+      let groundElev = this._elevAt(lng, lat);
+      if (groundElev == null) groundElev = 0;
       popTop = new THREE.Vector3(east, groundElev + POLE_HEIGHT_M - SPAN_DROP_M, -north);
       this._popId = cabinet.properties.pop_id;
     }
 
     // Aerial spans — solid cyan 3D lines between CBT (or POP) attach points.
-    // Geometry is DERIVED from endpoint references, not from stored coordinates,
-    // so spans always track wherever their CBTs/poles currently are.
-    const spans = this.projectStore.spans || [];
-    this._spanCount = spans.length;
     for (const span of spans) {
       const fromId = span.properties.from_node;
       const toId   = span.properties.to_node;
@@ -259,57 +307,98 @@ class PoleLayer {
 
       const a = resolve(fromId);
       const b = resolve(toId);
-      // If an endpoint can't be resolved (e.g. CBT deleted), skip the span.
-      if (!a || !b) continue;
+      if (!a || !b) continue; // endpoint deleted → skip
 
-      // Render the span as a thin cylinder oriented from a → b.
-      // (THREE.LineBasicMaterial ignores width on WebGL, so we use geometry.)
       const dir = new THREE.Vector3().subVectors(b, a);
       const len = dir.length();
       if (len === 0) continue;
 
       const spanGeom = new THREE.CylinderGeometry(SPAN_RADIUS_M, SPAN_RADIUS_M, len, 6);
+      this._dynamicGeoms.push(spanGeom);
       const spanMesh = new THREE.Mesh(spanGeom, this._spanMaterial);
-
-      // Cylinder is Y-up by default; rotate its Y axis onto the span direction.
       spanMesh.quaternion.setFromUnitVectors(
         new THREE.Vector3(0, 1, 0),
         dir.clone().normalize()
       );
-      // Position at the midpoint of the two endpoints.
       spanMesh.position.copy(a).add(b).multiplyScalar(0.5);
       this._group.add(spanMesh);
     }
 
+    // Aerial drops — 3D cylinder from a CBT pole-top DOWN to a premise.
+    for (const adrop of adrops) {
+      const coords = adrop.geometry.coordinates; // [[lng,lat](CBT), [lng,lat](premise)]
+      if (!coords || coords.length < 2) continue;
+
+      let a = cbtTop[adrop.properties.from_cbt];
+      if (!a) {
+        const [lng, lat] = coords[0];
+        const { east, north } = this._metresFromOrigin(lng, lat);
+        let g = this._elevAt(lng, lat);
+        if (g == null) g = 0;
+        a = new THREE.Vector3(east, g + POLE_HEIGHT_M - SPAN_DROP_M, -north);
+      }
+
+      const [plng, plat] = coords[coords.length - 1];
+      const { east: peast, north: pnorth } = this._metresFromOrigin(plng, plat);
+      let pelev = this._elevAt(plng, plat);
+      if (pelev == null) pelev = 0;
+      const b = new THREE.Vector3(peast, pelev + ADROP_PREMISE_H, -pnorth);
+
+      const dir = new THREE.Vector3().subVectors(b, a);
+      const len = dir.length();
+      if (len === 0) continue;
+
+      const dropGeom = new THREE.CylinderGeometry(ADROP_RADIUS_M, ADROP_RADIUS_M, len, 6);
+      this._dynamicGeoms.push(dropGeom);
+      const dropMesh = new THREE.Mesh(dropGeom, this._adropMaterial);
+      dropMesh.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0),
+        dir.clone().normalize()
+      );
+      dropMesh.position.copy(a).add(b).multiplyScalar(0.5);
+      this._group.add(dropMesh);
+    }
+
     this._scene.add(this._group);
-    this._elevationApplied = elevationReady;
-    console.log('[PoleLayer] rebuilt', poles.length, 'poles', cbts.length, 'cbts', spans.length, 'spans, elevationReady:', elevationReady);
+
+    const elevRange = (elevMin === Infinity) ? 'n/a' : `${elevMin.toFixed(1)}–${elevMax.toFixed(1)}m`;
+    console.log('[PoleLayer] rebuilt', poles.length, 'poles', cbts.length, 'cbts',
+      spans.length, 'spans', adrops.length, 'adrops · ground elev', elevRange);
+  }
+
+  // Sample elevations (cheap) and rebuild the meshes only if something changed.
+  // `force` rebuilds unconditionally (initial add / asset count change).
+  _update(force) {
+    const { poleElev, sig, pending } = this._samplePoleElevations();
+    const changed = sig !== this._lastElevSig;
+    if (changed) this._lastElevSig = sig;
+
+    if (force || changed || pending) {
+      this._buildGroup(poleElev);
+    }
+
+    // Keep retrying only while terrain is still loading for some pole.
+    this._terrainDirty = pending;
+    if (pending) this._map.triggerRepaint();
   }
 
   render(gl, args) {
-    // === DIAGNOSTIC: mainMatrix shape (fires once) ===
-    if (!this._debugged) {
-      const raw = args?.defaultProjectionData?.mainMatrix;
-      console.log('=== MAINMATRIX DIAGNOSTIC ===');
-      console.log('Type:', raw?.constructor?.name);
-      console.log('Length:', raw?.length);
-      console.log('First 4 elements:', raw?.[0], raw?.[1], raw?.[2], raw?.[3]);
-      this._debugged = true;
-    }
-
     try {
       this._renderCount++;
-      const currentCount = (this.projectStore.poles || []).length;
-      const currentCbtCount = (this.projectStore.cbts || []).length;
-      const currentSpanCount = (this.projectStore.spans || []).length;
-      const needsRebuild = currentCount !== this._poleCount
-                        || currentCbtCount !== this._cbtCount
-                        || currentSpanCount !== this._spanCount
-                        || !this._elevationApplied
-                        || this._renderCount <= 30;
-      if (needsRebuild) {
-        this._rebuildMeshes();
-        if (!this._elevationApplied) this._map.triggerRepaint();
+      const poleCount  = (this.projectStore.poles || []).length;
+      const cbtCount   = (this.projectStore.cbts || []).length;
+      const spanCount  = (this.projectStore.spans || []).length;
+      const adropCount = (this.projectStore.aerialDrops || []).length;
+
+      const countsChanged = poleCount  !== this._poleCount
+                         || cbtCount   !== this._cbtCount
+                         || spanCount  !== this._spanCount
+                         || adropCount !== this._adropCount;
+
+      if (countsChanged) {
+        this._update(true);
+      } else if (this._terrainDirty || this._renderCount <= 3) {
+        this._update(false);
       }
 
       if (!this._group) return;
@@ -327,6 +416,9 @@ class PoleLayer {
   }
 
   onRemove() {
+    if (this._map && this._onData) this._map.off('data', this._onData);
+    for (const g of this._dynamicGeoms) g.dispose();
+    this._dynamicGeoms = [];
     if (this._group)         this._scene.remove(this._group);
     if (this._geometry)      this._geometry.dispose();
     if (this._material)      this._material.dispose();
@@ -335,6 +427,7 @@ class PoleLayer {
     if (this._cbtGeometry)   this._cbtGeometry.dispose();
     if (this._cbtMaterial)   this._cbtMaterial.dispose();
     if (this._spanMaterial)  this._spanMaterial.dispose();
+    if (this._adropMaterial) this._adropMaterial.dispose();
     if (this._renderer)      this._renderer.dispose();
   }
 }

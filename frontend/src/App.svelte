@@ -19,7 +19,7 @@
     activateCabinetTool, activateBuildAreaTool, activateChamberTool,
     activateDuctTool, activateJointTool, activateDropDuctTool,
     activateCableTool, activateBundleTool, activatePoleTool,
-    activateCBTTool, activateAerialSpanTool,
+    activateCBTTool, activateAerialSpanTool, activateAerialDropTool,
     applyCookieCutter, clearTool
   } from './mapTools.js';
 
@@ -412,6 +412,17 @@
     if (err) { alert(err.error); activeToolLabel = ''; }
   }
 
+  function onPlaceAerialDrop() {
+    clearTool(map);
+    activeToolLabel = 'Aerial Drop — click CBT, then premise';
+    const err = activateAerialDropTool(map, (feature) => {
+      projectStore.addAerialDrop(feature);
+      syncToMap(map);
+      // Tool stays active for next drop
+    });
+    if (err) { alert(err.error); activeToolLabel = ''; }
+  }
+
   function onToolSelected(e) {
     const { label, category, toolId } = e.detail;
     const catLabel = category.charAt(0).toUpperCase() + category.slice(1);
@@ -422,6 +433,7 @@
    if (toolId === 'aerial-pole')     onPlacePole();
     if (toolId === 'aerial-cbt')      onPlaceCBT();
     if (toolId === 'aerial-span')     onPlaceAerialSpan();
+    if (toolId === 'aerial-drop')     onPlaceAerialDrop();
     if (toolId === 'fibre-joint')    onPlaceJoint();
     if (toolId === 'fibre-cable')    onPlaceCable();
     if (toolId === 'fibre-bundle')   onPlaceBundle();

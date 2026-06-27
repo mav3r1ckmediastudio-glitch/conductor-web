@@ -271,6 +271,11 @@ export function ensureSources(map) {
     map.addSource('spans-src', { type: 'geojson', data: emptyFC() });
   }
 
+  // ── Aerial Drops — source only, layer added after terrain ─────────────
+  if (!map.getSource('adrops-src')) {
+    map.addSource('adrops-src', { type: 'geojson', data: emptyFC() });
+  }
+
   // ── Ducts — source only, layer added after terrain ────────────────────
   if (!map.getSource('ducts-src')) {
     map.addSource('ducts-src', { type: 'geojson', data: emptyFC() });
@@ -573,6 +578,13 @@ export function syncToMap(map) {
     map.getSource('spans-src').setData({
       type: 'FeatureCollection',
       features: s.spans || [],
+    });
+  }
+
+  if (map.getSource('adrops-src')) {
+    map.getSource('adrops-src').setData({
+      type: 'FeatureCollection',
+      features: s.aerialDrops || [],
     });
   }
 }
@@ -1156,6 +1168,147 @@ export function activateAerialSpanTool(map, onSaved) {
     if (e.key === 'Escape') cleanup();
     if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
       if (vertices.length) { vertices.pop(); nodeIds.pop(); nodeTypes.pop(); }
+    }
+  }
+
+  function cleanup() {
+    map.off('mousemove', onMousemove);
+    map.off('click', onClick);
+    map.off('contextmenu', onContextmenu);
+    document.removeEventListener('keydown', onKeydown);
+    map.getSource('rubberband-src').setData(emptyFC());
+    map.getSource('snap-src').setData(emptyFC());
+    map.getCanvas().style.cursor = '';
+  }
+
+  map.on('mousemove', onMousemove);
+  map.on('click', onClick);
+  map.on('contextmenu', onContextmenu);
+  document.addEventListener('keydown', onKeydown);
+  _activeTool = { cleanup };
+  return null;
+}
+
+// ── AERIAL DROP TOOL ──────────────────────────────────────────────────────────
+// Two-click: click 1 = CBT (snap required), click 2 = premise (snap preferred).
+// Auto-saves with no form, tool stays active for next drop.
+// Mirrors the UG drop duct tool pattern exactly.
+
+function nextAerialDropId(areaId) {
+  const prefix = `${areaId}-ADROP-`;
+  const existing = new Set();
+  for (const d of projectStore.aerialDrops) {
+    const id = d.properties.adrop_id || '';
+    if (id.startsWith(prefix)) {
+      const n = parseInt(id.replace(prefix, ''), 10);
+      if (!isNaN(n)) existing.add(n);
+    }
+  }
+  let n = 1;
+  while (existing.has(n)) n++;
+  return `${prefix}${String(n).padStart(3, '0')}`;
+}
+
+export function activateAerialDropTool(map, onSaved) {
+  clearTool(map);
+
+  if (!projectStore.cabinet) {
+    return { error: 'No cabinet placed yet.' };
+  }
+  if (!projectStore.cbts.length) {
+    return { error: 'No CBTs placed yet. Place at least one CBT before digitising aerial drops.' };
+  }
+
+  map.getCanvas().style.cursor = 'crosshair';
+  const areaId = projectStore.project?.areaId || 'XX-XX';
+
+  let pt1   = null;  // [lng, lat] — CBT end
+  let cbtId = null;  // cbt_id of the snapped CBT
+  let pt2   = null;  // [lng, lat] — premise end
+
+  function onMousemove(e) {
+    // Before first click: snap to CBT only. After first click: snap to premise.
+    const types = !pt1 ? ['CBT'] : ['PREMISE'];
+    const snap = _snapToNode(map, e.lngLat, 16, types);
+    if (snap) {
+      map.getSource('snap-src').setData(pointFC(snap.lngLat.lng, snap.lngLat.lat));
+      map.getCanvas().style.cursor = 'pointer';
+    } else {
+      map.getSource('snap-src').setData(emptyFC());
+      map.getCanvas().style.cursor = 'crosshair';
+    }
+
+    if (pt1) {
+      const end = snap ? [snap.lngLat.lng, snap.lngLat.lat] : [e.lngLat.lng, e.lngLat.lat];
+      map.getSource('rubberband-src').setData({
+        type: 'FeatureCollection',
+        features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: [pt1, end] }, properties: {} }]
+      });
+    }
+  }
+
+  function onClick(e) {
+    if (!pt1) {
+      // First click — must snap to a CBT
+      const snap = _snapToNode(map, e.lngLat, 16, ['CBT']);
+      if (!snap) {
+        alert('Click on or near an existing CBT to start an aerial drop.');
+        return;
+      }
+      pt1   = [snap.lngLat.lng, snap.lngLat.lat];
+      cbtId = snap.id;
+    } else {
+      // Second click — snap to premise if close, otherwise free click
+      const snap = _snapToNode(map, e.lngLat, 16, ['PREMISE']);
+      const { lng, lat } = snap ? snap.lngLat : e.lngLat;
+      pt2 = [lng, lat];
+      save(snap ? snap.id : null);
+    }
+  }
+
+  function onContextmenu(e) {
+    e.preventDefault();
+    // RMB cancels current in-progress drop
+    pt1 = null; cbtId = null; pt2 = null;
+    map.getSource('rubberband-src').setData(emptyFC());
+    map.getSource('snap-src').setData(emptyFC());
+  }
+
+  function save(uprn) {
+    const lengthM  = Math.round(haversine(pt1[0], pt1[1], pt2[0], pt2[1]));
+    const adropId  = nextAerialDropId(areaId);
+    const popId    = projectStore.cabinet?.properties.pop_id || '';
+
+    const feature = {
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: [pt1, pt2] },
+      properties: {
+        adrop_id:   adropId,
+        area_id:    areaId,
+        pop_id:     popId,
+        from_cbt:   cbtId,
+        uprn:       uprn || null,
+        length_m:   lengthM,
+        status:     'PROPOSED',
+        drop_type:  null,
+        notes:      null,
+      },
+    };
+
+    map.getSource('rubberband-src').setData(emptyFC());
+    map.getSource('snap-src').setData(emptyFC());
+
+    // Reset for next drop — tool stays active
+    pt1 = null; cbtId = null; pt2 = null;
+
+    onSaved(feature);
+  }
+
+  function onKeydown(e) {
+    if (e.key === 'Escape') cleanup();
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+      pt1 = null; cbtId = null; pt2 = null;
+      map.getSource('rubberband-src').setData(emptyFC());
     }
   }
 
