@@ -51,6 +51,11 @@ const ADROP_COLOR    = 0x4dc8ff;
 const ADROP_RADIUS_M = 0.08; // thinner than a span — it's a single subscriber drop
 const ADROP_PREMISE_H = 0.3; // land the drop slightly above ground for a clean finish
 
+// CBT tail — fibre tail riding the span line from a CBT, through its pole chain,
+// then dropping to the parent underground joint. Thinnest of the aerial lines.
+const TAIL_COLOR     = 0x7ab8d4; // muted cyan — reads as fibre, distinct from span
+const TAIL_RADIUS_M  = 0.06;
+
 // Scene origin — central Perthshire (matches map center [-3.77, 56.71]).
 // All pole positions are computed as metre-offsets from this point.
 // Elevation kept at 0; per-pole ground elevation is baked into mesh Y.
@@ -72,6 +77,7 @@ class PoleLayer {
     this._cbtCount     = -1;
     this._spanCount    = -1;
     this._adropCount   = -1;
+    this._tailCount    = -1;
     this._originMatrix = null;   // matrix `l` — origin world transform (axis swap + scale)
     this._mpu          = 1;      // mercator units per metre at origin
     this._renderCount  = 0;      // short startup window to catch the store-population race
@@ -153,6 +159,13 @@ class PoleLayer {
       shininess: 20,
     });
 
+    this._tailMaterial = new THREE.MeshPhongMaterial({
+      color:    TAIL_COLOR,
+      emissive: TAIL_COLOR,
+      emissiveIntensity: 0.25,
+      shininess: 15,
+    });
+
     this._renderer = new THREE.WebGLRenderer({
       canvas:    map.getCanvas(),
       context:   gl,
@@ -230,18 +243,24 @@ class PoleLayer {
     const cbts   = this.projectStore.cbts  || [];
     const spans  = this.projectStore.spans || [];
     const adrops = this.projectStore.aerialDrops || [];
+    const tails  = this.projectStore.cbtTails || [];
 
     this._poleCount  = poles.length;
     this._cbtCount   = cbts.length;
     this._spanCount  = spans.length;
     this._adropCount = adrops.length;
+    this._tailCount  = tails.length;
 
-    if (!poles.length && !cbts.length && !spans.length && !adrops.length) {
+    if (!poles.length && !cbts.length && !spans.length && !adrops.length && !tails.length) {
       return; // nothing to place
     }
 
     this._group = new THREE.Group();
     let elevMin = Infinity, elevMax = -Infinity;
+
+    // pole_id → Vector3 at the pole-top attach height (same level CBTs/spans use).
+    // Lets a CBT tail ride the aerial route through intermediate poles.
+    const poleTop = {};
 
     for (const pole of poles) {
       const [lng, lat] = pole.geometry.coordinates;
@@ -259,6 +278,9 @@ class PoleLayer {
       const anchor = new THREE.Mesh(this._anchorGeometry, this._anchorMaterial);
       anchor.position.set(east, groundElev + POLE_HEIGHT_M + ANCHOR_HEIGHT_M / 2, -north);
       this._group.add(anchor);
+
+      poleTop[pole.properties.pole_id] =
+        new THREE.Vector3(east, groundElev + POLE_HEIGHT_M - SPAN_DROP_M, -north);
     }
 
     // CBT boxes — mounted just below the top of their parent pole.
@@ -359,11 +381,67 @@ class PoleLayer {
       this._group.add(dropMesh);
     }
 
+    // CBT tails — fibre tail riding the aerial route from a CBT, through its
+    // pole chain (at pole-top height, on the span line), then dropping to the
+    // parent underground joint at ground level. Rendered as a chain of thin
+    // cylinders so it follows the poles instead of cutting a straight line.
+    for (const tail of tails) {
+      const coords = tail.geometry.coordinates;            // [[lng,lat], …] CBT→…→JOINT
+      const chain  = tail.properties.node_chain || [];     // ids, same order
+      const types  = tail.properties.node_types || [];     // 'CBT'|'POLE'|'JOINT'
+      if (!coords || coords.length < 2) continue;
+
+      // Resolve every vertex to a 3D attach point.
+      const pts = [];
+      for (let i = 0; i < coords.length; i++) {
+        const id   = chain[i];
+        const type = types[i];
+        let p = null;
+
+        if (type === 'CBT')  p = cbtTop[id]  || null;
+        if (type === 'POLE') p = poleTop[id] || null;
+
+        if (!p) {
+          // JOINT (ground level), or a CBT/pole whose cache miss we recover from
+          // by sampling terrain at the stored 2D coordinate.
+          const [lng, lat] = coords[i];
+          const { east, north } = this._metresFromOrigin(lng, lat);
+          let g = this._elevAt(lng, lat);
+          if (g == null) g = 0;
+          // Joints land at ground; a recovered CBT/pole rides pole-top height.
+          const y = (type === 'JOINT')
+            ? g + ADROP_PREMISE_H
+            : g + POLE_HEIGHT_M - SPAN_DROP_M;
+          p = new THREE.Vector3(east, y, -north);
+        }
+        pts.push(p);
+      }
+
+      // One thin cylinder per segment.
+      for (let i = 1; i < pts.length; i++) {
+        const a = pts[i - 1];
+        const b = pts[i];
+        const dir = new THREE.Vector3().subVectors(b, a);
+        const len = dir.length();
+        if (len === 0) continue;
+
+        const tailGeom = new THREE.CylinderGeometry(TAIL_RADIUS_M, TAIL_RADIUS_M, len, 6);
+        this._dynamicGeoms.push(tailGeom);
+        const tailMesh = new THREE.Mesh(tailGeom, this._tailMaterial);
+        tailMesh.quaternion.setFromUnitVectors(
+          new THREE.Vector3(0, 1, 0),
+          dir.clone().normalize()
+        );
+        tailMesh.position.copy(a).add(b).multiplyScalar(0.5);
+        this._group.add(tailMesh);
+      }
+    }
+
     this._scene.add(this._group);
 
     const elevRange = (elevMin === Infinity) ? 'n/a' : `${elevMin.toFixed(1)}–${elevMax.toFixed(1)}m`;
     console.log('[PoleLayer] rebuilt', poles.length, 'poles', cbts.length, 'cbts',
-      spans.length, 'spans', adrops.length, 'adrops · ground elev', elevRange);
+      spans.length, 'spans', adrops.length, 'adrops', tails.length, 'tails · ground elev', elevRange);
   }
 
   // Sample elevations (cheap) and rebuild the meshes only if something changed.
@@ -389,11 +467,13 @@ class PoleLayer {
       const cbtCount   = (this.projectStore.cbts || []).length;
       const spanCount  = (this.projectStore.spans || []).length;
       const adropCount = (this.projectStore.aerialDrops || []).length;
+      const tailCount  = (this.projectStore.cbtTails || []).length;
 
       const countsChanged = poleCount  !== this._poleCount
                          || cbtCount   !== this._cbtCount
                          || spanCount  !== this._spanCount
-                         || adropCount !== this._adropCount;
+                         || adropCount !== this._adropCount
+                         || tailCount  !== this._tailCount;
 
       if (countsChanged) {
         this._update(true);
@@ -428,6 +508,7 @@ class PoleLayer {
     if (this._cbtMaterial)   this._cbtMaterial.dispose();
     if (this._spanMaterial)  this._spanMaterial.dispose();
     if (this._adropMaterial) this._adropMaterial.dispose();
+    if (this._tailMaterial)  this._tailMaterial.dispose();
     if (this._renderer)      this._renderer.dispose();
   }
 }

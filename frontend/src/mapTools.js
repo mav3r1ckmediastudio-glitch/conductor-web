@@ -276,6 +276,14 @@ export function ensureSources(map) {
     map.addSource('adrops-src', { type: 'geojson', data: emptyFC() });
   }
 
+  // ── CBT Tails — source only, layer added after terrain ────────────────
+  // Fibre tail from a CBT, along the pole/span route, back to its parent
+  // underground joint. Maps to the cable (fibre) family but renders as a
+  // distinct thin tail line so it reads differently from distribution cable.
+  if (!map.getSource('cbttails-src')) {
+    map.addSource('cbttails-src', { type: 'geojson', data: emptyFC() });
+  }
+
   // ── Ducts — source only, layer added after terrain ────────────────────
   if (!map.getSource('ducts-src')) {
     map.addSource('ducts-src', { type: 'geojson', data: emptyFC() });
@@ -412,6 +420,10 @@ export function ensureTerrainLayers(map) {
       }
     }, BEFORE);
   }
+
+  // CBT tail renders in 3D only (PoleLayers.js), riding the span line from the
+  // CBT through its pole chain down to the parent joint. No terrain line layer —
+  // a draped 2D line looks unnatural and clutters the map.
 
   if (!map.getLayer('rubberband-layer')) {
     map.addLayer({
@@ -585,6 +597,13 @@ export function syncToMap(map) {
     map.getSource('adrops-src').setData({
       type: 'FeatureCollection',
       features: s.aerialDrops || [],
+    });
+  }
+
+  if (map.getSource('cbttails-src')) {
+    map.getSource('cbttails-src').setData({
+      type: 'FeatureCollection',
+      features: s.cbtTails || [],
     });
   }
 }
@@ -1341,6 +1360,240 @@ export function activateAerialDropTool(map, onSaved) {
   return null;
 }
 
+// ── CBT TAIL TOOL ─────────────────────────────────────────────────────────────
+// A fibre tail from a CBT, along the aerial route (CBT → poles), back to its
+// parent underground joint. Multi-vertex:
+//   • Click 1 MUST snap to a CBT       → start of tail (CBT must not already
+//                                         have a tail — one tail per CBT)
+//   • Intermediate clicks snap to POLE → follow the pole/span route
+//   • Final click MUST snap to a JOINT → sets the terminus vertex
+//   • RMB finishes (consistent with every other line tool). The last committed
+//     vertex must be a JOINT, or the finish is rejected.
+// HARD-STOP at 350m: the plugin enforces a 350m ceiling on CBT tails. Adding a
+// vertex that would push the running chain length over 350m is REJECTED — the
+// click is ignored and the vertex is not added, so an over-length tail can never
+// be saved. The true measured length is stored in length_m for the BoM.
+// Esc cancels. Ctrl/⌘-Z pops the last vertex. After a save the tool returns to
+// default (a CBT can only ever have one tail, so there is nothing to re-arm to).
+
+const CBT_TAIL_MAX_M = 350;
+
+// Set of cbt_ids that already have a tail — used to block starting a second one.
+function cbtsWithTail() {
+  const s = new Set();
+  for (const t of projectStore.cbtTails) {
+    if (t.properties.from_cbt) s.add(t.properties.from_cbt);
+  }
+  return s;
+}
+
+function nextCBTTailId(areaId) {
+  const prefix = `${areaId}-TAIL-`;
+  const existing = new Set();
+  for (const t of projectStore.cbtTails) {
+    const id = t.properties.tail_id || '';
+    if (id.startsWith(prefix)) {
+      const n = parseInt(id.replace(prefix, ''), 10);
+      if (!isNaN(n)) existing.add(n);
+    }
+  }
+  let n = 1;
+  while (existing.has(n)) n++;
+  return `${prefix}${String(n).padStart(3, '0')}`;
+}
+
+export function activateCBTTailTool(map, onFinish) {
+  clearTool(map);
+
+  if (!projectStore.cabinet) {
+    return { error: 'No cabinet placed yet.' };
+  }
+  if (!projectStore.cbts.length) {
+    return { error: 'No CBTs placed yet. Place at least one CBT before drawing tails.' };
+  }
+  if (!projectStore.joints.length) {
+    return { error: 'No joints placed yet. A CBT tail must terminate at an underground joint.' };
+  }
+  // Every CBT already has a tail → nothing to draw.
+  const tailed = cbtsWithTail();
+  if (projectStore.cbts.every(c => tailed.has(c.properties.cbt_id))) {
+    return { error: 'Every CBT already has a tail. A CBT can only have one tail.' };
+  }
+
+  map.getCanvas().style.cursor = 'crosshair';
+  const areaId = projectStore.project?.areaId || 'XX-XX';
+
+  let vertices  = [];   // [lng, lat]
+  let nodeIds   = [];   // snapped node id at each vertex (cbt_id / pole_id / joint_id)
+  let nodeTypes = [];   // 'CBT' | 'POLE' | 'JOINT'
+
+  // Running true length of the committed chain (metres).
+  function chainLength() {
+    return vertices.length < 2 ? 0 : haversineChain(vertices);
+  }
+
+  // Length the chain WOULD be if we appended candidate [lng, lat].
+  function lengthWith(candidate) {
+    if (!vertices.length) return 0;
+    return haversineChain([...vertices, candidate]);
+  }
+
+  function updateRubberband(cursorLngLat) {
+    if (!vertices.length) return;
+    const coords = [...vertices, [cursorLngLat.lng, cursorLngLat.lat]];
+    map.getSource('rubberband-src').setData({
+      type: 'FeatureCollection',
+      features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: coords }, properties: {} }]
+    });
+  }
+
+  // What may we snap to at the current step?
+  //   • no vertices yet → CBT only (must start on a CBT without an existing tail)
+  //   • mid-chain       → POLE (route) or JOINT (terminus)
+  function snapTypesNow() {
+    if (!vertices.length) return ['CBT'];
+    return ['POLE', 'JOINT'];
+  }
+
+  function onMousemove(e) {
+    const snap = _snapToNode(map, e.lngLat, 16, snapTypesNow());
+    // Suppress the snap halo on a CBT that already has a tail.
+    const blocked = snap && snap.type === 'CBT' && tailed.has(snap.id);
+    if (snap && !blocked) {
+      map.getSource('snap-src').setData(pointFC(snap.lngLat.lng, snap.lngLat.lat));
+      const projected = lengthWith([snap.lngLat.lng, snap.lngLat.lat]);
+      map.getCanvas().style.cursor = projected > CBT_TAIL_MAX_M ? 'not-allowed' : 'pointer';
+      if (vertices.length) updateRubberband(snap.lngLat);
+    } else {
+      map.getSource('snap-src').setData(emptyFC());
+      map.getCanvas().style.cursor = 'crosshair';
+      if (vertices.length) updateRubberband(e.lngLat);
+    }
+  }
+
+  function commitVertex(snap) {
+    const candidate = [snap.lngLat.lng, snap.lngLat.lat];
+    // HARD-STOP: block any vertex that would exceed 350m.
+    const projected = lengthWith(candidate);
+    if (projected > CBT_TAIL_MAX_M) {
+      alert(
+        `CBT tail hard-stop: this segment would take the tail to ` +
+        `${Math.round(projected)} m, over the ${CBT_TAIL_MAX_M} m limit. ` +
+        `Vertex rejected — route via a closer joint or add an intermediate joint.`
+      );
+      return false;
+    }
+    vertices.push(candidate);
+    nodeIds.push(snap.id);
+    nodeTypes.push(snap.type);
+    return true;
+  }
+
+  function onClick(e) {
+    if (!vertices.length) {
+      // First click — must be a CBT that does not already have a tail.
+      const snap = _snapToNode(map, e.lngLat, 16, ['CBT']);
+      if (!snap) {
+        alert('Click on or near an existing CBT to start a tail.');
+        return;
+      }
+      if (tailed.has(snap.id)) {
+        alert(`${snap.id} already has a tail. A CBT can only have one tail.`);
+        return;
+      }
+      commitVertex(snap);   // first vertex can never breach 350m (length 0)
+      return;
+    }
+
+    // Mid-chain — snap to POLE (route) or JOINT (terminus). Both just add a
+    // vertex; RMB is what finishes the tail (consistent with the other tools).
+    const snap = _snapToNode(map, e.lngLat, 16, ['POLE', 'JOINT']);
+    if (!snap) {
+      alert('Snap to a pole to follow the route, or to the parent joint, then right-click to finish.');
+      return;
+    }
+    // Only one joint may be committed, and it must be the last vertex. If a joint
+    // is already the current terminus, replace it rather than chaining past it.
+    if (snap.type === 'JOINT' && nodeTypes[nodeTypes.length - 1] === 'JOINT') {
+      vertices.pop(); nodeIds.pop(); nodeTypes.pop();
+    }
+    commitVertex(snap);
+  }
+
+  function onContextmenu(e) {
+    e.preventDefault();
+    if (!vertices.length) { cleanup(); return; }   // RMB with nothing started → exit
+    // RMB finishes — but only if the tail terminates on a joint.
+    if (nodeTypes[nodeTypes.length - 1] !== 'JOINT') {
+      alert('A CBT tail must end on an underground joint. Snap to the parent joint, then right-click to finish.');
+      return;
+    }
+    if (vertices.length < 2) {
+      alert('A tail needs at least a CBT and a joint.');
+      return;
+    }
+    finish();
+  }
+
+  function finish() {
+    map.getSource('rubberband-src').setData(emptyFC());
+    map.getSource('snap-src').setData(emptyFC());
+
+    const fromCbt  = nodeIds[0];
+    const toJoint  = nodeIds[nodeIds.length - 1];
+    const viaPoles = nodeIds.slice(1, -1);   // intermediate pole ids, in order
+    const lengthM  = Math.round(chainLength());
+    const tailId   = nextCBTTailId(areaId);
+    const popId    = projectStore.cabinet?.properties.pop_id || '';
+
+    const pending = {
+      coordinates: [...vertices],
+      tail_id:     tailId,
+      area_id:     areaId,
+      pop_id:      popId,
+      from_cbt:    fromCbt,
+      to_joint:    toJoint,
+      via_poles:   viaPoles,
+      // Full ordered attach chain for 3D rendering: CBT → poles… → JOINT.
+      node_chain:  [...nodeIds],
+      node_types:  [...nodeTypes],
+      length_m:    lengthM,
+    };
+
+    // Reset; tool will be torn down by the handler (one tail per CBT — no re-arm).
+    vertices = []; nodeIds = []; nodeTypes = [];
+
+    onFinish(pending);
+  }
+
+  function onKeydown(e) {
+    if (e.key === 'Escape') cleanup();
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+      if (vertices.length) {
+        vertices.pop(); nodeIds.pop(); nodeTypes.pop();
+        if (!vertices.length) map.getSource('rubberband-src').setData(emptyFC());
+      }
+    }
+  }
+
+  function cleanup() {
+    map.off('mousemove', onMousemove);
+    map.off('click', onClick);
+    map.off('contextmenu', onContextmenu);
+    document.removeEventListener('keydown', onKeydown);
+    map.getSource('rubberband-src').setData(emptyFC());
+    map.getSource('snap-src').setData(emptyFC());
+    map.getCanvas().style.cursor = '';
+  }
+
+  map.on('mousemove', onMousemove);
+  map.on('click', onClick);
+  map.on('contextmenu', onContextmenu);
+  document.addEventListener('keydown', onKeydown);
+  _activeTool = { cleanup };
+  return null;
+}
+
 // ── JOINT TOOL ────────────────────────────────────────────────────────────────
 
 function nextJointId(areaId) {
@@ -1976,6 +2229,192 @@ export function activateDuctTool(map, onFinish) {
   map.on('mousemove', onMousemove);
   map.on('click', onClick);
   map.on('contextmenu', onContextmenu);
+  document.addEventListener('keydown', onKeydown);
+  _activeTool = { cleanup };
+  return null;
+}
+
+// ── ASSET PICKER ─────────────────────────────────────────────────────────────
+// Hit-tests every design asset near a click point.
+// Returns { collection, index, feature, assetType, assetId, label } or null.
+//
+// Point assets: screen-distance test (same as _snapToNode).
+// Line assets: queryRenderedFeatures on the relevant layer IDs, then find the
+//   matching feature in the store by id property.
+
+// Layer IDs must match what ensureSources/ensureTerrainLayers actually registers.
+// Poles, CBTs, spans, aerial drops, and CBT tails render 3D-only via PoleLayers.js
+// and have no 2D map layers — they are picked by _pickPointAsset (poles/CBTs) or
+// are not clickable by layer (spans/adrops/cbttails — no 2D layer exists).
+const LAYER_TO_META = {
+  'chambers-layer': { collection: 'chambers',  assetType: 'chamber', idProp: 'chamber_id', label: 'Chamber' },
+  'joints-layer':   { collection: 'joints',    assetType: 'joint',   idProp: 'joint_id',   label: 'Joint' },
+  'cbt-layer':      { collection: 'cbts',      assetType: 'cbt',     idProp: 'cbt_id',     label: 'CBT' },
+  'poles-layer':    { collection: 'poles',     assetType: 'pole',    idProp: 'pole_id',    label: 'Pole' },
+  'ducts-layer':    { collection: 'ducts',     assetType: 'duct',    idProp: 'duct_id',    label: 'Duct' },
+  'cables-glow':    { collection: 'cables',    assetType: 'cable',   idProp: 'cable_id',   label: 'Cable' },
+  'cables-pulse':   { collection: 'cables',    assetType: 'cable',   idProp: 'cable_id',   label: 'Cable' },
+  'dropducts-layer':{ collection: 'dropDucts', assetType: 'dropduct',idProp: 'ddct_id',    label: 'Drop Duct' },
+  'bundles-layer':  { collection: 'bundles',   assetType: 'bundle',  idProp: 'bundle_id',  label: 'Bundle' },
+};
+
+// Point asset screen-distance pick (same radius as snap, 20px).
+function _pickPointAsset(map, lngLat, snapPx = 20) {
+  const pt = map.project(lngLat);
+  const candidates = [];
+
+  const checks = [
+    { collection: 'chambers',  assetType: 'chamber',  idProp: 'chamber_id', label: 'Chamber',      arr: projectStore.chambers },
+    { collection: 'joints',    assetType: 'joint',    idProp: 'joint_id',   label: 'Joint',        arr: projectStore.joints },
+    { collection: 'poles',     assetType: 'pole',     idProp: 'pole_id',    label: 'Pole',         arr: projectStore.poles },
+    { collection: 'cbts',      assetType: 'cbt',      idProp: 'cbt_id',     label: 'CBT',          arr: projectStore.cbts },
+  ];
+
+  for (const { collection, assetType, idProp, label, arr } of checks) {
+    for (let i = 0; i < arr.length; i++) {
+      const f = arr[i];
+      const [lng, lat] = f.geometry.coordinates;
+      const sPt = map.project({ lng, lat });
+      const dist = Math.hypot(pt.x - sPt.x, pt.y - sPt.y);
+      if (dist <= snapPx) {
+        candidates.push({ collection, index: i, feature: f, assetType, assetId: f.properties[idProp], label, dist });
+      }
+    }
+  }
+
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => a.dist - b.dist);
+  return candidates[0];
+}
+
+// Line asset pick via queryRenderedFeatures on a small bounding box.
+function _pickLineAsset(map, point) {
+  const BOX = 8; // px
+  const bbox = [
+    { x: point.x - BOX, y: point.y - BOX },
+    { x: point.x + BOX, y: point.y + BOX },
+  ];
+
+  const layerIds = Object.keys(LAYER_TO_META).filter(id => {
+    try { return !!map.getLayer(id); } catch { return false; }
+  });
+  if (!layerIds.length) return null;
+
+  const hits = map.queryRenderedFeatures(bbox, { layers: layerIds });
+  if (!hits.length) return null;
+
+  // Use the first hit — MapLibre returns them front-to-back
+  for (const hit of hits) {
+    const meta = LAYER_TO_META[hit.layer.id];
+    if (!meta) continue;
+    const idProp = meta.idProp;
+    const assetId = hit.properties?.[idProp];
+    if (!assetId) continue;
+
+    const arr = projectStore.state[meta.collection] || [];
+    const index = arr.findIndex(f => f.properties[idProp] === assetId);
+    if (index < 0) continue;
+
+    return {
+      collection: meta.collection,
+      index,
+      feature:   arr[index],
+      assetType: meta.assetType,
+      assetId,
+      label:     meta.label,
+    };
+  }
+  return null;
+}
+
+export function pickAsset(map, lngLat) {
+  const point = map.project(lngLat);
+  // Point assets take priority (closer feel)
+  const pointHit = _pickPointAsset(map, lngLat);
+  if (pointHit) return pointHit;
+  return _pickLineAsset(map, point);
+}
+
+// ── SELECT TOOL ───────────────────────────────────────────────────────────────
+// Single-click to pick any asset. Calls onPick(descriptor) on hit.
+// Hover changes cursor to pointer when over any asset layer.
+
+const HOVER_LAYERS = Object.keys(LAYER_TO_META);
+
+export function activateSelectTool(map, onPick) {
+  clearTool(map);
+  map.getCanvas().style.cursor = 'crosshair';
+
+  function onMousemove(e) {
+    // Check point assets first (wider radius for easier targeting)
+    const ptHit = _pickPointAsset(map, e.lngLat, 24);
+    if (ptHit) { map.getCanvas().style.cursor = 'pointer'; return; }
+    // Check line layers
+    const point = map.project(e.lngLat);
+    const BOX = 8;
+    const bbox = [{ x: point.x - BOX, y: point.y - BOX }, { x: point.x + BOX, y: point.y + BOX }];
+    const activeLayers = HOVER_LAYERS.filter(id => { try { return !!map.getLayer(id); } catch { return false; } });
+    if (activeLayers.length) {
+      const hits = map.queryRenderedFeatures(bbox, { layers: activeLayers });
+      if (hits.length) { map.getCanvas().style.cursor = 'pointer'; return; }
+    }
+    map.getCanvas().style.cursor = 'crosshair';
+  }
+
+  function onClick(e) {
+    try {
+      const hit = pickAsset(map, e.lngLat);
+      if (hit) {
+        onPick(hit);
+      }
+    } catch (err) {
+      console.error('[select] click error:', err);
+    }
+  }
+
+  function onKeydown(e) {
+    if (e.key === 'Escape') cleanup();
+  }
+
+  function cleanup() {
+    map.off('mousemove', onMousemove);
+    map.off('click', onClick);
+    document.removeEventListener('keydown', onKeydown);
+    map.getCanvas().style.cursor = '';
+  }
+
+  map.on('mousemove', onMousemove);
+  map.on('click', onClick);
+  document.addEventListener('keydown', onKeydown);
+  _activeTool = { cleanup };
+  return null;
+}
+
+// ── MOVE POINT TOOL ───────────────────────────────────────────────────────────
+// After a point asset is selected, activate this to let the user click a new
+// location. Calls onMoved({ collection, index, lng, lat }) then self-cleans.
+
+export function activateMovePointTool(map, selected, onMoved) {
+  clearTool(map);
+  map.getCanvas().style.cursor = 'crosshair';
+
+  function onClick(e) {
+    const { lng, lat } = e.lngLat;
+    cleanup();
+    onMoved({ collection: selected.collection, index: selected.index, lng, lat });
+  }
+
+  function onKeydown(e) {
+    if (e.key === 'Escape') { cleanup(); }
+  }
+
+  function cleanup() {
+    map.off('click', onClick);
+    document.removeEventListener('keydown', onKeydown);
+    map.getCanvas().style.cursor = '';
+  }
+
+  map.on('click', onClick);
   document.addEventListener('keydown', onKeydown);
   _activeTool = { cleanup };
   return null;

@@ -10,16 +10,20 @@
   import CableForm from './CableForm.svelte';
   import PlacePoleForm from './PlacePoleForm.svelte';
   import CBTForm from './CBTForm.svelte';
+  import CBTTailForm from './CBTTailForm.svelte';
   import ProjectSetup from './ProjectSetup.svelte';
   import AddressImporter from './AddressImporter.svelte';
   import BuildAreaForm from './BuildAreaForm.svelte';
   import { projectStore } from './projectStore.js';
+  import AssetEditPanel from './AssetEditPanel.svelte';
   import {
     ensureSources, ensureTerrainLayers, syncToMap,
     activateCabinetTool, activateBuildAreaTool, activateChamberTool,
     activateDuctTool, activateJointTool, activateDropDuctTool,
     activateCableTool, activateBundleTool, activatePoleTool,
     activateCBTTool, activateAerialSpanTool, activateAerialDropTool,
+    activateCBTTailTool,
+    activateSelectTool, activateMovePointTool,
     applyCookieCutter, clearTool
   } from './mapTools.js';
 
@@ -28,6 +32,7 @@
   let map;
   let is3D = true;
   let drawerOpen = false;
+  let showBuildings = true;
 
   let stage = projectStore.stage;
   let project = projectStore.project;
@@ -52,6 +57,8 @@
   let pendingBuildArea = null;
   let pendingPole      = null;
   let pendingCBT       = null;
+  let pendingCBTTail   = null;
+  let selectedAsset    = null;   // { collection, index, feature, assetType, assetId, label }
 
   let activeToolLabel = '';
   let activeCat = 'civil';
@@ -429,6 +436,118 @@
     if (err) { alert(err.error); activeToolLabel = ''; }
   }
 
+  function onPlaceCBTTail() {
+    clearTool(map);
+    activeToolLabel = 'CBT Tail — click CBT, snap through poles to the joint, RMB to finish';
+    const err = activateCBTTailTool(map, (pending) => {
+      pendingCBTTail = pending;
+      rpMode = 'cbt-tail-form';
+      activeToolLabel = '';
+    });
+    if (err) { alert(err.error); activeToolLabel = ''; }
+  }
+
+  function onCBTTailSaved(e) {
+    const attrs = e.detail;
+    projectStore.addCBTTail({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: attrs.coordinates },
+      properties: attrs,
+    });
+    syncToMap(map);
+    rpMode = 'default';
+    pendingCBTTail = null;
+    clearTool(map);
+  }
+
+  function onCBTTailCancelled() {
+    rpMode = 'default';
+    pendingCBTTail = null;
+    clearTool(map);
+    if (map.getSource('rubberband-src')) map.getSource('rubberband-src').setData({ type: 'FeatureCollection', features: [] });
+  }
+
+  // ── Asset Edit / Delete / Move ────────────────────────────────────────────
+
+  function onEditAsset() {
+    if (stage !== 'design') return;
+    clearTool(map);
+    activeToolLabel = 'Click an asset to select it';
+    activateSelectTool(map, (hit) => {
+      selectedAsset = hit;
+      rpMode = 'asset-selected';
+      activeToolLabel = '';
+    });
+  }
+
+  function onDeleteAsset() {
+    if (stage !== 'design') return;
+    clearTool(map);
+    activeToolLabel = 'Click an asset to delete it';
+    activateSelectTool(map, (hit) => {
+      selectedAsset = hit;
+      rpMode = 'asset-selected';
+      activeToolLabel = '';
+    });
+  }
+
+  function onMoveAsset() {
+    if (stage !== 'design') return;
+    clearTool(map);
+    activeToolLabel = 'Click an asset to move it';
+    activateSelectTool(map, (hit) => {
+      selectedAsset = hit;
+      rpMode = 'asset-selected';
+      activeToolLabel = '';
+    });
+  }
+
+  function onAssetPanelSaved(e) {
+    const { collection, index, props } = e.detail;
+    projectStore.updateAsset(collection, index, props);
+    syncToMap(map);
+    // Stay in asset-selected so user sees the updated values immediately.
+    // Re-read the feature from the store so the panel shows fresh data.
+    const arr = projectStore.state[collection];
+    if (arr && arr[index]) {
+      selectedAsset = { ...selectedAsset, feature: arr[index] };
+    }
+  }
+
+  function onAssetPanelDeleted(e) {
+    const { collection, index } = e.detail;
+    projectStore.deleteAsset(collection, index);
+    syncToMap(map);
+    selectedAsset = null;
+    rpMode = 'default';
+    clearTool(map);
+    activeToolLabel = '';
+  }
+
+  function onAssetPanelMove(e) {
+    const { collection, index, feature } = e.detail;
+    activeToolLabel = `Move ${selectedAsset.assetId} — click new location (Esc to cancel)`;
+    rpMode = 'default';
+    activateMovePointTool(map, { collection, index }, ({ lng, lat }) => {
+      projectStore.updateAssetGeometry(collection, index, [lng, lat]);
+      syncToMap(map);
+      // Re-select so user can see the updated asset or continue editing
+      const arr = projectStore.state[collection];
+      if (arr && arr[index]) {
+        selectedAsset = { ...selectedAsset, feature: arr[index] };
+        rpMode = 'asset-selected';
+      }
+      activeToolLabel = '';
+    });
+  }
+
+  function onAssetPanelClose() {
+    selectedAsset = null;
+    rpMode = 'default';
+    clearTool(map);
+    activeToolLabel = '';
+  }
+
   function onToolSelected(e) {
     const { label, category, toolId } = e.detail;
     const catLabel = category.charAt(0).toUpperCase() + category.slice(1);
@@ -440,6 +559,7 @@
     if (toolId === 'aerial-cbt')      onPlaceCBT();
     if (toolId === 'aerial-span')     onPlaceAerialSpan();
     if (toolId === 'aerial-drop')     onPlaceAerialDrop();
+    if (toolId === 'aerial-cbt-tail') onPlaceCBTTail();
     if (toolId === 'fibre-joint')    onPlaceJoint();
     if (toolId === 'fibre-cable')    onPlaceCable();
     if (toolId === 'fibre-bundle')   onPlaceBundle();
@@ -450,6 +570,13 @@
     is3D = threeD;
     if (!map) return;
     map.easeTo({ pitch: threeD ? 60 : 0, bearing: threeD ? -30 : 0, duration: 1200 });
+  }
+
+  function toggleBuildings() {
+    showBuildings = !showBuildings;
+    if (map && map.getLayer('buildings-3d')) {
+      map.setLayoutProperty('buildings-3d', 'visibility', showBuildings ? 'visible' : 'none');
+    }
   }
 
   let showOpen = false;
@@ -573,9 +700,10 @@
         <button class="cat-pill" class:on={activeCat==='pia'}    on:click={() => activeCat='pia'}>⬛ PIA Underground</button>
         <div class="sid-div"></div>
         <div class="sid-lbl">Asset Tools</div>
-        <button class="asset-btn">✎ Edit Asset</button>
-        <button class="asset-btn">✕ Delete Asset</button>
-        <button class="asset-btn">⇄ Move Asset</button>
+        <button class="asset-btn" on:click={onEditAsset}>✎ Edit Asset</button>
+        <button class="asset-btn" on:click={onDeleteAsset}>✕ Delete Asset</button>
+        <button class="asset-btn" on:click={onMoveAsset}>⇄ Move Asset</button>
+        <button class="asset-btn" class:on={showBuildings} on:click={toggleBuildings}>⌂ Buildings</button>
       {/if}
     </div>
 
@@ -666,6 +794,18 @@
 
       {:else if rpMode === 'cbt-form'}
         <CBTForm pending={pendingCBT} on:save={onCBTSaved} on:cancel={onCBTCancelled} />
+
+      {:else if rpMode === 'cbt-tail-form'}
+        <CBTTailForm pending={pendingCBTTail} on:save={onCBTTailSaved} on:cancel={onCBTTailCancelled} />
+
+      {:else if rpMode === 'asset-selected'}
+        <AssetEditPanel
+          selected={selectedAsset}
+          on:saved={onAssetPanelSaved}
+          on:deleted={onAssetPanelDeleted}
+          on:move={onAssetPanelMove}
+          on:close={onAssetPanelClose}
+        />
 
       {:else}
         <div class="rp-hdr">
@@ -805,6 +945,7 @@
   .cat-pill.on { background: #00aaff0a; border-left-color: #4dc8ff; color: #4dc8ff; }
   .asset-btn { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-left: 2px solid transparent; color: #6a8fa8; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; transition: all 0.15s; background: transparent; border-top: none; border-right: none; border-bottom: none; width: 100%; text-align: left; font-family: 'Courier New', monospace; }
   .asset-btn:hover { background: #0f1c28; color: #a0c4d8; border-left-color: #2a4a5e; }
+  .asset-btn.on { background: #00aaff0a; border-left-color: #4dc8ff; color: #4dc8ff; }
 
   .map-wrap { flex: 1; position: relative; overflow: hidden; }
   #map { width: 100%; height: 100%; }

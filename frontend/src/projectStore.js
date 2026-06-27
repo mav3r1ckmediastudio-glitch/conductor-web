@@ -181,6 +181,7 @@ const DEFAULT_STATE = {
   cbts: [],
   spans: [],
   aerialDrops: [],
+  cbtTails: [],
   addressPoints: [],
 };
 
@@ -226,6 +227,7 @@ class ProjectStore {
   get cbts()          { return this._state.cbts; }
   get spans()         { return this._state.spans; }
   get aerialDrops()   { return this._state.aerialDrops || []; }
+  get cbtTails()      { return this._state.cbtTails || []; }
   get addressPoints() { return this._state.addressPoints; }
 
   on(fn) { this._listeners.push(fn); return () => { this._listeners = this._listeners.filter(l => l !== fn); }; }
@@ -295,6 +297,39 @@ class ProjectStore {
 
   addAerialDrop(feature) {
     this._update({ aerialDrops: [...(this._state.aerialDrops || []), feature] });
+  }
+
+  addCBTTail(feature) {
+    this._update({ cbtTails: [...(this._state.cbtTails || []), feature] });
+  }
+
+  // ── Asset mutation helpers (used by Edit / Move / Delete tools) ───────────
+  // collection: 'chambers' | 'ducts' | 'joints' | 'dropDucts' | 'cables' |
+  //             'bundles' | 'poles' | 'cbts' | 'spans' | 'aerialDrops' | 'cbtTails'
+  // index: numeric index into that array
+
+  updateAsset(collection, index, newProps) {
+    const arr = this._state[collection];
+    if (!arr || index < 0 || index >= arr.length) return;
+    const updated = arr.slice();
+    updated[index] = { ...updated[index], properties: { ...updated[index].properties, ...newProps } };
+    this._update({ [collection]: updated });
+  }
+
+  updateAssetGeometry(collection, index, newCoords) {
+    const arr = this._state[collection];
+    if (!arr || index < 0 || index >= arr.length) return;
+    const updated = arr.slice();
+    updated[index] = { ...updated[index], geometry: { ...updated[index].geometry, coordinates: newCoords } };
+    this._update({ [collection]: updated });
+  }
+
+  deleteAsset(collection, index) {
+    const arr = this._state[collection];
+    if (!arr || index < 0 || index >= arr.length) return;
+    const updated = arr.slice();
+    updated.splice(index, 1);
+    this._update({ [collection]: updated });
   }
 
   updateChamberFunction(chamberId, newFunction) {
