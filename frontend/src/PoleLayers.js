@@ -316,19 +316,41 @@ class PoleLayer {
       this._popId = cabinet.properties.pop_id;
     }
 
-    // Aerial spans — solid cyan 3D lines between CBT (or POP) attach points.
+    // Aerial spans — solid cyan 3D lines between aerial/UG attach points.
+    // Supports: CBT (pole-top), POLE (bare pole-top), JOINT (ground level), POP (cabinet top).
     for (const span of spans) {
-      const fromId = span.properties.from_node;
-      const toId   = span.properties.to_node;
+      const fromId   = span.properties.from_node;
+      const toId     = span.properties.to_node;
+      const fromType = span.properties.from_type || 'CBT';
+      const toType   = span.properties.to_type   || 'CBT';
 
-      const resolve = (id) => {
-        if (cbtTop[id]) return cbtTop[id];
+      const resolve = (id, type) => {
+        // CBT — pole-top attach point (cached)
+        if (type === 'CBT' && cbtTop[id]) return cbtTop[id];
+        // Bare pole — pole-top (cached)
+        if (type === 'POLE' && poleTop[id]) return poleTop[id];
+        // POP cabinet
+        if (type === 'POP' && popTop && id === this._popId) return popTop;
+        // JOINT — ground level at joint's 2D coordinates
+        if (type === 'JOINT') {
+          const jFeature = (this.projectStore.joints || []).find(j => j.properties.joint_id === id);
+          if (jFeature) {
+            const [lng, lat] = jFeature.geometry.coordinates;
+            const { east, north } = this._metresFromOrigin(lng, lat);
+            let g = this._elevAt(lng, lat);
+            if (g == null) g = 0;
+            return new THREE.Vector3(east, g, -north);
+          }
+        }
+        // Fallback: try all caches
+        if (cbtTop[id])  return cbtTop[id];
+        if (poleTop[id]) return poleTop[id];
         if (popTop && id === this._popId) return popTop;
         return null;
       };
 
-      const a = resolve(fromId);
-      const b = resolve(toId);
+      const a = resolve(fromId, fromType);
+      const b = resolve(toId,   toType);
       if (!a || !b) continue; // endpoint deleted → skip
 
       const dir = new THREE.Vector3().subVectors(b, a);

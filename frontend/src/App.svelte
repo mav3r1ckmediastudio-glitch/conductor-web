@@ -11,11 +11,17 @@
   import PlacePoleForm from './PlacePoleForm.svelte';
   import CBTForm from './CBTForm.svelte';
   import CBTTailForm from './CBTTailForm.svelte';
+  import EditCabinetForm from './EditCabinetForm.svelte';
+  import RoadCrossingForm from './RoadCrossingForm.svelte';
+  import StreamCrossingForm from './StreamCrossingForm.svelte';
+  import PIAChamberForm from './PIAChamberForm.svelte';
+  import PIADuctForm from './PIADuctForm.svelte';
   import ProjectSetup from './ProjectSetup.svelte';
   import AddressImporter from './AddressImporter.svelte';
   import BuildAreaForm from './BuildAreaForm.svelte';
   import { projectStore } from './projectStore.js';
   import AssetEditPanel from './AssetEditPanel.svelte';
+  import AssetPickerDialog from './AssetPickerDialog.svelte';
   import {
     ensureSources, ensureTerrainLayers, syncToMap,
     activateCabinetTool, activateBuildAreaTool, activateChamberTool,
@@ -58,7 +64,12 @@
   let pendingPole      = null;
   let pendingCBT       = null;
   let pendingCBTTail   = null;
+  let pendingRoadCrossing    = null;
+  let pendingStreamCrossing  = null;
+  let pendingPIAChamber      = null;
+  let pendingPIADuct         = null;
   let selectedAsset    = null;   // { collection, index, feature, assetType, assetId, label }
+  let assetPickerHits  = null;   // array of hits when multiple assets overlap a click
 
   let activeToolLabel = '';
   let activeCat = 'civil';
@@ -115,12 +126,12 @@
       map.addLayer({
         id: 'roads-glow', source: 'maptiler_planet', 'source-layer': 'transportation',
         type: 'line', filter: ['in', 'class', 'motorway', 'primary', 'secondary', 'tertiary', 'residential'],
-        paint: { 'line-color': '#00aaff', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 6, 16, 16], 'line-blur': 10, 'line-opacity': 0.6 }
+        paint: { 'line-color': '#ff00aa', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 6, 16, 16], 'line-blur': 10, 'line-opacity': 0.6 }
       });
       map.addLayer({
         id: 'roads-neon', source: 'maptiler_planet', 'source-layer': 'transportation',
         type: 'line', filter: ['in', 'class', 'motorway', 'primary', 'secondary', 'tertiary', 'residential'],
-        paint: { 'line-color': '#00ccff', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 1, 16, 2], 'line-opacity': 0.9 }
+        paint: { 'line-color': '#ff44cc', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 1, 16, 2], 'line-opacity': 0.9 }
       });
 
       syncToMap(map);
@@ -469,37 +480,56 @@
 
   // ── Asset Edit / Delete / Move ────────────────────────────────────────────
 
+  // The select tool now hands back a nearest-first array of every asset under
+  // the click. One hit → open the panel directly. More than one (e.g. a CBT on
+  // a pole, or a span ending on a pole) → show the chooser first.
+  function handleSelectHits(hits) {
+    activeToolLabel = '';
+    if (!hits || !hits.length) return;
+    if (hits.length === 1) {
+      selectAsset(hits[0]);
+    } else {
+      assetPickerHits = hits;
+    }
+  }
+
+  function selectAsset(hit) {
+    selectedAsset = hit;
+    rpMode = 'asset-selected';
+  }
+
+  function onAssetPickerChoose(e) {
+    assetPickerHits = null;
+    selectAsset(e.detail);
+  }
+
+  function onAssetPickerCancel() {
+    assetPickerHits = null;
+    // Stay in select mode so the user can click again
+    clearTool(map);
+    rpMode = 'default';
+    activeToolLabel = '';
+  }
+
   function onEditAsset() {
     if (stage !== 'design') return;
     clearTool(map);
     activeToolLabel = 'Click an asset to select it';
-    activateSelectTool(map, (hit) => {
-      selectedAsset = hit;
-      rpMode = 'asset-selected';
-      activeToolLabel = '';
-    });
+    activateSelectTool(map, handleSelectHits);
   }
 
   function onDeleteAsset() {
     if (stage !== 'design') return;
     clearTool(map);
     activeToolLabel = 'Click an asset to delete it';
-    activateSelectTool(map, (hit) => {
-      selectedAsset = hit;
-      rpMode = 'asset-selected';
-      activeToolLabel = '';
-    });
+    activateSelectTool(map, handleSelectHits);
   }
 
   function onMoveAsset() {
     if (stage !== 'design') return;
     clearTool(map);
     activeToolLabel = 'Click an asset to move it';
-    activateSelectTool(map, (hit) => {
-      selectedAsset = hit;
-      rpMode = 'asset-selected';
-      activeToolLabel = '';
-    });
+    activateSelectTool(map, handleSelectHits);
   }
 
   function onAssetPanelSaved(e) {
@@ -548,6 +578,186 @@
     activeToolLabel = '';
   }
 
+  // ── civil-edit-cabinet ───────────────────────────────────────────────────────
+  // No map interaction needed — there is exactly one cabinet. Open the edit form
+  // directly, pre-populated from the current projectStore.cabinet.
+
+  function onEditCabinet() {
+    if (!projectStore.cabinet) { alert('No cabinet placed yet.'); return; }
+    clearTool(map);
+    rpMode = 'edit-cabinet-form';
+  }
+
+  function onEditCabinetSaved(e) {
+    const attrs = e.detail;
+    // Preserve geometry — only update properties.
+    const cab = projectStore.cabinet;
+    projectStore.setCabinet({
+      ...cab,
+      properties: {
+        ...cab.properties,   // keep pop_id, area_id, lng, lat as stored
+        ...attrs,
+      },
+    });
+    syncToMap(map);
+    rpMode = 'default';
+  }
+
+  function onEditCabinetCancelled() {
+    rpMode = 'default';
+  }
+
+  // ── civil-road (Road Crossing) ────────────────────────────────────────────
+  // Reuses activateDuctTool — same multi-vertex line, snaps POP/CHAMBER.
+  // Opens RoadCrossingForm instead of DuctForm.
+
+  function onPlaceRoadCrossing() {
+    clearTool(map);
+    activeToolLabel = 'Road Crossing — click vertices, right-click to finish';
+    const err = activateDuctTool(map, (pending) => {
+      pendingRoadCrossing = pending;
+      rpMode = 'road-crossing-form';
+      activeToolLabel = '';
+    });
+    if (err) alert(err.error);
+  }
+
+  function onRoadCrossingSaved(e) {
+    const attrs = e.detail;
+    projectStore.addDuct({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: attrs.coordinates },
+      properties: attrs,
+    });
+    syncToMap(map);
+    rpMode = 'default';
+    pendingRoadCrossing = null;
+  }
+
+  function onRoadCrossingCancelled() {
+    rpMode = 'default';
+    pendingRoadCrossing = null;
+    clearTool(map);
+    if (map.getSource('rubberband-src')) map.getSource('rubberband-src').setData({ type: 'FeatureCollection', features: [] });
+  }
+
+  // ── civil-stream (Stream Crossing) ───────────────────────────────────────
+  // Same pattern as road crossing, different form fields.
+
+  function onPlaceStreamCrossing() {
+    clearTool(map);
+    activeToolLabel = 'Stream Crossing — click vertices, right-click to finish';
+    const err = activateDuctTool(map, (pending) => {
+      pendingStreamCrossing = pending;
+      rpMode = 'stream-crossing-form';
+      activeToolLabel = '';
+    });
+    if (err) alert(err.error);
+  }
+
+  function onStreamCrossingSaved(e) {
+    const attrs = e.detail;
+    projectStore.addDuct({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: attrs.coordinates },
+      properties: attrs,
+    });
+    syncToMap(map);
+    rpMode = 'default';
+    pendingStreamCrossing = null;
+  }
+
+  function onStreamCrossingCancelled() {
+    rpMode = 'default';
+    pendingStreamCrossing = null;
+    clearTool(map);
+    if (map.getSource('rubberband-src')) map.getSource('rubberband-src').setData({ type: 'FeatureCollection', features: [] });
+  }
+
+  // ── pia-chamber (Place PIA UG Chamber) ───────────────────────────────────
+  // Reuses activateChamberTool with snapping, opens PIAChamberForm.
+
+  function onPlacePIAChamber() {
+    clearTool(map);
+    activeToolLabel = 'Place PIA UG Chamber — click a location';
+    const err = activateChamberTool(map, (pending) => {
+      pendingPIAChamber = pending;
+      rpMode = 'pia-chamber-form';
+      activeToolLabel = '';
+    });
+    if (err) alert(err.error);
+  }
+
+  function onPIAChamberSaved(e) {
+    const attrs = e.detail;
+    projectStore.addChamber({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [attrs.lng, attrs.lat] },
+      properties: attrs,
+    });
+    syncToMap(map);
+    rpMode = 'default';
+    pendingPIAChamber = null;
+  }
+
+  function onPIAChamberCancelled() {
+    rpMode = 'default';
+    pendingPIAChamber = null;
+    clearTool(map);
+  }
+
+  // ── pia-duct (Digitise PIA UG Duct) ──────────────────────────────────────
+  // Reuses activateDuctTool, opens PIADuctForm.
+
+  function onPlacePIADuct() {
+    clearTool(map);
+    activeToolLabel = 'PIA UG Duct — click vertices, right-click to finish';
+    const err = activateDuctTool(map, (pending) => {
+      pendingPIADuct = pending;
+      rpMode = 'pia-duct-form';
+      activeToolLabel = '';
+    });
+    if (err) alert(err.error);
+  }
+
+  function onPIADuctSaved(e) {
+    const attrs = e.detail;
+    projectStore.addDuct({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: attrs.coordinates },
+      properties: attrs,
+    });
+    syncToMap(map);
+    rpMode = 'default';
+    pendingPIADuct = null;
+  }
+
+  function onPIADuctCancelled() {
+    rpMode = 'default';
+    pendingPIADuct = null;
+    clearTool(map);
+    if (map.getSource('rubberband-src')) map.getSource('rubberband-src').setData({ type: 'FeatureCollection', features: [] });
+  }
+
+  // ── pia-drop (Digitise PIA UG Drop) ──────────────────────────────────────
+  // Reuses activateDropDuctTool — two-click, auto-saves, tool stays active.
+  // Sets installation_method = PIA_UG on the saved feature.
+
+  function onPlacePIADrop() {
+    clearTool(map);
+    activeToolLabel = 'PIA UG Drop — click start, click end (RMB cancels line)';
+    const err = activateDropDuctTool(map, (feature) => {
+      // Stamp the PIA-specific props onto the auto-saved feature before adding.
+      feature.properties.installation_method = 'PIA_UG';
+      feature.properties.drop_type           = 'PIA_UG';
+      feature.properties.owner               = 'Openreach';
+      projectStore.addDropDuct(feature);
+      syncToMap(map);
+      // Tool stays active — activeToolLabel stays visible
+    });
+    if (err) { alert(err.error); activeToolLabel = ''; }
+  }
+
   function onToolSelected(e) {
     const { label, category, toolId } = e.detail;
     const catLabel = category.charAt(0).toUpperCase() + category.slice(1);
@@ -564,6 +774,12 @@
     if (toolId === 'fibre-cable')    onPlaceCable();
     if (toolId === 'fibre-bundle')   onPlaceBundle();
     // Additional tool wiring goes here in the next iteration
+    if (toolId === 'civil-edit-cabinet')  onEditCabinet();
+    if (toolId === 'civil-road')          onPlaceRoadCrossing();
+    if (toolId === 'civil-stream')        onPlaceStreamCrossing();
+    if (toolId === 'pia-chamber')         onPlacePIAChamber();
+    if (toolId === 'pia-duct')            onPlacePIADuct();
+    if (toolId === 'pia-drop')            onPlacePIADrop();
   }
 
   function setView(threeD) {
@@ -798,6 +1014,25 @@
       {:else if rpMode === 'cbt-tail-form'}
         <CBTTailForm pending={pendingCBTTail} on:save={onCBTTailSaved} on:cancel={onCBTTailCancelled} />
 
+      {:else if rpMode === 'edit-cabinet-form'}
+        <EditCabinetForm
+          existing={projectStore.cabinet?.properties}
+          on:save={onEditCabinetSaved}
+          on:cancel={onEditCabinetCancelled}
+        />
+
+      {:else if rpMode === 'road-crossing-form'}
+        <RoadCrossingForm pending={pendingRoadCrossing} on:save={onRoadCrossingSaved} on:cancel={onRoadCrossingCancelled} />
+
+      {:else if rpMode === 'stream-crossing-form'}
+        <StreamCrossingForm pending={pendingStreamCrossing} on:save={onStreamCrossingSaved} on:cancel={onStreamCrossingCancelled} />
+
+      {:else if rpMode === 'pia-chamber-form'}
+        <PIAChamberForm pending={pendingPIAChamber} on:save={onPIAChamberSaved} on:cancel={onPIAChamberCancelled} />
+
+      {:else if rpMode === 'pia-duct-form'}
+        <PIADuctForm pending={pendingPIADuct} on:save={onPIADuctSaved} on:cancel={onPIADuctCancelled} />
+
       {:else if rpMode === 'asset-selected'}
         <AssetEditPanel
           selected={selectedAsset}
@@ -887,6 +1122,14 @@
   </div>
 
 </div>
+
+{#if assetPickerHits}
+  <AssetPickerDialog
+    hits={assetPickerHits}
+    on:choose={onAssetPickerChoose}
+    on:cancel={onAssetPickerCancel}
+  />
+{/if}
 
 <style>
   :global(body) { margin: 0; }
