@@ -8,6 +8,7 @@
   //   on:move         — user wants to move the asset; parent activates move tool
 
   import { createEventDispatcher } from 'svelte';
+  import { projectStore } from './projectStore.js';
   const dispatch = createEventDispatcher();
 
   // asset descriptor set by App.svelte when a pick succeeds:
@@ -38,8 +39,8 @@
                 edit: ['joint_type','has_splitter','split_ratio','notes'] },
     pole:     { show: ['pole_id','pop_id','notes'],
                 edit: ['notes'] },
-    cbt:      { show: ['cbt_id','parent_pole_id','cbt_type','fibre_count','notes'],
-                edit: ['cbt_type','fibre_count','notes'] },
+    cbt:      { show: ['cbt_id','parent_pole_id','cbt_type','has_splitter','split_ratio','cascade_level','cascade_type','fibre_count','fibre_in','fibre_out','feeder_port','notes'],
+                edit: ['cbt_type','has_splitter','split_ratio','cascade_level','cascade_type','fibre_count','notes'] },
     // Line assets
     duct:     { show: ['duct_id','duct_type','length_m','from_node','to_node','notes'],
                 edit: ['duct_type','notes'] },
@@ -49,10 +50,10 @@
                 edit: ['notes'] },
     bundle:   { show: ['bundle_id','from_node','to_node','notes'],
                 edit: ['notes'] },
-    span:     { show: ['span_id','span_type','length_m','from_node','to_node','notes'],
-                edit: ['span_type','notes'] },
-    adrop:    { show: ['adrop_id','length_m','from_node','to_node','notes'],
-                edit: ['notes'] },
+    span:     { show: ['span_id','cable_type','fibre_count','span_type','length_m','from_node','to_node','notes'],
+                edit: ['cable_type','fibre_count','span_type','notes'] },
+    adrop:    { show: ['adrop_id','cable_type','fibre_count','splitter_port','length_m','from_node','to_node','notes'],
+                edit: ['cable_type','fibre_count','notes'] },
     cbttail:  { show: ['tail_id','cable_type','from_cbt','to_joint','length_m','notes'],
                 edit: ['notes'] },
   };
@@ -67,7 +68,25 @@
     cable_type:   ['FEEDER','DISTRIBUTION','DROP','AERIAL_TAIL'],
     cbt_type:     ['STANDARD','COMPACT'],
     span_type:    ['AERIAL','LASH','FIGURE8'],
+    fibre_count:  [2,4,8,12,24,48,96,144,288],
+    cascade_level:['1 — Primary','2 — Secondary'],
+    cascade_type: ['URBAN_1_2_1_16','RURAL_1_4_1_8','DIRECT_1_32'],
   };
+
+  // Per-asset-type enum overrides. The same field name (e.g. cable_type) means
+  // different things on different assets — a UG cable picks FEEDER/DISTRIBUTION,
+  // an aerial span is AERIAL_SPAN, an aerial drop is AERIAL_DROP. Keyed by
+  // assetType → field → options. Falls back to ENUMS when no override exists.
+  const ENUMS_BY_TYPE = {
+    span:  { cable_type: ['AERIAL_SPAN','AERIAL_TAIL'] },
+    adrop: { cable_type: ['AERIAL_DROP'] },
+  };
+
+  function enumFor(key) {
+    const t = selected?.assetType;
+    if (t && ENUMS_BY_TYPE[t] && ENUMS_BY_TYPE[t][key]) return ENUMS_BY_TYPE[t][key];
+    return ENUMS[key] || null;
+  }
 
   function meta() {
     return FIELD_META[selected?.assetType] || { show: [], edit: [] };
@@ -84,7 +103,7 @@
   }
 
   function fieldType(key) {
-    if (ENUMS[key]) return 'select';
+    if (enumFor(key)) return 'select';
     if (key === 'notes') return 'textarea';
     return 'text';
   }
@@ -122,6 +141,68 @@
     confirmingDelete = false;
     dispatch('close');
   }
+
+  // ── Splitter port grid (derived) ───────────────────────────────────────────
+  // Faithful to v2: the port→premise map is NOT stored on the CBT. It is derived
+  // live from the consumers (aerial drops for a CBT, bundles for a UG joint)
+  // pointing at this splitter, read by their splitter_port. Single source of
+  // truth — editing/adding a drop and re-running Auto-Assign just reflows here.
+  function ratioCap(r) { const m = String(r || '').match(/:(\d+)/); return m ? parseInt(m[1], 10) : 8; }
+
+  $: portGrid = buildPortGrid(selected);
+
+  function buildPortGrid(sel) {
+    if (!sel) return null;
+    const t = sel.assetType;
+    const p = sel.feature.properties;
+
+    let cap, consumers, keyField, keyVal, idField;
+    if (t === 'cbt') {
+      cap = ratioCap(p.split_ratio || '1:8');
+      consumers = projectStore.aerialDrops;
+      keyField = 'from_cbt'; keyVal = p.cbt_id; idField = 'adrop_id';
+    } else if (t === 'joint' &&
+               (p.has_splitter === true || p.has_splitter === 1 || p.has_splitter === 'true')) {
+      cap = ratioCap(p.split_ratio || '1:8');
+      consumers = projectStore.bundles;
+      keyField = 'from_joint'; keyVal = p.joint_id; idField = 'bundle_id';
+    } else {
+      return null;
+    }
+
+    // uprn → address lookup
+    const addr = {};
+    for (const ap of projectStore.addressPoints || []) {
+      addr[String(ap.properties.uprn)] = ap.properties.address || ap.properties.postcode || '';
+    }
+
+    const mine = (consumers || []).filter(c => String(c.properties[keyField]) === String(keyVal));
+    const ports = [];
+    for (let i = 1; i <= cap; i++) ports.push({ port: i, uprn: null, label: null, assetId: null });
+
+    let unassigned = 0;
+    for (const c of mine) {
+      const sp = c.properties.splitter_port;
+      if (sp == null || sp < 1 || sp > cap) { unassigned++; continue; }
+      const slot = ports.find(x => x.port === sp);
+      if (slot) {
+        const u = c.properties.uprn;
+        slot.uprn = u != null ? String(u) : null;
+        slot.assetId = c.properties[idField] || '';
+        slot.label = u != null
+          ? (String(u) + (addr[String(u)] ? '  ' + addr[String(u)] : ''))
+          : (c.properties[idField] || '');
+      }
+    }
+
+    return {
+      cap,
+      ports,
+      unassigned,
+      total: mine.length,
+      anyAssigned: ports.some(x => x.uprn != null),
+    };
+  }
 </script>
 
 {#if selected}
@@ -155,7 +236,7 @@
               <span class="av locked">{displayValue(key, selected.feature.properties[key])}</span>
             {:else if fieldType(key) === 'select'}
               <select class="edit-sel" bind:value={editProps[key]}>
-                {#each ENUMS[key] as opt}
+                {#each enumFor(key) as opt}
                   <option value={opt}>{opt}</option>
                 {/each}
               </select>
@@ -167,6 +248,38 @@
           </div>
         {/if}
       {/each}
+    {/if}
+
+    {#if !editMode && portGrid}
+      <div class="port-section">
+        <div class="port-hdr">
+          <span class="port-title">Splitter Ports</span>
+          <span class="port-cap">1:{portGrid.cap}</span>
+        </div>
+        {#if portGrid.anyAssigned}
+          <div class="port-grid">
+            {#each portGrid.ports as pt}
+              <div class="port-row">
+                <span class="port-pill">PO{pt.port}</span>
+                {#if pt.uprn}
+                  <span class="port-val active" title={pt.label}>{pt.label}</span>
+                {:else}
+                  <span class="port-val spare">Spare</span>
+                {/if}
+              </div>
+            {/each}
+          </div>
+          {#if portGrid.unassigned > 0}
+            <div class="port-warn">{portGrid.unassigned} consumer{portGrid.unassigned === 1 ? '' : 's'} not yet assigned a port — re-run Auto-Assign Fibres.</div>
+          {/if}
+        {:else}
+          <div class="port-empty">
+            {portGrid.total > 0
+              ? `${portGrid.total} consumer${portGrid.total === 1 ? '' : 's'} connected — run Auto-Assign Fibres to populate ports.`
+              : 'No premises connected to this splitter yet.'}
+          </div>
+        {/if}
+      </div>
     {/if}
   </div>
 
@@ -208,6 +321,20 @@
   .aep-close:hover { color: #ff5555; }
 
   .aep-body { flex: 1; overflow-y: auto; padding: 4px 14px; }
+
+  /* ── Splitter port grid ── */
+  .port-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid #1a2d40; }
+  .port-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .port-title { font-size: 8px; color: #3a5a70; letter-spacing: 0.12em; text-transform: uppercase; }
+  .port-cap { font-size: 8px; color: #4dc8ff; background: #00aaff14; border: 1px solid #00aaff33; border-radius: 10px; padding: 1px 8px; letter-spacing: 0.06em; }
+  .port-grid { display: flex; flex-direction: column; gap: 4px; }
+  .port-row { display: flex; align-items: center; gap: 7px; }
+  .port-pill { flex-shrink: 0; min-width: 34px; text-align: center; background: #0f1c28; color: #7ab8d4; border: 1px solid #1a2d40; border-radius: 3px; padding: 2px 6px; font-size: 8.5px; font-weight: 700; letter-spacing: 0.04em; }
+  .port-val { flex: 1; font-size: 8.5px; padding: 3px 8px; border-radius: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .port-val.active { background: #00aaff0d; border: 1px solid #00aaff2a; color: #a0c4d8; }
+  .port-val.spare { background: #0a1018; border: 1px solid #14202c; color: #3a5a70; font-style: italic; }
+  .port-empty { font-size: 8px; color: #3a5a70; line-height: 1.6; letter-spacing: 0.03em; padding: 2px 0; }
+  .port-warn { font-size: 8px; color: #ffaa44; line-height: 1.6; margin-top: 6px; letter-spacing: 0.02em; }
 
   .arow { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid #080e14; }
   .arow-edit { display: flex; flex-direction: column; gap: 3px; padding: 5px 0; border-bottom: 1px solid #080e14; }

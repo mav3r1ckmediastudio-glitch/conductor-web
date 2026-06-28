@@ -20,8 +20,10 @@
   import AddressImporter from './AddressImporter.svelte';
   import BuildAreaForm from './BuildAreaForm.svelte';
   import { projectStore } from './projectStore.js';
+  import { assignFibres } from './fibreAssign.js';
   import AssetEditPanel from './AssetEditPanel.svelte';
   import AssetPickerDialog from './AssetPickerDialog.svelte';
+  import FibreTracePanel from './FibreTracePanel.svelte';
   import {
     ensureSources, ensureTerrainLayers, syncToMap,
     activateCabinetTool, activateBuildAreaTool, activateChamberTool,
@@ -30,15 +32,27 @@
     activateCBTTool, activateAerialSpanTool, activateAerialDropTool,
     activateCBTTailTool,
     activateSelectTool, activateMovePointTool,
+    activateFibreTraceTool, clearTraceHighlight,
     applyCookieCutter, clearTool
   } from './mapTools.js';
 
   const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY;
 
+  // ── Basemap definitions ──────────────────────────────────────────────────────
+  const BASEMAPS = [
+    { id: 'dark',      label: '⬛  Dark',       style: `https://api.maptiler.com/maps/dataviz-dark/style.json?key=${MAPTILER_KEY}` },
+    { id: 'light',     label: '⬜  Light',      style: `https://api.maptiler.com/maps/dataviz/style.json?key=${MAPTILER_KEY}` },
+    { id: 'streets',   label: '⊞  Streets',    style: `https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_KEY}` },
+    { id: 'satellite', label: '⊙  Satellite',  style: `https://api.maptiler.com/maps/hybrid/style.json?key=${MAPTILER_KEY}` },
+  ];
+  const BASEMAP_STYLE = Object.fromEntries(BASEMAPS.map(b => [b.id, b.style]));
+
   let map;
   let is3D = true;
   let drawerOpen = false;
   let showBuildings = true;
+  let currentBasemap = 'dark';
+  let basemapSwitching = false; // prevents double-clicks during style reload
 
   let stage = projectStore.stage;
   let project = projectStore.project;
@@ -46,10 +60,9 @@
     stage = projectStore.stage;
     project = projectStore.project;
     if (map) syncToMap(map);
-    // On project switch/new/reset, re-open the onboarding panel for the restored stage.
     if (event === 'reset') {
       if (stage === 'import')      rpMode = 'address-import';
-      else if (stage === 'setup')  rpMode = 'default';   // ProjectSetup overlay handles setup
+      else if (stage === 'setup')  rpMode = 'default';
       else                          rpMode = 'default';
     }
   });
@@ -68,8 +81,9 @@
   let pendingStreamCrossing  = null;
   let pendingPIAChamber      = null;
   let pendingPIADuct         = null;
-  let selectedAsset    = null;   // { collection, index, feature, assetType, assetId, label }
-  let assetPickerHits  = null;   // array of hits when multiple assets overlap a click
+  let selectedAsset    = null;
+  let assetPickerHits  = null;
+  let fibreTraceResult = null;
 
   let activeToolLabel = '';
   let activeCat = 'civil';
@@ -97,10 +111,105 @@
     return 'color:#ffaa44;';
   }
 
+  // ── Map layer setup (called on first load AND after every basemap switch) ────
+  // All our custom sources, layers, terrain, 3D poles, and data go through here.
+  // Defensive throughout — every addLayer/addSource is guarded so re-calling on
+  // an already-set-up map is a no-op.
+  function setupMapLayers(map) {
+    // 1. GeoJSON sources + non-terrain symbol layers (chambers, joints, labels etc.)
+    ensureSources(map);
+
+    // 2. Terrain DEM source + elevation
+    if (!map.getSource('terrain')) {
+      map.addSource('terrain', {
+        type: 'raster-dem',
+        url: `https://api.maptiler.com/tiles/terrain-rgb-v2/tiles.json?key=${MAPTILER_KEY}`,
+        tileSize: 256,
+      });
+    }
+    map.setTerrain({ source: 'terrain', exaggeration: 1.5 });
+
+    // 3. Terrain-dependent line layers + 3D pole CustomLayerInterface
+    ensureTerrainLayers(map);
+
+    // 4. Decorative vector overlay layers (buildings + neon roads).
+    //    Guarded behind a source check — satellite/hybrid raster styles may not
+    //    expose `maptiler_planet` vector tiles, or the transportation source-layer
+    //    may not exist; defensive try/catch prevents a hard crash.
+    if (map.getSource('maptiler_planet')) {
+      if (!map.getLayer('buildings-3d')) {
+        try {
+          map.addLayer({
+            id: 'buildings-3d',
+            source: 'maptiler_planet',
+            'source-layer': 'building',
+            type: 'fill-extrusion',
+            minzoom: 14,
+            paint: {
+              'fill-extrusion-color': '#ffffff',
+              'fill-extrusion-height': ['get', 'render_height'],
+              'fill-extrusion-base': ['get', 'render_min_height'],
+              'fill-extrusion-opacity': 0.3,
+            },
+          });
+        } catch (e) {
+          console.warn('[basemap] buildings-3d not available in this style:', e.message);
+        }
+      }
+
+      if (!map.getLayer('roads-glow')) {
+        try {
+          map.addLayer({
+            id: 'roads-glow',
+            source: 'maptiler_planet',
+            'source-layer': 'transportation',
+            type: 'line',
+            filter: ['in', 'class', 'motorway', 'primary', 'secondary', 'tertiary', 'residential'],
+            paint: {
+              'line-color': '#ff00aa',
+              'line-width': ['interpolate', ['linear'], ['zoom'], 12, 6, 16, 16],
+              'line-blur': 10,
+              'line-opacity': 0.6,
+            },
+          });
+        } catch (e) {
+          console.warn('[basemap] roads-glow not available in this style:', e.message);
+        }
+      }
+
+      if (!map.getLayer('roads-neon')) {
+        try {
+          map.addLayer({
+            id: 'roads-neon',
+            source: 'maptiler_planet',
+            'source-layer': 'transportation',
+            type: 'line',
+            filter: ['in', 'class', 'motorway', 'primary', 'secondary', 'tertiary', 'residential'],
+            paint: {
+              'line-color': '#ff44cc',
+              'line-width': ['interpolate', ['linear'], ['zoom'], 12, 1, 16, 2],
+              'line-opacity': 0.9,
+            },
+          });
+        } catch (e) {
+          console.warn('[basemap] roads-neon not available in this style:', e.message);
+        }
+      }
+    }
+
+    // 5. Restore building visibility from current toggle state
+    if (map.getLayer('buildings-3d')) {
+      map.setLayoutProperty('buildings-3d', 'visibility', showBuildings ? 'visible' : 'none');
+    }
+
+    // 6. Push all stored GeoJSON data into sources
+    syncToMap(map);
+  }
+
   onMount(() => {
     map = new maplibregl.Map({
       container: 'map',
-      style: `https://api.maptiler.com/maps/dataviz-dark/style.json?key=${MAPTILER_KEY}`,
+      style: BASEMAP_STYLE[currentBasemap],
       center: [-3.77, 56.71],
       zoom: 15,
       pitch: 60,
@@ -108,39 +217,55 @@
     });
 
     map.on('load', () => {
-      ensureSources(map);
-
-      map.addSource('terrain', {
-        type: 'raster-dem',
-        url: `https://api.maptiler.com/tiles/terrain-rgb-v2/tiles.json?key=${MAPTILER_KEY}`,
-        tileSize: 256,
-      });
-      map.setTerrain({ source: 'terrain', exaggeration: 1.5 });
-      ensureTerrainLayers(map);
-
-      map.addLayer({
-        id: 'buildings-3d', source: 'maptiler_planet', 'source-layer': 'building',
-        type: 'fill-extrusion', minzoom: 14,
-        paint: { 'fill-extrusion-color': '#ffffff', 'fill-extrusion-height': ['get', 'render_height'], 'fill-extrusion-base': ['get', 'render_min_height'], 'fill-extrusion-opacity': 0.3 }
-      });
-      map.addLayer({
-        id: 'roads-glow', source: 'maptiler_planet', 'source-layer': 'transportation',
-        type: 'line', filter: ['in', 'class', 'motorway', 'primary', 'secondary', 'tertiary', 'residential'],
-        paint: { 'line-color': '#ff00aa', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 6, 16, 16], 'line-blur': 10, 'line-opacity': 0.6 }
-      });
-      map.addLayer({
-        id: 'roads-neon', source: 'maptiler_planet', 'source-layer': 'transportation',
-        type: 'line', filter: ['in', 'class', 'motorway', 'primary', 'secondary', 'tertiary', 'residential'],
-        paint: { 'line-color': '#ff44cc', 'line-width': ['interpolate', ['linear'], ['zoom'], 12, 1, 16, 2], 'line-opacity': 0.9 }
-      });
-
-      syncToMap(map);
-
+      setupMapLayers(map);
       if (projectStore.stage === 'import') rpMode = 'address-import';
     });
   });
 
-  // ── Workflow handlers ────────────────────────────────────────────────────
+  // ── Basemap switcher ──────────────────────────────────────────────────────────
+  // setStyle() destroys every source and layer MapLibre knows about, including
+  // our GeoJSON sources, terrain, 3D pole layer, symbol layers — everything.
+  // We re-add the lot in the style.load handler via setupMapLayers().
+  //
+  // Camera state (center/zoom/pitch/bearing) is saved before setStyle() and
+  // restored immediately in the handler via jumpTo() (no animation — the style
+  // reload is jarring enough already; a smooth fly-to on top looks odd).
+  //
+  // The ThreeJS CustomLayerInterface (poles-3d-layer) is re-registered by
+  // ensureTerrainLayers() → createPoleLayer() inside setupMapLayers(). All pole,
+  // span, and drop geometry rebuilds happen automatically on the first render().
+  function changeBasemap(id) {
+    if (!map || !BASEMAP_STYLE[id] || id === currentBasemap || basemapSwitching) return;
+    basemapSwitching = true;
+
+    // Cancel any active digitising tool BEFORE setStyle() wipes all sources.
+    // clearTool() guards each setData call with getSource() checks, so it's
+    // safe even if called at this exact moment.
+    clearTool(map);
+    activeToolLabel = '';
+
+    // Snapshot camera before the style wipe
+    const center  = map.getCenter();
+    const zoom    = map.getZoom();
+    const pitch   = map.getPitch();
+    const bearing = map.getBearing();
+
+    map.once('style.load', () => {
+      // Restore camera instantly — jumpTo not flyTo (avoids disorienting animation
+      // on top of an already-abrupt style change)
+      map.jumpTo({ center, zoom, pitch, bearing });
+
+      // Rebuild every custom layer and repopulate data
+      setupMapLayers(map);
+
+      basemapSwitching = false;
+    });
+
+    currentBasemap = id;
+    map.setStyle(BASEMAP_STYLE[id]);
+  }
+
+  // ── Workflow handlers ────────────────────────────────────────────────────────
 
   function onProjectCreated(e) {
     projectStore.setupProject(e.detail);
@@ -313,19 +438,16 @@
     clearTool(map);
   }
 
-  // Drop duct — no form, auto-saves each line, tool stays active
   function onPlaceDropDuct() {
     clearTool(map);
     activeToolLabel = 'Drop Duct — click start, click end (RMB cancels line)';
     const err = activateDropDuctTool(map, (feature) => {
       projectStore.addDropDuct(feature);
       syncToMap(map);
-      // Tool stays active — activeToolLabel stays visible
     });
     if (err) { alert(err.error); activeToolLabel = ''; }
   }
 
-  // Cable — multi-vertex, opens form on RMB
   function onPlaceCable() {
     clearTool(map);
     activeToolLabel = 'Digitise Cable — click vertices, right-click to finish';
@@ -356,7 +478,6 @@
     if (map.getSource('rubberband-src')) map.getSource('rubberband-src').setData({ type: 'FeatureCollection', features: [] });
   }
 
-  // Bundle — no form, auto-saves each line, tool stays active
   function onPlaceBundle() {
     clearTool(map);
     activeToolLabel = 'Bundle — click joint, click premise (RMB cancels line)';
@@ -431,7 +552,6 @@
     const err = activateAerialSpanTool(map, (feature) => {
       projectStore.addSpan(feature);
       syncToMap(map);
-      // Tool stays active — don't clearTool or reset activeToolLabel
     });
     if (err) { alert(err.error); activeToolLabel = ''; }
   }
@@ -442,7 +562,6 @@
     const err = activateAerialDropTool(map, (feature) => {
       projectStore.addAerialDrop(feature);
       syncToMap(map);
-      // Tool stays active for next drop
     });
     if (err) { alert(err.error); activeToolLabel = ''; }
   }
@@ -480,9 +599,6 @@
 
   // ── Asset Edit / Delete / Move ────────────────────────────────────────────
 
-  // The select tool now hands back a nearest-first array of every asset under
-  // the click. One hit → open the panel directly. More than one (e.g. a CBT on
-  // a pole, or a span ending on a pole) → show the chooser first.
   function handleSelectHits(hits) {
     activeToolLabel = '';
     if (!hits || !hits.length) return;
@@ -505,7 +621,6 @@
 
   function onAssetPickerCancel() {
     assetPickerHits = null;
-    // Stay in select mode so the user can click again
     clearTool(map);
     rpMode = 'default';
     activeToolLabel = '';
@@ -536,8 +651,6 @@
     const { collection, index, props } = e.detail;
     projectStore.updateAsset(collection, index, props);
     syncToMap(map);
-    // Stay in asset-selected so user sees the updated values immediately.
-    // Re-read the feature from the store so the panel shows fresh data.
     const arr = projectStore.state[collection];
     if (arr && arr[index]) {
       selectedAsset = { ...selectedAsset, feature: arr[index] };
@@ -561,7 +674,6 @@
     activateMovePointTool(map, { collection, index }, ({ lng, lat }) => {
       projectStore.updateAssetGeometry(collection, index, [lng, lat]);
       syncToMap(map);
-      // Re-select so user can see the updated asset or continue editing
       const arr = projectStore.state[collection];
       if (arr && arr[index]) {
         selectedAsset = { ...selectedAsset, feature: arr[index] };
@@ -579,8 +691,6 @@
   }
 
   // ── civil-edit-cabinet ───────────────────────────────────────────────────────
-  // No map interaction needed — there is exactly one cabinet. Open the edit form
-  // directly, pre-populated from the current projectStore.cabinet.
 
   function onEditCabinet() {
     if (!projectStore.cabinet) { alert('No cabinet placed yet.'); return; }
@@ -590,14 +700,10 @@
 
   function onEditCabinetSaved(e) {
     const attrs = e.detail;
-    // Preserve geometry — only update properties.
     const cab = projectStore.cabinet;
     projectStore.setCabinet({
       ...cab,
-      properties: {
-        ...cab.properties,   // keep pop_id, area_id, lng, lat as stored
-        ...attrs,
-      },
+      properties: { ...cab.properties, ...attrs },
     });
     syncToMap(map);
     rpMode = 'default';
@@ -608,8 +714,6 @@
   }
 
   // ── civil-road (Road Crossing) ────────────────────────────────────────────
-  // Reuses activateDuctTool — same multi-vertex line, snaps POP/CHAMBER.
-  // Opens RoadCrossingForm instead of DuctForm.
 
   function onPlaceRoadCrossing() {
     clearTool(map);
@@ -642,7 +746,6 @@
   }
 
   // ── civil-stream (Stream Crossing) ───────────────────────────────────────
-  // Same pattern as road crossing, different form fields.
 
   function onPlaceStreamCrossing() {
     clearTool(map);
@@ -675,7 +778,6 @@
   }
 
   // ── pia-chamber (Place PIA UG Chamber) ───────────────────────────────────
-  // Reuses activateChamberTool with snapping, opens PIAChamberForm.
 
   function onPlacePIAChamber() {
     clearTool(map);
@@ -707,7 +809,6 @@
   }
 
   // ── pia-duct (Digitise PIA UG Duct) ──────────────────────────────────────
-  // Reuses activateDuctTool, opens PIADuctForm.
 
   function onPlacePIADuct() {
     clearTool(map);
@@ -740,46 +841,94 @@
   }
 
   // ── pia-drop (Digitise PIA UG Drop) ──────────────────────────────────────
-  // Reuses activateDropDuctTool — two-click, auto-saves, tool stays active.
-  // Sets installation_method = PIA_UG on the saved feature.
 
   function onPlacePIADrop() {
     clearTool(map);
     activeToolLabel = 'PIA UG Drop — click start, click end (RMB cancels line)';
     const err = activateDropDuctTool(map, (feature) => {
-      // Stamp the PIA-specific props onto the auto-saved feature before adding.
       feature.properties.installation_method = 'PIA_UG';
       feature.properties.drop_type           = 'PIA_UG';
       feature.properties.owner               = 'Openreach';
       projectStore.addDropDuct(feature);
       syncToMap(map);
-      // Tool stays active — activeToolLabel stays visible
     });
     if (err) { alert(err.error); activeToolLabel = ''; }
+  }
+
+  // ── fibre-trace (Tier 2) ─────────────────────────────────────────────────
+  // Click a premise → trace its route to the cabinet. Tool stays active so the
+  // user can click premise after premise; the panel + highlight refresh each
+  // click. Close exits the tool and clears the highlight.
+
+  function onFibreTrace() {
+    clearTool(map);
+    clearTraceHighlight(map);
+    fibreTraceResult = null;
+    activeToolLabel = 'Fibre Trace — click a premise to trace its route';
+    const err = activateFibreTraceTool(map, (result) => {
+      fibreTraceResult = result;
+      rpMode = 'fibre-trace';
+    });
+    if (err) { alert(err.error); activeToolLabel = ''; }
+  }
+
+  function onFibreTraceClose() {
+    fibreTraceResult = null;
+    rpMode = 'default';
+    clearTool(map);
+    clearTraceHighlight(map);
+    activeToolLabel = '';
+  }
+
+  // ── fibre-assign (Tier 2) ────────────────────────────────────────────────
+  // Not a map-click tool — runs the cascade over the whole network, writes
+  // splitter_port onto consumers + splitter summaries onto CBTs/joints, then
+  // shows a summary. Re-runnable any time; sticky allocation preserves
+  // installed/frozen ports.
+  let fibreAssignResult = null;
+
+  function onFibreAssign() {
+    if (stage !== 'design') return;
+    clearTool(map);
+    activeToolLabel = '';
+    const result = assignFibres(projectStore.state);
+    if (!result.ok) { alert(result.reason); return; }
+    projectStore.applyFibreAssignment(result);
+    syncToMap(map);
+    fibreAssignResult = result;
+    rpMode = 'fibre-assign';
+  }
+
+  function onFibreAssignClose() {
+    fibreAssignResult = null;
+    rpMode = 'default';
   }
 
   function onToolSelected(e) {
     const { label, category, toolId } = e.detail;
     const catLabel = category.charAt(0).toUpperCase() + category.slice(1);
     activeToolLabel = `${catLabel} — ${label}`;
-    if (toolId === 'civil-chamber')  onPlaceChamber();
-    if (toolId === 'civil-duct')     onPlaceDuct();
-   if (toolId === 'civil-drop-duct') onPlaceDropDuct();
-   if (toolId === 'aerial-pole')     onPlacePole();
-    if (toolId === 'aerial-cbt')      onPlaceCBT();
-    if (toolId === 'aerial-span')     onPlaceAerialSpan();
-    if (toolId === 'aerial-drop')     onPlaceAerialDrop();
-    if (toolId === 'aerial-cbt-tail') onPlaceCBTTail();
-    if (toolId === 'fibre-joint')    onPlaceJoint();
-    if (toolId === 'fibre-cable')    onPlaceCable();
-    if (toolId === 'fibre-bundle')   onPlaceBundle();
-    // Additional tool wiring goes here in the next iteration
+    if (toolId === 'civil-chamber')       onPlaceChamber();
+    if (toolId === 'civil-duct')          onPlaceDuct();
+    if (toolId === 'civil-drop-duct')     onPlaceDropDuct();
+    if (toolId === 'aerial-pole')         onPlacePole();
+    if (toolId === 'aerial-cbt')          onPlaceCBT();
+    if (toolId === 'aerial-span')         onPlaceAerialSpan();
+    if (toolId === 'aerial-drop')         onPlaceAerialDrop();
+    if (toolId === 'aerial-cbt-tail')     onPlaceCBTTail();
+    if (toolId === 'fibre-joint')         onPlaceJoint();
+    if (toolId === 'fibre-cable')         onPlaceCable();
+    if (toolId === 'fibre-bundle')        onPlaceBundle();
     if (toolId === 'civil-edit-cabinet')  onEditCabinet();
     if (toolId === 'civil-road')          onPlaceRoadCrossing();
     if (toolId === 'civil-stream')        onPlaceStreamCrossing();
     if (toolId === 'pia-chamber')         onPlacePIAChamber();
     if (toolId === 'pia-duct')            onPlacePIADuct();
     if (toolId === 'pia-drop')            onPlacePIADrop();
+    // Tier 2
+    if (toolId === 'fibre-trace')         onFibreTrace();
+    if (toolId === 'fibre-assign')        onFibreAssign();
+    // if (toolId === 'fibre-count')      onFibreCount();
   }
 
   function setView(threeD) {
@@ -920,6 +1069,20 @@
         <button class="asset-btn" on:click={onDeleteAsset}>✕ Delete Asset</button>
         <button class="asset-btn" on:click={onMoveAsset}>⇄ Move Asset</button>
         <button class="asset-btn" class:on={showBuildings} on:click={toggleBuildings}>⌂ Buildings</button>
+        <div class="sid-basemap-dock">
+          <div class="sid-div"></div>
+          <div class="sid-lbl">Basemap</div>
+          <div class="basemap-wrap">
+            {#each BASEMAPS as bm}
+              <button
+                class="basemap-btn"
+                class:on={currentBasemap === bm.id}
+                disabled={basemapSwitching}
+                on:click={() => changeBasemap(bm.id)}
+              >{bm.label}</button>
+            {/each}
+          </div>
+        </div>
       {/if}
     </div>
 
@@ -928,6 +1091,13 @@
 
       {#if stage === 'design'}
         <RadialWheel {activeCat} on:tool-selected={onToolSelected} />
+      {/if}
+
+      {#if basemapSwitching}
+        <div class="basemap-loading">
+          <div class="bl-dot"></div>
+          <span>Switching basemap…</span>
+        </div>
       {/if}
 
       {#if activeToolLabel}
@@ -940,6 +1110,8 @@
             rpMode = 'default';
             pendingBuildArea = null;
             pendingCabinet = null;
+            fibreTraceResult = null;
+            clearTraceHighlight(map);
             if (map.getSource('ba-rubber-src')) map.getSource('ba-rubber-src').setData({ type: 'FeatureCollection', features: [] });
           }}>✕</button>
         </div>
@@ -1042,6 +1214,49 @@
           on:close={onAssetPanelClose}
         />
 
+      {:else if rpMode === 'fibre-trace'}
+        <FibreTracePanel result={fibreTraceResult} on:close={onFibreTraceClose} />
+
+      {:else if rpMode === 'fibre-assign'}
+        <div class="fa-panel">
+          <div class="fa-hdr">
+            <span class="fa-title">Auto-Assign Fibres</span>
+            <button class="fa-close" on:click={onFibreAssignClose} title="Dismiss">✕</button>
+          </div>
+          {#if fibreAssignResult}
+            <div class="fa-stats">
+              <div class="fa-stat"><div class="fa-sv ok">{fibreAssignResult.stats.assigned}</div><div class="fa-sl">Assigned</div></div>
+              <div class="fa-stat"><div class="fa-sv">{fibreAssignResult.stats.splitters}</div><div class="fa-sl">Splitters</div></div>
+              <div class="fa-stat"><div class="fa-sv">{fibreAssignResult.stats.spare}</div><div class="fa-sl">Spare</div></div>
+              <div class="fa-stat"><div class="fa-sv {fibreAssignResult.stats.overcap ? 'bad' : ''}">{fibreAssignResult.stats.overcap}</div><div class="fa-sl">Over-cap</div></div>
+            </div>
+            <div class="fa-sub">
+              {fibreAssignResult.stats.feeders} feeder (1:4) · {fibreAssignResult.stats.terminals} terminal splitter{fibreAssignResult.stats.terminals === 1 ? '' : 's'}
+            </div>
+
+            {#if fibreAssignResult.flags.length}
+              <div class="fa-flags">
+                <div class="fa-flags-lbl">⚠ {fibreAssignResult.flags.length} warning{fibreAssignResult.flags.length === 1 ? '' : 's'}</div>
+                {#each fibreAssignResult.flags as fl}
+                  <div class="fa-flag">{fl}</div>
+                {/each}
+              </div>
+            {/if}
+
+            <div class="fa-log-lbl">Log</div>
+            <div class="fa-log">
+              {#each fibreAssignResult.log as line}
+                <div class="fa-log-line">{line}</div>
+              {/each}
+            </div>
+
+            <div class="fa-note">Click a CBT with “Edit Asset” to see its splitter port grid.</div>
+          {/if}
+          <div class="fa-actions">
+            <button class="fa-done" on:click={onFibreAssignClose}>Done</button>
+          </div>
+        </div>
+
       {:else}
         <div class="rp-hdr">
           <span class="rp-hdr-title">Validation Summary</span>
@@ -1098,29 +1313,32 @@
             <button class="act-btn" disabled={stage !== 'design'}>✕ Delete</button>
             <button class="act-btn" disabled={stage !== 'design'}>◎ Trace</button>
           </div>
-        </div>
 
-        <div class="rp-splitter"></div>
-
-        <div class="ri-section">
-          <div class="ri-hdr">
-            <div>
-              <div class="ri-lbl" style="margin-bottom:4px;">Route Inspector</div>
-              <div class="ri-id">—</div>
+          <div class="ri-section">
+            <div class="ri-hdr">
+              <span class="ri-lbl">Route Info</span>
+              <span class="ri-id">{selectedRoute || '—'}</span>
+              {#if selectedRoute}
+                <span class="ri-badge">{ROUTES.find(r => r.id === selectedRoute)?.status || ''}</span>
+              {/if}
             </div>
-          </div>
-          <div class="ri-stats">
-            <div class="ri-stat"><div class="ri-sv">—</div><div class="ri-sl">Length</div></div>
-            <div class="ri-stat"><div class="ri-sv">—</div><div class="ri-sl">Fibres</div></div>
-            <div class="ri-stat"><div class="ri-sv">—</div><div class="ri-sl">Assets</div></div>
-            <div class="ri-stat"><div class="ri-sv">—</div><div class="ri-sl">Capacity</div></div>
+            {#if selectedRoute}
+              {@const r = ROUTES.find(rt => rt.id === selectedRoute)}
+              {#if r}
+                <div class="ri-from">{r.from} → {r.to}</div>
+                <div class="ri-stats">
+                  <div class="ri-stat"><div class="ri-sv {r.cap === '100%' ? 'ok' : ''}">{r.cap}</div><div class="ri-sl">Capacity</div></div>
+                  <div class="ri-stat"><div class="ri-sv">{r.len}</div><div class="ri-sl">Length</div></div>
+                  <div class="ri-stat"><div class="ri-sv">{r.fibres}</div><div class="ri-sl">Fibres</div></div>
+                  <div class="ri-stat"><div class="ri-sv">{r.assets}</div><div class="ri-sl">Assets</div></div>
+                </div>
+              {/if}
+            {/if}
           </div>
         </div>
       {/if}
-
     </div>
   </div>
-
 </div>
 
 {#if assetPickerHits}
@@ -1132,55 +1350,59 @@
 {/if}
 
 <style>
-  :global(body) { margin: 0; }
-  * { box-sizing: border-box; }
+  :global(*) { box-sizing: border-box; margin: 0; padding: 0; }
+  :global(body) { background: #080e14; color: #a0c4d8; font-family: 'Courier New', monospace; overflow: hidden; }
 
-  .screen { width: 100vw; height: 100vh; background: #0a0f14; display: flex; flex-direction: column; font-family: 'Courier New', Courier, monospace; overflow: hidden; }
+  .screen { display: flex; flex-direction: column; height: 100vh; width: 100vw; overflow: hidden; }
 
-  .topbar { height: 52px; background: #0d1520; border-bottom: 1px solid #1a2d40; display: flex; align-items: stretch; flex-shrink: 0; }
-  .tb-logo { display: flex; flex-direction: column; justify-content: center; padding: 0 16px 0 14px; border-right: 1px solid #1a2d40; }
-  .logo-main { color: #4dc8ff; font-size: 13px; font-weight: 700; letter-spacing: 0.16em; text-shadow: 0 0 12px #00aaff66; }
-  .logo-sub { color: #3a5a70; font-size: 8px; letter-spacing: 0.12em; margin-top: 2px; }
-  .tb-stats { display: flex; align-items: stretch; border-right: 2px solid #1a2d40; }
-  .stat { display: flex; flex-direction: column; justify-content: center; padding: 0 14px; border-right: 1px solid #1a2d4044; }
-  .sv { font-size: 15px; font-weight: 700; line-height: 1; }
-  .sv.neu { color: #7ab8d4; }
-  .sv.ok { color: #4dc8ff; text-shadow: 0 0 8px #00aaff55; }
+  /* ── Topbar ── */
+  .topbar { height: 44px; background: #0d1520; border-bottom: 1px solid #1a2d40; display: flex; align-items: center; padding: 0 12px; gap: 12px; flex-shrink: 0; z-index: 30; }
+  .tb-logo { display: flex; flex-direction: column; gap: 1px; }
+  .logo-main { font-size: 12px; font-weight: 700; letter-spacing: 0.18em; color: #4dc8ff; text-shadow: 0 0 8px #00aaff66; }
+  .logo-sub { font-size: 7px; color: #3a5a70; letter-spacing: 0.14em; }
+  .tb-stats { display: flex; gap: 0; border-left: 1px solid #1a2d40; padding-left: 12px; }
+  .stat { display: flex; flex-direction: column; align-items: center; padding: 0 10px; border-right: 1px solid #1a2d40; }
+  .sv { font-size: 14px; font-weight: 700; line-height: 1; }
+  .sv.ok { color: #4dc8ff; }
   .sv.bad { color: #ff5555; }
   .sv.wrn { color: #ffaa44; }
-  .sl { font-size: 8px; letter-spacing: 0.09em; color: #3a5a70; margin-top: 3px; text-transform: uppercase; }
-  .tb-centre { flex: 1; display: flex; align-items: center; justify-content: center; padding: 0 20px; gap: 6px; }
-  .tb-sep { width: 1px; height: 28px; background: #1a2d40; margin: 0 6px; }
-  .tb-grp { display: flex; align-items: center; gap: 5px; }
-  .tb-grp-wrap { display: flex; flex-direction: column; align-items: center; gap: 3px; }
-  .tb-grp-lbl { font-size: 8px; color: #3a5a70; letter-spacing: 0.1em; text-transform: uppercase; }
-  .tb-btn { background: #0f1c28; border: 1px solid #1a2d40; color: #6a8fa8; font-family: 'Courier New', monospace; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; padding: 0 14px; height: 30px; border-radius: 6px; cursor: pointer; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
-  .tb-btn.hi { background: #00aaff14; border-color: #00aaff44; color: #4dc8ff; }
-  .tb-right { display: flex; align-items: center; gap: 10px; padding: 0 16px; border-left: 2px solid #1a2d40; }
-  .srch { background: #080e14; border: 1px solid #1a2d40; color: #7ab8d4; font-family: 'Courier New', monospace; font-size: 10px; padding: 6px 12px; border-radius: 5px; width: 210px; outline: none; }
+  .sv.neu { color: #7ab8d4; }
+  .sl { font-size: 7px; color: #3a5a70; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 2px; }
+  .tb-centre { display: flex; align-items: center; gap: 8px; flex: 1; justify-content: center; }
+  .tb-grp-wrap { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .tb-grp-lbl { font-size: 7px; color: #3a5a70; letter-spacing: 0.12em; text-transform: uppercase; }
+  .tb-grp { display: flex; gap: 4px; }
+  .tb-btn { background: #0a1018; border: 1px solid #1a2d40; color: #6a8fa8; font-family: 'Courier New', monospace; font-size: 8.5px; letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 10px; border-radius: 4px; cursor: pointer; white-space: nowrap; transition: all 0.12s; }
+  .tb-btn:hover:not(:disabled) { border-color: #00aaff33; color: #4dc8ff; }
+  .tb-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .tb-btn.hi { border-color: #00aaff22; color: #4dc8ff99; }
+  .tb-sep { width: 1px; height: 28px; background: #1a2d40; }
+  .tb-right { display: flex; align-items: center; gap: 8px; }
+  .srch { background: #080e14; border: 1px solid #1a2d40; color: #7ab8d4; font-family: 'Courier New', monospace; font-size: 9px; padding: 4px 10px; border-radius: 4px; width: 200px; outline: none; }
   .srch::placeholder { color: #2a4050; }
-  .go { background: #00aaff14; border: 1px solid #00aaff44; color: #4dc8ff; font-family: 'Courier New', monospace; font-size: 9px; padding: 6px 12px; border-radius: 5px; cursor: pointer; }
-  .tb-new { background: transparent; border: 1px solid #1a2d40; color: #3a5a70; font-family: 'Courier New', monospace; font-size: 8px; letter-spacing: 0.06em; padding: 5px 10px; border-radius: 4px; cursor: pointer; margin-left: 6px; }
-  .tb-new:hover { border-color: #ff555544; color: #ff5555; }
-  .tb-open-wrap { position: relative; display: inline-block; }
-  .tb-open-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 50; min-width: 230px; background: #0c1320; border: 1px solid #1c2940; border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.55); overflow: hidden; }
-  .tb-open-item { display: flex; justify-content: space-between; gap: 12px; align-items: center; width: 100%; padding: 8px 12px; background: none; border: none; border-bottom: 1px solid #121d2e; color: #cfe3ff; font-family: 'Courier New', monospace; font-size: 11px; cursor: pointer; text-align: left; }
+  .go { background: #0a1018; border: 1px solid #1a2d40; color: #4dc8ff; font-family: 'Courier New', monospace; font-size: 9px; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+  .vtog { display: flex; border: 1px solid #1a2d40; border-radius: 4px; overflow: hidden; }
+  .vt { background: #0a1018; border: none; color: #3a5a70; font-family: 'Courier New', monospace; font-size: 9px; padding: 4px 10px; cursor: pointer; }
+  .vt.on { background: #00aaff14; color: #4dc8ff; }
+  .tb-new { background: #0a1018; border: 1px solid #1a2d40; color: #6a8fa8; font-family: 'Courier New', monospace; font-size: 9px; letter-spacing: 0.06em; padding: 4px 10px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+  .tb-new:hover { border-color: #00aaff33; color: #4dc8ff; }
+  .tb-open-wrap { position: relative; }
+  .tb-open-menu { position: absolute; top: calc(100% + 4px); right: 0; background: #0d1520; border: 1px solid #1a2d40; border-radius: 5px; min-width: 200px; z-index: 100; box-shadow: 0 8px 24px #00000088; }
+  .tb-open-empty { font-size: 9px; color: #3a5a70; padding: 10px 12px; }
+  .tb-open-item { display: flex; align-items: center; justify-content: space-between; width: 100%; background: transparent; border: none; border-bottom: 1px solid #1a2d4033; padding: 8px 12px; cursor: pointer; gap: 12px; }
   .tb-open-item:last-child { border-bottom: none; }
-  .tb-open-item:hover { background: #15233a; }
-  .tb-open-item.active { background: #102033; }
-  .tb-open-item.active .oi-name::before { content: '● '; color: #4dc8ff; }
-  .oi-name { color: #cfe3ff; }
-  .oi-area { color: #4dc8ff; font-size: 10px; letter-spacing: 0.04em; }
-  .tb-open-empty { padding: 10px 12px; color: #5a6b82; font-family: 'Courier New', monospace; font-size: 11px; }
-  button:disabled { opacity: 0.35; cursor: not-allowed; }
-  .vtog { display: flex; border: 1px solid #1a2d40; border-radius: 5px; overflow: hidden; }
-  .vt { background: #0f1c28; border: none; color: #6a8fa8; font-family: 'Courier New', monospace; font-size: 9px; padding: 6px 12px; cursor: pointer; }
-  .vt.on { background: #1a2d40; color: #4dc8ff; }
+  .tb-open-item:hover { background: #0f1c28; }
+  .tb-open-item.active .oi-name { color: #4dc8ff; }
+  .tb-open-item.active::before { content: '●'; color: #4dc8ff; font-size: 6px; margin-right: 6px; }
+  .oi-name { font-size: 9px; color: #a0c4d8; font-family: 'Courier New', monospace; letter-spacing: 0.04em; }
+  .oi-area { font-size: 8px; color: #3a5a70; font-family: 'Courier New', monospace; }
 
-  .body { display: flex; flex: 1; overflow: hidden; position: relative; }
+  /* ── Body ── */
+  .body { display: flex; flex: 1; overflow: hidden; }
 
-  .sidebar { width: 140px; background: #0d1520; border-right: 1px solid #1a2d40; display: flex; flex-direction: column; justify-content: center; flex-shrink: 0; z-index: 10; }
-  .sid-lbl { font-size: 8px; color: #3a5a70; letter-spacing: 0.12em; text-transform: uppercase; padding: 12px 12px 6px 12px; }
+  /* ── Sidebar ── */
+  .sidebar { width: 140px; background: #0d1520; border-right: 1px solid #1a2d40; display: flex; flex-direction: column; justify-content: center; flex-shrink: 0; z-index: 10; position: relative; }
+  .sid-lbl { font-size: 7.5px; color: #3a5a70; letter-spacing: 0.12em; text-transform: uppercase; padding: 6px 12px 3px; }
   .sid-div { height: 1px; background: #1a2d40; margin: 8px 12px; }
   .sid-hint { font-size: 8px; color: #2a4050; letter-spacing: 0.08em; text-transform: uppercase; padding: 4px 12px; line-height: 1.6; }
   .cat-pill { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-left: 2px solid transparent; color: #6a8fa8; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; transition: all 0.15s; background: transparent; border-top: none; border-right: none; border-bottom: none; width: 100%; text-align: left; font-family: 'Courier New', monospace; }
@@ -1190,6 +1412,53 @@
   .asset-btn:hover { background: #0f1c28; color: #a0c4d8; border-left-color: #2a4a5e; }
   .asset-btn.on { background: #00aaff0a; border-left-color: #4dc8ff; color: #4dc8ff; }
 
+  /* ── Basemap switcher ── */
+  .sid-basemap-dock { position: absolute; left: 0; right: 0; bottom: 8px; background: #0d1520; }
+  .basemap-wrap { display: flex; flex-direction: column; gap: 2px; padding: 2px 10px 6px; }
+  .basemap-btn {
+    display: block; width: 100%;
+    background: #080e14;
+    border: 1px solid #1a2d40;
+    color: #5a7a90;
+    font-family: 'Courier New', monospace;
+    font-size: 9px;
+    letter-spacing: 0.05em;
+    padding: 6px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.12s;
+  }
+  .basemap-btn:hover:not(:disabled) { background: #0f1c28; color: #a0c4d8; border-color: #2a4a5e; }
+  .basemap-btn.on { background: #00aaff0d; border-color: #00aaff44; color: #4dc8ff; }
+  .basemap-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  /* ── Basemap switching overlay ── */
+  .basemap-loading {
+    position: absolute;
+    bottom: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #0d1520ee;
+    border: 1px solid #1a2d40;
+    border-radius: 20px;
+    padding: 7px 16px 7px 12px;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    color: #6a8fa8;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+    z-index: 5;
+  }
+  .bl-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #4dc8ff;
+    animation: pulse 1s ease-in-out infinite;
+  }
+
+  /* ── Map ── */
   .map-wrap { flex: 1; position: relative; overflow: hidden; }
   #map { width: 100%; height: 100%; }
   .active-chip { position: absolute; bottom: 60px; left: 50%; transform: translateX(-50%); background: #0d1520ee; border: 1px solid #00aaff44; border-radius: 20px; padding: 7px 18px 7px 12px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: #4dc8ff; display: flex; align-items: center; gap: 8px; white-space: nowrap; z-index: 5; }
@@ -1222,6 +1491,7 @@
   .status-pill.partial { background: #ffaa4414; color: #ffaa44; border: 1px solid #ffaa4433; }
   .status-pill.unserved { background: #ff555514; color: #ff5555; border: 1px solid #ff555533; }
 
+  /* ── Right panel ── */
   .rpanel { width: 300px; background: #0d1520; border-left: 1px solid #1a2d40; display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden; z-index: 10; }
   .rp-hdr { height: 44px; background: #0d1520; border-bottom: 1px solid #1a2d40; display: flex; align-items: center; padding: 0 14px; gap: 8px; flex-shrink: 0; }
   .rp-hdr-title { font-size: 9px; color: #a0c4d8; letter-spacing: 0.14em; text-transform: uppercase; flex: 1; font-weight: 600; }
@@ -1286,4 +1556,28 @@
   .ri-sv { font-size: 14px; font-weight: 700; color: #7ab8d4; line-height: 1; }
   .ri-sv.ok { color: #4dc8ff; text-shadow: 0 0 6px #00aaff33; }
   .ri-sl { font-size: 7px; color: #3a5a70; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 3px; }
+
+  /* ── Fibre-assign result panel ── */
+  .fa-panel { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+  .fa-hdr { height: 44px; background: #0d1520; border-bottom: 1px solid #1a2d40; display: flex; align-items: center; padding: 0 14px; gap: 8px; flex-shrink: 0; }
+  .fa-title { font-size: 9px; color: #a0c4d8; letter-spacing: 0.14em; text-transform: uppercase; flex: 1; font-weight: 600; }
+  .fa-close { background: #0f1c28; border: 1px solid #1a2d40; color: #6a8fa8; font-family: 'Courier New', monospace; font-size: 11px; width: 24px; height: 24px; border-radius: 4px; cursor: pointer; }
+  .fa-close:hover { border-color: #ff555544; color: #ff5555; }
+  .fa-stats { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 5px; padding: 12px 14px 6px; }
+  .fa-stat { background: #080e14; border-radius: 5px; padding: 8px 4px; text-align: center; }
+  .fa-sv { font-size: 17px; font-weight: 700; line-height: 1; color: #7ab8d4; }
+  .fa-sv.ok { color: #4dc8ff; }
+  .fa-sv.bad { color: #ff5555; }
+  .fa-sl { font-size: 6.5px; color: #3a5a70; letter-spacing: 0.06em; text-transform: uppercase; margin-top: 3px; }
+  .fa-sub { font-size: 8px; color: #6a8fa8; letter-spacing: 0.04em; padding: 2px 14px 8px; }
+  .fa-flags { margin: 0 14px 8px; padding: 8px 10px; background: #ffaa440a; border: 1px solid #ffaa4433; border-radius: 5px; }
+  .fa-flags-lbl { font-size: 8px; color: #ffaa44; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 5px; }
+  .fa-flag { font-size: 8px; color: #c79552; line-height: 1.5; padding: 1px 0; }
+  .fa-log-lbl { font-size: 7.5px; color: #3a5a70; letter-spacing: 0.12em; text-transform: uppercase; padding: 4px 14px 4px; }
+  .fa-log { flex: 1; overflow-y: auto; padding: 0 14px; }
+  .fa-log-line { font-size: 8px; color: #6a8fa8; line-height: 1.6; padding: 1px 0; border-bottom: 1px solid #0c141c; }
+  .fa-note { font-size: 8px; color: #3a5a70; letter-spacing: 0.03em; padding: 8px 14px; line-height: 1.6; }
+  .fa-actions { padding: 10px 14px; border-top: 1px solid #1a2d40; flex-shrink: 0; }
+  .fa-done { width: 100%; background: #00aaff14; border: 1px solid #00aaff44; color: #4dc8ff; font-family: 'Courier New', monospace; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; padding: 8px; border-radius: 4px; cursor: pointer; }
+  .fa-done:hover { background: #00aaff22; }
 </style>

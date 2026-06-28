@@ -3,6 +3,7 @@
 
 import { projectStore } from './projectStore.js';
 import { createPoleLayer } from './PoleLayers.js';
+import { traceFibre, resolveNode } from './fibreTrace.js';
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 
@@ -1078,6 +1079,15 @@ export function activateCBTTool(map, onFinish) {
 // No altitude is baked in here.
 // RMB finishes and auto-saves — no form. Tool stays active for the next span.
 
+// ── Span fibre defaults ───────────────────────────────────────────────────
+// A span carries fibre inline (it IS the aerial cable, per the v2 model). These
+// defaults are applied at save time; per-span values are editable afterwards
+// via the asset edit panel. AERIAL_SPAN distinguishes the fibre family in BoM
+// and trace output from UG distribution cable, while still being traced as a
+// cable. 96f is a sensible aerial distribution default for a rural FTTP build.
+const SPAN_CABLE_TYPE  = 'AERIAL_SPAN';
+const SPAN_FIBRE_COUNT = 96;
+
 function nextSpanId(areaId) {
   const prefix = `${areaId}-SPAN-`;
   const existing = new Set();
@@ -1186,6 +1196,20 @@ export function activateAerialSpanTool(map, onSaved) {
           status:    'PROPOSED',
           span_type: null,
           notes:     null,
+
+          // ── Fibre payload ──────────────────────────────────────────────
+          // In the v2 plugin an aerial span IS the cable — the structural span
+          // and the fibre it carries are one feature. We mirror that here:
+          // every span carries fibre attributes inline, so the fibre trace can
+          // treat spans and UG cables as one graph (UG joint → span → CBT).
+          // Defaults suit typical aerial distribution; edit per-span later.
+          cable_type:   SPAN_CABLE_TYPE,    // 'AERIAL_SPAN'
+          fibre_count:  SPAN_FIBRE_COUNT,   // 96f aerial distribution default
+          // Node-type aliases matching the UG cable's field names, so the trace
+          // BFS (ported from validate_routes.py) can read from_node_type /
+          // to_node_type uniformly across cables AND spans without special-casing.
+          from_node_type: fromType,
+          to_node_type:   toType,
         },
       };
 
@@ -1227,6 +1251,13 @@ export function activateAerialSpanTool(map, onSaved) {
 // Two-click: click 1 = CBT (snap required), click 2 = premise (snap preferred).
 // Auto-saves with no form, tool stays active for next drop.
 // Mirrors the UG drop duct tool pattern exactly.
+
+// ── Aerial drop fibre defaults ────────────────────────────────────────────
+// The aerial drop carries fibre inline (it IS the aerial bundle, per the v2
+// model). AERIAL_DROP distinguishes it in BoM/trace from UG bundles while
+// still being traced as a subscriber drop. 2f matches the UG bundle default.
+const ADROP_CABLE_TYPE  = 'AERIAL_DROP';
+const ADROP_FIBRE_COUNT = 2;
 
 function nextAerialDropId(areaId) {
   const prefix = `${areaId}-ADROP-`;
@@ -1337,6 +1368,18 @@ export function activateAerialDropTool(map, onSaved) {
         status:     'PROPOSED',
         drop_type:  null,
         notes:      null,
+
+        // ── Fibre payload ────────────────────────────────────────────────
+        // An aerial drop is the aerial equivalent of a UG bundle — the
+        // subscriber's fibre from the CBT to the premise. In v2 the aerial
+        // drop was the UG bundle wrapped under a different name. We mirror
+        // that: the drop carries fibre inline so the trace can look it up by
+        // uprn (premise → aerial drop → CBT → span → UG joint → cables → POP),
+        // exactly as it looks up a bundle by uprn for a UG premise.
+        cable_type:  ADROP_CABLE_TYPE,    // 'AERIAL_DROP'
+        fibre_count: ADROP_FIBRE_COUNT,   // 2f, same default as a UG bundle
+        from_node:   cbtId,               // CBT end (trace entry hop)
+        from_node_type: 'CBT',
       },
     };
 
@@ -2660,4 +2703,186 @@ export function compassLeg(fromLng, fromLat, toLng, toLat) {
   if (b >= 45  && b < 135) return 'E';
   if (b >= 135 && b < 225) return 'S';
   return 'W';
+}
+
+// ── FIBRE TRACE TOOL ──────────────────────────────────────────────────────────
+// Click a premise → trace its route back to the cabinet through the fibre graph
+// (bundles/drops → joints/CBTs → cables/spans → POP) and highlight every hop.
+//
+// The trace ENGINE is pure (fibreTrace.js); this tool wraps it with map I/O:
+// snap-to-premise on click, then paint the returned path into dedicated glow +
+// core highlight layers (cyan glow / white core, mirroring the v2 rubber-band
+// style). The tool stays active so the user can click premise after premise; the
+// highlight + result panel refresh on each click. Esc or the panel's Close exits.
+//
+// Highlighting is 2D, on terrain. Spans and aerial drops render 3D-only in
+// PoleLayers, but their 2D ground coordinates live on the feature geometry, so a
+// draped highlight line traces the route footprint clearly. (A transient, bright,
+// purposeful highlight reads fine in 2D even though the permanent asset is 3D.)
+
+function pointFeature(coords) {
+  return { type: 'Feature', geometry: { type: 'Point', coordinates: coords }, properties: {} };
+}
+
+// Lazily create the trace highlight sources + layers. Added ON TOP of everything
+// (no `before` arg) so the highlight is always visible over assets and labels.
+// Re-creatable: a basemap switch wipes these, and the next trace re-adds them.
+export function ensureTraceLayers(map) {
+  if (!map.getSource('trace-line-src')) {
+    map.addSource('trace-line-src', { type: 'geojson', data: emptyFC() });
+    map.addLayer({
+      id: 'trace-glow',
+      type: 'line',
+      source: 'trace-line-src',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: {
+        'line-color': '#00c8dc',
+        'line-width': ['interpolate', ['linear'], ['zoom'], 10, 6, 16, 11, 20, 16],
+        'line-blur': 6,
+        'line-opacity': 0.55,
+      },
+    });
+    map.addLayer({
+      id: 'trace-core',
+      type: 'line',
+      source: 'trace-line-src',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: {
+        'line-color': '#ffffff',
+        'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.5, 16, 2.5, 20, 3.5],
+        'line-opacity': 0.95,
+      },
+    });
+  }
+
+  if (!map.getSource('trace-node-src')) {
+    map.addSource('trace-node-src', { type: 'geojson', data: emptyFC() });
+    map.addLayer({
+      id: 'trace-node-glow',
+      type: 'circle',
+      source: 'trace-node-src',
+      paint: {
+        'circle-radius': ['case', ['==', ['get', 'role'], 'endpoint'], 11, 8],
+        'circle-color': '#00c8dc',
+        'circle-blur': 1,
+        'circle-opacity': 0.5,
+      },
+    });
+    map.addLayer({
+      id: 'trace-node',
+      type: 'circle',
+      source: 'trace-node-src',
+      paint: {
+        'circle-radius': ['case', ['==', ['get', 'role'], 'endpoint'], 6, 4.5],
+        'circle-color': '#0a0f14',
+        'circle-stroke-width': 2,
+        'circle-stroke-color': ['case',
+          ['==', ['get', 'role'], 'premise'], '#ffffff',
+          ['==', ['get', 'role'], 'pop'],     '#4dc8ff',
+          '#4dc8ff'],
+      },
+    });
+  }
+}
+
+// Clear the highlight (called on close / new trace / exit).
+export function clearTraceHighlight(map) {
+  if (map?.getSource && map.getSource('trace-line-src')) map.getSource('trace-line-src').setData(emptyFC());
+  if (map?.getSource && map.getSource('trace-node-src')) map.getSource('trace-node-src').setData(emptyFC());
+}
+
+// Paint a trace result into the highlight layers.
+function drawTrace(map, result) {
+  ensureTraceLayers(map);
+
+  const lineFeatures = [];
+  const nodeFeatures = [];
+
+  // Entry asset (bundle / aerial drop) line.
+  if (result.entry?.feature?.geometry) {
+    lineFeatures.push({ type: 'Feature', geometry: result.entry.feature.geometry, properties: {} });
+  }
+
+  // Every cable / span edge along the path.
+  for (const e of result.edges || []) {
+    if (e.feature?.geometry) {
+      lineFeatures.push({ type: 'Feature', geometry: e.feature.geometry, properties: {} });
+    }
+  }
+
+  // Node markers (joints, CBTs, poles, POP). Mark the POP and the first node as
+  // endpoints so they render larger.
+  const nodes = result.nodes || [];
+  for (let i = 0; i < nodes.length; i++) {
+    const n = resolveNode(projectStore.state, nodes[i]);
+    if (!n) continue;
+    const role = (n.type === 'POP') ? 'pop' : (i === 0 ? 'endpoint' : 'node');
+    nodeFeatures.push({ type: 'Feature', geometry: { type: 'Point', coordinates: n.coords }, properties: { role } });
+  }
+
+  // Premise marker (white) — the thing the user clicked.
+  const prem = (projectStore.addressPoints || []).find(p => String(p.properties.uprn) === String(result.uprn));
+  if (prem) {
+    nodeFeatures.push({ type: 'Feature', geometry: { type: 'Point', coordinates: prem.geometry.coordinates }, properties: { role: 'premise' } });
+  }
+
+  map.getSource('trace-line-src').setData({ type: 'FeatureCollection', features: lineFeatures });
+  map.getSource('trace-node-src').setData({ type: 'FeatureCollection', features: nodeFeatures });
+}
+
+export function activateFibreTraceTool(map, onResult) {
+  clearTool(map);
+
+  if (!projectStore.cabinet) {
+    return { error: 'No cabinet placed yet.' };
+  }
+  if (!(projectStore.addressPoints || []).length) {
+    return { error: 'No premises imported yet. Import address data before tracing.' };
+  }
+
+  ensureTraceLayers(map);
+  clearTraceHighlight(map);
+  map.getCanvas().style.cursor = 'crosshair';
+
+  function onMousemove(e) {
+    const snap = _snapToNode(map, e.lngLat, 18, ['PREMISE']);
+    if (snap) {
+      map.getSource('snap-src').setData(pointFC(snap.lngLat.lng, snap.lngLat.lat));
+      map.getCanvas().style.cursor = 'pointer';
+    } else {
+      map.getSource('snap-src').setData(emptyFC());
+      map.getCanvas().style.cursor = 'crosshair';
+    }
+  }
+
+  function onClick(e) {
+    const snap = _snapToNode(map, e.lngLat, 18, ['PREMISE']);
+    if (!snap) return; // require a premise — ignore empty clicks, stay active
+    try {
+      const result = traceFibre(projectStore.state, snap.id);
+      drawTrace(map, result);
+      map.getSource('snap-src').setData(emptyFC());
+      onResult(result);
+    } catch (err) {
+      console.error('[fibre-trace] error:', err);
+    }
+  }
+
+  function onKeydown(e) {
+    if (e.key === 'Escape') cleanup();
+  }
+
+  function cleanup() {
+    map.off('mousemove', onMousemove);
+    map.off('click', onClick);
+    document.removeEventListener('keydown', onKeydown);
+    if (map.getSource('snap-src')) map.getSource('snap-src').setData(emptyFC());
+    map.getCanvas().style.cursor = '';
+  }
+
+  map.on('mousemove', onMousemove);
+  map.on('click', onClick);
+  document.addEventListener('keydown', onKeydown);
+  _activeTool = { cleanup };
+  return null;
 }

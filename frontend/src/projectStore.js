@@ -164,6 +164,51 @@ export function parseAddressCsv(text) {
   return { features, skipped, total: lines.length - 1 };
 }
 
+// ── Fibre-field backfill ───────────────────────────────────────────────────
+// Spans and aerial drops gained inline fibre attributes (cable_type / fibre_count)
+// so the fibre trace can treat them as cables/bundles. Assets drawn before that
+// change have no such fields. This backfill stamps sensible defaults onto any
+// span/drop missing them, so older projects become trace-able and the fields
+// show up in the edit panel. Idempotent: only fills when absent, never overwrites
+// a value the user has set. Returns true if anything changed (so the caller can
+// persist the migrated state).
+const SPAN_FIBRE_DEFAULTS  = { cable_type: 'AERIAL_SPAN', fibre_count: 96 };
+const ADROP_FIBRE_DEFAULTS = { cable_type: 'AERIAL_DROP', fibre_count: 2 };
+
+function backfillFibreFields(state) {
+  let changed = false;
+
+  const fill = (arr, defaults, aliasNodeType) => {
+    if (!Array.isArray(arr)) return;
+    for (const f of arr) {
+      if (!f || !f.properties) continue;
+      const p = f.properties;
+      for (const [k, v] of Object.entries(defaults)) {
+        if (p[k] === undefined || p[k] === null) { p[k] = v; changed = true; }
+      }
+      // Node-type aliases the trace BFS reads uniformly across cables + spans.
+      if (p.from_node_type === undefined && p.from_type !== undefined) {
+        p.from_node_type = p.from_type; changed = true;
+      }
+      if (p.to_node_type === undefined && p.to_type !== undefined) {
+        p.to_node_type = p.to_type; changed = true;
+      }
+      // Aerial drops: the CBT end is the trace entry hop.
+      if (aliasNodeType === 'adrop') {
+        if (p.from_node === undefined && p.from_cbt !== undefined) {
+          p.from_node = p.from_cbt; changed = true;
+        }
+        if (p.from_node_type === undefined) { p.from_node_type = 'CBT'; changed = true; }
+      }
+    }
+  };
+
+  fill(state.spans,       SPAN_FIBRE_DEFAULTS,  'span');
+  fill(state.aerialDrops, ADROP_FIBRE_DEFAULTS, 'adrop');
+
+  return changed;
+}
+
 // ── Store ────────────────────────────────────────────────────────────────────
 
 const DEFAULT_STATE = {
@@ -183,6 +228,7 @@ const DEFAULT_STATE = {
   aerialDrops: [],
   cbtTails: [],
   addressPoints: [],
+  fibreAssignments: [],
 };
 
 function load() {
@@ -191,7 +237,15 @@ function load() {
     const id = localStorage.getItem(ACTIVE_KEY);
     if (id) {
       const raw = localStorage.getItem(projectKey(id));
-      if (raw) return { ...DEFAULT_STATE, ...JSON.parse(raw) };
+      if (raw) {
+        const state = { ...DEFAULT_STATE, ...JSON.parse(raw) };
+        // Retro-fit fibre fields onto pre-existing spans/drops, then persist so
+        // the migration only runs once per project.
+        if (backfillFibreFields(state)) {
+          try { localStorage.setItem(projectKey(id), JSON.stringify(state)); } catch (e) { /* ignore */ }
+        }
+        return state;
+      }
     }
   } catch (e) { /* ignore */ }
   return { ...DEFAULT_STATE };
@@ -229,6 +283,7 @@ class ProjectStore {
   get aerialDrops()   { return this._state.aerialDrops || []; }
   get cbtTails()      { return this._state.cbtTails || []; }
   get addressPoints() { return this._state.addressPoints; }
+  get fibreAssignments() { return this._state.fibreAssignments || []; }
 
   on(fn) { this._listeners.push(fn); return () => { this._listeners = this._listeners.filter(l => l !== fn); }; }
   _emit(event) { this._listeners.forEach(fn => fn(event, this._state)); }
@@ -332,6 +387,69 @@ class ProjectStore {
     this._update({ [collection]: updated });
   }
 
+  // ── Fibre assignment ───────────────────────────────────────────────────────
+  // Apply the result of fibreAssign.assignFibres():
+  //   • write splitter_port onto each consumer (aerial drops + bundles)
+  //   • write feeder_port onto each child splitter (joints/cbts)
+  //   • write the splitter summary (has_splitter/split_ratio/fibre_in/fibre_out)
+  //     onto each splitter joint/cbt
+  //   • store the assignment records
+  // One atomic _update so the map re-syncs once and it persists in a single write.
+  applyFibreAssignment(result) {
+    if (!result || !result.ok) return;
+
+    const patch = {};
+
+    // 1. Consumer ports — key is 'collection:assetId'.
+    const portFor = (collection, idField) => {
+      const arr = this._state[collection];
+      if (!Array.isArray(arr)) return null;
+      let touched = false;
+      const next = arr.map(f => {
+        const id = f.properties?.[idField];
+        if (id == null) return f;
+        const key = `${collection}:${id}`;
+        if (Object.prototype.hasOwnProperty.call(result.consumerPorts, key)) {
+          touched = true;
+          return { ...f, properties: { ...f.properties, splitter_port: result.consumerPorts[key] } };
+        }
+        return f;
+      });
+      return touched ? next : null;
+    };
+    const drops   = portFor('aerialDrops', 'adrop_id');
+    const bundles = portFor('bundles', 'bundle_id');
+    if (drops)   patch.aerialDrops = drops;
+    if (bundles) patch.bundles = bundles;
+
+    // 2. Splitter summary + feeder_port onto joints and cbts.
+    const applySummary = (collection, idField) => {
+      const arr = this._state[collection];
+      if (!Array.isArray(arr)) return null;
+      let touched = false;
+      const next = arr.map(f => {
+        const id = String(f.properties?.[idField]);
+        const summary = result.splitterSummary[id];
+        const feederPort = result.splitterPorts[id];
+        if (!summary && feederPort === undefined) return f;
+        touched = true;
+        const add = { ...(summary || {}) };
+        if (feederPort !== undefined) add.feeder_port = feederPort;
+        return { ...f, properties: { ...f.properties, ...add } };
+      });
+      return touched ? next : null;
+    };
+    const joints = applySummary('joints', 'joint_id');
+    const cbts   = applySummary('cbts', 'cbt_id');
+    if (joints) patch.joints = joints;
+    if (cbts)   patch.cbts = cbts;
+
+    // 3. Assignment records.
+    patch.fibreAssignments = result.assignments || [];
+
+    this._update(patch);
+  }
+
   updateChamberFunction(chamberId, newFunction) {
     const updated = this._state.chambers.map(ch => {
       if (ch.properties.chamber_id === chamberId) {
@@ -359,6 +477,7 @@ class ProjectStore {
     try {
       localStorage.setItem(ACTIVE_KEY, id);
       this._state = { ...DEFAULT_STATE, ...JSON.parse(raw) };
+      if (backfillFibreFields(this._state)) save(this._state);
       this._emit('reset');
       return true;
     } catch (e) { return false; }
