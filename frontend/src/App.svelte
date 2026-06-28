@@ -32,6 +32,7 @@
   import { buildBom } from './bom.js';
   import SldPanel from './SldPanel.svelte';
   import ValidateRoutesPanel from './ValidateRoutesPanel.svelte';
+  import DesignHealthPanel from './DesignHealthPanel.svelte';
   import {
     ensureSources, ensureTerrainLayers, syncToMap,
     activateCabinetTool, activateBuildAreaTool, activateChamberTool,
@@ -1039,6 +1040,15 @@
   }
   function onValidateRoutesClose() { rpMode = 'default'; }
 
+  // ── Design Health ─────────────────────────────────────────────────────────
+  function onDesignHealth() {
+    if (stage !== 'design') return;
+    clearTool(map);
+    activeToolLabel = '';
+    rpMode = 'design-health';
+  }
+  function onDesignHealthClose() { rpMode = 'default'; }
+
   function onFibreCountHighlight(e) {
     const seg = e.detail;
     if (!seg || !seg.feature?.geometry) return;
@@ -1149,7 +1159,7 @@
         <div class="tb-grp-lbl">Validation</div>
         <div class="tb-grp">
           <button class="tb-btn hi" disabled={stage !== 'design'} on:click={onValidateRoutes}>✓ Validate Routes</button>
-          <button class="tb-btn hi" disabled={stage !== 'design'}>⚡ Design Health</button>
+          <button class="tb-btn hi" disabled={stage !== 'design'} on:click={onDesignHealth}>⚡ Design Health</button>
         </div>
       </div>
       <div class="tb-sep"></div>
@@ -1447,12 +1457,15 @@
           }}
         />
 
+      {:else if rpMode === 'design-health'}
+        <DesignHealthPanel autoRun={true} on:close={onDesignHealthClose} />
+
       {:else}
         <div class="rp-hdr">
           <span class="rp-hdr-title">Validation Summary</span>
           <span class="rp-timestamp">—</span>
           <button class="rp-refresh">↻</button>
-          <button class="health-btn" disabled={stage !== 'design'}>✓ Health</button>
+          <button class="health-btn" disabled={stage !== 'design'} on:click={onDesignHealth}>✓ Health</button>
         </div>
         <div class="val-body">
           <div class="val-counts">
@@ -1461,8 +1474,8 @@
             <div class="vc"><div class="vc-val wrn">0</div><div class="vc-lbl">Warnings</div></div>
             <div class="vc"><div class="vc-val neu">{cheapStats.premises || '—'}</div><div class="vc-lbl">Total</div></div>
           </div>
-          <div class="int-row"><span class="int-k">Network Integrity</span><span class="int-v">{routeStats.routed !== null ? Math.round(routeStats.routed / Math.max(cheapStats.premises, 1) * 100) + '%' : '—'}</span></div>
-          <div class="int-bar"><div class="int-fill" style="width:{routeStats.routed !== null ? Math.round(routeStats.routed / Math.max(cheapStats.premises, 1) * 100) : 3}%"></div></div>
+          <div class="int-row"><span class="int-k">Network Integrity</span><span class="int-v">{routeStats.routed !== null ? Math.round(routeStats.routed / Math.max(routeStats.routed + routeStats.partial, 1) * 100) + '%' : '—'}</span></div>
+          <div class="int-bar"><div class="int-fill" style="width:{routeStats.routed !== null ? Math.round(routeStats.routed / Math.max(routeStats.routed + routeStats.partial, 1) * 100) : 3}%"></div></div>
           <div class="checks-note">
             {#if stage === 'setup' || stage === 'import'}
               Create a project and import address data to begin.
