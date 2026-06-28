@@ -21,9 +21,17 @@
   import BuildAreaForm from './BuildAreaForm.svelte';
   import { projectStore } from './projectStore.js';
   import { assignFibres } from './fibreAssign.js';
+  import { countFibres } from './fibreCount.js';
+  import { downloadSplicePlan, generateSplicePlan, downloadAllSplicePlans } from './splicePlan.js';
   import AssetEditPanel from './AssetEditPanel.svelte';
   import AssetPickerDialog from './AssetPickerDialog.svelte';
   import FibreTracePanel from './FibreTracePanel.svelte';
+  import FibreCountPanel from './FibreCountPanel.svelte';
+  import SplicePlanPanel from './SplicePlanPanel.svelte';
+  import BomPanel from './BomPanel.svelte';
+  import { buildBom } from './bom.js';
+  import SldPanel from './SldPanel.svelte';
+  import ValidateRoutesPanel from './ValidateRoutesPanel.svelte';
   import {
     ensureSources, ensureTerrainLayers, syncToMap,
     activateCabinetTool, activateBuildAreaTool, activateChamberTool,
@@ -33,6 +41,7 @@
     activateCBTTailTool,
     activateSelectTool, activateMovePointTool,
     activateFibreTraceTool, clearTraceHighlight,
+    activateFibreCountTool, clearCountHighlight,
     applyCookieCutter, clearTool
   } from './mapTools.js';
 
@@ -56,9 +65,12 @@
 
   let stage = projectStore.stage;
   let project = projectStore.project;
+  let storeVersion = 0;   // bumped on every store mutation to drive reactive stats
   projectStore.on((event) => {
     stage = projectStore.stage;
     project = projectStore.project;
+    storeVersion++;
+    if (statsRouteRun) statsStale = true;
     if (map) syncToMap(map);
     if (event === 'reset') {
       if (stage === 'import')      rpMode = 'address-import';
@@ -84,31 +96,93 @@
   let selectedAsset    = null;
   let assetPickerHits  = null;
   let fibreTraceResult = null;
+  let fibreCountResult = null;
+
+  // ── Stats bar ────────────────────────────────────────────────────────────
+  // Cheap stats (premises, fibre, duct, materials) recompute whenever
+  // projectStore.state changes (Svelte reactive statement).
+  // Route stats (routed, partial, unserved) are populated by ValidateRoutesPanel
+  // on each run, and marked stale on next store mutation (see store .on() above).
+  let routeStats = { routed: null, partial: null, unserved: null };
+  let statsRouteRun = false;
+  let statsStale = false;
+
+  // cheapStats recompute whenever the store mutates (storeVersion bumps in .on()).
+  $: cheapStats = (storeVersion, computeCheapStats(projectStore.state));
+
+  function computeCheapStats(s) {
+    if (!s) return { premises: 0, fibre_km: 0, duct_km: 0, materials_cost: 0 };
+    const premises = (s.addressPoints || []).length;
+    let fibreM = 0;
+    for (const c of [...(s.cables||[]), ...(s.spans||[]), ...(s.bundles||[]),
+                     ...(s.aerialDrops||[]), ...(s.cbtTails||[])]) {
+      fibreM += parseFloat(c.properties?.length_m || 0) || 0;
+    }
+    let ductM = 0;
+    for (const d of [...(s.ducts||[]), ...(s.dropDucts||[])]) {
+      ductM += parseFloat(d.properties?.length_m || 0) || 0;
+    }
+    let materials_cost = 0;
+    try { const { grandTotal } = buildBom(s); materials_cost = grandTotal; } catch(_) {}
+    const fibre_km = Math.round(fibreM / 100) / 10;
+    const duct_km  = Math.round(ductM / 100) / 10;
+    return { premises, fibre_km, duct_km, materials_cost };
+  }
+
+  function onValidateSummary(e) {
+    const { routed, partial, unserved } = e.detail;
+    routeStats = { routed, partial, unserved };
+    statsRouteRun = true;
+    statsStale = false;
+  }
+
+  function onValidateResults(e) {
+    validateResults = e.detail || [];
+    selectedRoute = null;
+  }
 
   let activeToolLabel = '';
   let activeCat = 'civil';
 
-  const ROUTES = [
-    {id:'ENG-CH3-TAIL-002',status:'Routed',  from:'ENG-CH3-CBT-002',to:'ENG-CH3-JNT-005',len:'0.20 km',assets:'1',fibres:'1',cap:'100%',updated:'12/05/2024',eng:'—'},
-    {id:'ENG-CH3-RTE-001', status:'Unserved',from:'ENG-CH3-JNT-001',to:'ENG-CH3-PRE-012',len:'73 m',   assets:'—',fibres:'—',cap:'0%',  updated:'—',       eng:'—'},
-    {id:'ENG-CH3-RTE-002', status:'Unserved',from:'ENG-CH3-JNT-001',to:'ENG-CH3-PRE-034',len:'57 m',   assets:'—',fibres:'—',cap:'0%',  updated:'—',       eng:'—'},
-    {id:'ENG-CH3-RTE-003', status:'Unserved',from:'ENG-CH3-JNT-002',to:'ENG-CH3-PRE-056',len:'46 m',   assets:'—',fibres:'—',cap:'0%',  updated:'—',       eng:'—'},
-    {id:'ENG-CH3-RTE-004', status:'Unserved',from:'ENG-CH3-JNT-002',to:'ENG-CH3-PRE-078',len:'78 m',   assets:'—',fibres:'—',cap:'0%',  updated:'—',       eng:'—'},
-    {id:'ENG-CH3-RTE-005', status:'Partial', from:'ENG-CH3-JNT-003',to:'ENG-CH3-PRE-090',len:'112 m',  assets:'2',fibres:'1',cap:'50%', updated:'12/05/2024',eng:'PW'},
-  ];
-  let selectedRoute = 'ENG-CH3-TAIL-002';
+  // validateResults: populated by ValidateRoutesPanel on:results event.
+  // Used by the routes drawer at the bottom of the map.
+  let validateResults = [];
+  let selectedRoute = null;
+  let routeDrawerFilter = 'all';
+  let routeDrawerSearch = '';
 
-  const ASSET_ROWS = [
-    ['ID','ENG-CH3-JNT-004',''],['Type','Splice',''],['Closure','Prysmian CMJ',''],
-    ['Has Splitter','True','ok'],['Split Ratio','1:8',''],['Cascade Lvl','2',''],
-    ['Status','In Service','ok'],['Notes','—',''],
-  ];
+  $: drawerRows = validateResults.filter(r => {
+    if (routeDrawerFilter !== 'all' && r.status.toLowerCase() !== routeDrawerFilter) return false;
+    if (routeDrawerSearch) {
+      const q = routeDrawerSearch.toLowerCase();
+      return r.uprn.toLowerCase().includes(q) || r.address.toLowerCase().includes(q);
+    }
+    return true;
+  });
 
-  function statusClass(s) { return s === 'Routed' ? 'routed' : s === 'Partial' ? 'partial' : 'unserved'; }
+  function routeStatusClass(s) { return s === 'ROUTED' ? 'routed' : s === 'PARTIAL' ? 'partial' : 'unserved'; }
   function capStyle(cap) {
     if (cap === '100%') return 'color:#4dc8ff;';
     if (cap === '0%') return 'color:#ff5555;';
     return 'color:#ffaa44;';
+  }
+
+  function onDrawerRowClick(r) {
+    selectedRoute = r.uprn;
+    if (r.flyTo) {
+      map.easeTo({ center: r.flyTo, zoom: Math.max(map.getZoom(), 17), duration: 600 });
+    } else {
+      const ap = (projectStore.state.addressPoints || []).find(a => String(a.properties?.uprn) === String(r.uprn));
+      if (ap?.geometry?.coordinates) map.easeTo({ center: ap.geometry.coordinates, zoom: Math.max(map.getZoom(), 17), duration: 600 });
+    }
+  }
+
+  function exportRoutesCsv() {
+    if (!validateResults.length) return;
+    const hdr = 'UPRN,Address,Status,Reason,Length(m)';
+    const rows = validateResults.map(r => `"${r.uprn}","${r.address.replace(/"/g,'""')}","${r.status}","${(r.reason||'').replace(/"/g,'""')}","${r.lengthM}"`);
+    const blob = new Blob([hdr + '\n' + rows.join('\n')], { type: 'text/csv' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'validate_routes.csv'; a.click();
   }
 
   // ── Map layer setup (called on first load AND after every basemap switch) ────
@@ -904,6 +978,73 @@
     rpMode = 'default';
   }
 
+  // ── fibre-count (Tier 2) ─────────────────────────────────────────────────
+  // Not a map-click tool — runs the utilisation calculation over all cables +
+  // spans, shows a panel with per-segment stats. Clicking a segment row in the
+  // panel flashes a highlight on the map. Re-runnable any time.
+
+  function onFibreCount() {
+    if (stage !== 'design') return;
+    clearTool(map);
+    clearCountHighlight(map);
+    activeToolLabel = '';
+    const result = countFibres(projectStore.state);
+    if (!result.ok) { alert(result.reason); return; }
+    fibreCountResult = result;
+    rpMode = 'fibre-count';
+  }
+
+  function onFibreCountClose() {
+    fibreCountResult = null;
+    rpMode = 'default';
+    clearCountHighlight(map);
+  }
+
+  // ── Splice Plan ──────────────────────────────────────────────────────────
+  function onSplicePlan() {
+    if (stage !== 'design') return;
+    clearTool(map);
+    activeToolLabel = '';
+    rpMode = 'splice-plan';
+  }
+
+  function onSplicePlanClose() {
+    rpMode = 'default';
+  }
+
+  // ── Bill of Materials ────────────────────────────────────────────────────
+  function onBom() {
+    if (stage !== 'design') return;
+    clearTool(map);
+    activeToolLabel = '';
+    rpMode = 'bom';
+  }
+  function onBomClose() { rpMode = 'default'; }
+
+  // ── Single Line Diagram ──────────────────────────────────────────────────
+  function onSld() {
+    if (stage !== 'design') return;
+    clearTool(map);
+    activeToolLabel = '';
+    rpMode = 'sld';
+  }
+  function onSldClose() { rpMode = 'default'; }
+
+  // ── Validate Routes ──────────────────────────────────────────────────────
+  function onValidateRoutes() {
+    if (stage !== 'design') return;
+    clearTool(map);
+    activeToolLabel = '';
+    rpMode = 'validate-routes';
+  }
+  function onValidateRoutesClose() { rpMode = 'default'; }
+
+  function onFibreCountHighlight(e) {
+    const seg = e.detail;
+    if (!seg || !seg.feature?.geometry) return;
+    activateFibreCountTool(map, seg);
+  }
+
   function onToolSelected(e) {
     const { label, category, toolId } = e.detail;
     const catLabel = category.charAt(0).toUpperCase() + category.slice(1);
@@ -928,7 +1069,7 @@
     // Tier 2
     if (toolId === 'fibre-trace')         onFibreTrace();
     if (toolId === 'fibre-assign')        onFibreAssign();
-    // if (toolId === 'fibre-count')      onFibreCount();
+    if (toolId === 'fibre-count')         onFibreCount();
   }
 
   function setView(threeD) {
@@ -986,19 +1127,28 @@
       {:else}
         <div class="stat"><div class="sv neu" style="font-size:11px;">No Project</div><div class="sl">—</div></div>
       {/if}
-      <div class="stat"><div class="sv neu">—</div><div class="sl">Premises</div></div>
-      <div class="stat"><div class="sv ok">—</div><div class="sl">Routed</div></div>
-      <div class="stat"><div class="sv wrn">—</div><div class="sl">Partial</div></div>
-      <div class="stat"><div class="sv bad">—</div><div class="sl">Unserved</div></div>
-      <div class="stat"><div class="sv neu">—</div><div class="sl">Fibre</div></div>
-      <div class="stat"><div class="sv neu">—</div><div class="sl">Duct</div></div>
-      <div class="stat" style="border-right:none;"><div class="sv neu">—</div><div class="sl">Est. Materials</div></div>
+      <div class="stat"><div class="sv neu">{cheapStats.premises || '—'}</div><div class="sl">Premises</div></div>
+      <div class="stat" title={statsStale ? 'Stale — re-run Validate Routes' : ''}>
+        <div class="sv ok">{routeStats.routed !== null ? routeStats.routed : '—'}{statsStale ? '*' : ''}</div>
+        <div class="sl">Routed</div>
+      </div>
+      <div class="stat" title={statsStale ? 'Stale — re-run Validate Routes' : ''}>
+        <div class="sv wrn">{routeStats.partial !== null ? routeStats.partial : '—'}{statsStale ? '*' : ''}</div>
+        <div class="sl">Partial</div>
+      </div>
+      <div class="stat" title={statsStale ? 'Stale — re-run Validate Routes' : ''}>
+        <div class="sv bad">{routeStats.unserved !== null ? routeStats.unserved : '—'}{statsStale ? '*' : ''}</div>
+        <div class="sl">Unserved</div>
+      </div>
+      <div class="stat"><div class="sv neu">{cheapStats.fibre_km != null ? cheapStats.fibre_km + 'km' : '—'}</div><div class="sl">Fibre</div></div>
+      <div class="stat"><div class="sv neu">{cheapStats.duct_km != null ? cheapStats.duct_km + 'km' : '—'}</div><div class="sl">Duct</div></div>
+      <div class="stat" style="border-right:none;"><div class="sv neu">{cheapStats.materials_cost ? '£' + cheapStats.materials_cost.toLocaleString('en-GB', {maximumFractionDigits:0}) : '—'}</div><div class="sl">Est. Materials</div></div>
     </div>
     <div class="tb-centre">
       <div class="tb-grp-wrap">
         <div class="tb-grp-lbl">Validation</div>
         <div class="tb-grp">
-          <button class="tb-btn hi" disabled={stage !== 'design'}>✓ Validate Routes</button>
+          <button class="tb-btn hi" disabled={stage !== 'design'} on:click={onValidateRoutes}>✓ Validate Routes</button>
           <button class="tb-btn hi" disabled={stage !== 'design'}>⚡ Design Health</button>
         </div>
       </div>
@@ -1006,9 +1156,9 @@
       <div class="tb-grp-wrap">
         <div class="tb-grp-lbl">Outputs</div>
         <div class="tb-grp">
-          <button class="tb-btn" disabled={stage !== 'design'}>Splice Plan</button>
-          <button class="tb-btn" disabled={stage !== 'design'}>SLD</button>
-          <button class="tb-btn" disabled={stage !== 'design'}>Bill of Materials</button>
+          <button class="tb-btn" disabled={stage !== 'design'} on:click={onSplicePlan}>Splice Plan</button>
+          <button class="tb-btn" disabled={stage !== 'design'} on:click={onSld}>SLD</button>
+          <button class="tb-btn" disabled={stage !== 'design'} on:click={onBom}>Bill of Materials</button>
         </div>
       </div>
     </div>
@@ -1111,7 +1261,9 @@
             pendingBuildArea = null;
             pendingCabinet = null;
             fibreTraceResult = null;
+            fibreCountResult = null;
             clearTraceHighlight(map);
+            clearCountHighlight(map);
             if (map.getSource('ba-rubber-src')) map.getSource('ba-rubber-src').setData({ type: 'FeatureCollection', features: [] });
           }}>✕</button>
         </div>
@@ -1120,35 +1272,39 @@
       <div class="routes-drawer" style="height:{drawerOpen ? '220px' : '36px'};">
         <div class="routes-handle" on:click={() => drawerOpen = !drawerOpen}>
           <span class="handle-title">Routes</span>
-          <span class="handle-count">{ROUTES.length}</span>
-          <select class="handle-filter" on:click|stopPropagation>
-            <option>All Routes</option><option>Routed</option><option>Partial</option><option>Unserved</option>
+          <span class="handle-count">{drawerRows.length}</span>
+          <select class="handle-filter" bind:value={routeDrawerFilter} on:click|stopPropagation>
+            <option value="all">All Routes</option>
+            <option value="routed">Routed</option>
+            <option value="partial">Partial</option>
+            <option value="unserved">Unserved</option>
           </select>
-          <input class="handle-search" placeholder="Search routes..." on:click|stopPropagation />
-          <button class="handle-csv" on:click|stopPropagation>↓ CSV</button>
+          <input class="handle-search" placeholder="Search routes..." bind:value={routeDrawerSearch} on:click|stopPropagation />
+          <button class="handle-csv" on:click|stopPropagation={exportRoutesCsv}>↓ CSV</button>
           <button class="handle-toggle">{drawerOpen ? '▼' : '▲'}</button>
         </div>
         {#if drawerOpen}
         <div class="routes-table-wrap">
+          {#if validateResults.length === 0}
+            <div style="padding:14px 16px;font-size:8.5px;color:#3a5a70;letter-spacing:0.04em;">Run ✓ Validate Routes to populate this table.</div>
+          {:else}
           <table class="routes-table">
             <thead><tr>
-              <th>Route ID</th><th>Status</th><th>From</th><th>To</th>
-              <th>Length</th><th>Assets</th><th>Fibres</th><th>Capacity</th>
-              <th>Updated</th><th>Engineer</th>
+              <th>Status</th><th>UPRN</th><th>Address</th><th>Length</th><th>Reason</th>
             </tr></thead>
             <tbody>
-              {#each ROUTES as r}
-                <tr class:sel={selectedRoute === r.id} on:click={() => selectedRoute = r.id}>
-                  <td style="color:#4dc8ff;font-weight:600;">{r.id}</td>
-                  <td><span class="status-pill {statusClass(r.status)}">{r.status}</span></td>
-                  <td>{r.from}</td><td>{r.to}</td>
-                  <td>{r.len}</td><td>{r.assets}</td><td>{r.fibres}</td>
-                  <td style={capStyle(r.cap)}>{r.cap}</td>
-                  <td>{r.updated}</td><td>{r.eng}</td>
+              {#each drawerRows as r}
+                <tr class:sel={selectedRoute === r.uprn} on:click={() => onDrawerRowClick(r)}>
+                  <td><span class="status-pill {routeStatusClass(r.status)}">{r.status}</span></td>
+                  <td style="color:#4dc8ff;font-weight:600;">{r.uprn}</td>
+                  <td>{r.address}</td>
+                  <td>{r.lengthM ? r.lengthM + 'm' : '—'}</td>
+                  <td style="color:#6a8fa8;">{r.reason || '—'}</td>
                 </tr>
               {/each}
             </tbody>
           </table>
+          {/if}
         </div>
         {/if}
       </div>
@@ -1257,6 +1413,40 @@
           </div>
         </div>
 
+      {:else if rpMode === 'fibre-count'}
+        <FibreCountPanel
+          result={fibreCountResult}
+          on:close={onFibreCountClose}
+          on:highlight={onFibreCountHighlight}
+        />
+
+      {:else if rpMode === 'splice-plan'}
+        <SplicePlanPanel
+          on:close={onSplicePlanClose}
+        />
+
+      {:else if rpMode === 'bom'}
+        <BomPanel on:close={onBomClose} />
+
+      {:else if rpMode === 'sld'}
+        <SldPanel on:close={onSldClose} />
+
+      {:else if rpMode === 'validate-routes'}
+        <ValidateRoutesPanel
+          on:close={onValidateRoutesClose}
+          on:summary={onValidateSummary}
+          on:results={onValidateResults}
+          on:highlight={(e) => {
+            const { flyTo, uprn } = e.detail;
+            if (flyTo) {
+              map.easeTo({ center: flyTo, zoom: Math.max(map.getZoom(), 17), duration: 600 });
+            } else {
+              const ap = (projectStore.state.addressPoints || []).find(a => String(a.properties?.uprn) === String(uprn));
+              if (ap?.geometry?.coordinates) map.easeTo({ center: ap.geometry.coordinates, zoom: Math.max(map.getZoom(), 17), duration: 600 });
+            }
+          }}
+        />
+
       {:else}
         <div class="rp-hdr">
           <span class="rp-hdr-title">Validation Summary</span>
@@ -1267,12 +1457,12 @@
         <div class="val-body">
           <div class="val-counts">
             <div class="vc"><div class="vc-val bad">0</div><div class="vc-lbl">Critical</div></div>
-            <div class="vc"><div class="vc-val bad">0</div><div class="vc-lbl">Errors</div></div>
+            <div class="vc"><div class="vc-val bad">{routeStats.partial !== null ? routeStats.partial : '—'}</div><div class="vc-lbl">Errors</div></div>
             <div class="vc"><div class="vc-val wrn">0</div><div class="vc-lbl">Warnings</div></div>
-            <div class="vc"><div class="vc-val neu">—</div><div class="vc-lbl">Total</div></div>
+            <div class="vc"><div class="vc-val neu">{cheapStats.premises || '—'}</div><div class="vc-lbl">Total</div></div>
           </div>
-          <div class="int-row"><span class="int-k">Network Integrity</span><span class="int-v">—</span></div>
-          <div class="int-bar"><div class="int-fill"></div></div>
+          <div class="int-row"><span class="int-k">Network Integrity</span><span class="int-v">{routeStats.routed !== null ? Math.round(routeStats.routed / Math.max(cheapStats.premises, 1) * 100) + '%' : '—'}</span></div>
+          <div class="int-bar"><div class="int-fill" style="width:{routeStats.routed !== null ? Math.round(routeStats.routed / Math.max(cheapStats.premises, 1) * 100) : 3}%"></div></div>
           <div class="checks-note">
             {#if stage === 'setup' || stage === 'import'}
               Create a project and import address data to begin.
@@ -1280,62 +1470,37 @@
               Draw your build area boundary to continue.
             {:else if stage === 'cabinet'}
               Place a cabinet to unlock all design tools.
+            {:else if routeStats.routed !== null && statsStale}
+              Results stale — re-run Validate Routes after design changes.
+            {:else if routeStats.routed !== null}
+              {routeStats.routed} routed · {routeStats.partial} partial · {routeStats.unserved} unserved
             {:else}
-              Run validation to see results.
+              Click ✓ Validate Routes to check fibre connectivity.
             {/if}
           </div>
         </div>
 
         <div class="outputs-section">
           <div class="outputs-lbl">Engineer Outputs</div>
-          <button class="out-btn" disabled={stage !== 'design'}>↗ Splice Plan Export</button>
-          <button class="out-btn" disabled={stage !== 'design'}>↗ Single Line Diagram</button>
-          <button class="out-btn" disabled={stage !== 'design'}>↗ Bill of Materials</button>
+          <button class="out-btn" disabled={stage !== 'design'} on:click={onValidateRoutes}>↗ Validate Fibre Routes</button>
+          <button class="out-btn" disabled={stage !== 'design'} on:click={onSplicePlan}>↗ Splice Plan Export</button>
+          <button class="out-btn" disabled={stage !== 'design'} on:click={onSld}>↗ Single Line Diagram</button>
+          <button class="out-btn" disabled={stage !== 'design'} on:click={onBom}>↗ Bill of Materials</button>
           <button class="out-btn" disabled={stage !== 'design'}>↗ Cabinet Cost Calculator</button>
         </div>
 
-        <div class="rp-splitter"></div>
+          <div class="rp-splitter"></div>
 
-        <div class="asset-section">
-          <div class="asset-hdr">
-            <div class="asset-hdr-lbl">Selected Asset</div>
-            <div class="asset-type">—</div>
-            <div class="asset-id">—</div>
-          </div>
-          <div class="asset-body">
-            {#each ASSET_ROWS as [k, v, cls]}
-              <div class="arow"><span class="ak">{k}</span><span class="av {cls}">{v}</span></div>
-            {/each}
-          </div>
-          <div class="asset-actions">
-            <button class="act-btn" disabled={stage !== 'design'}>✎ Edit</button>
-            <button class="act-btn" disabled={stage !== 'design'}>⇄ Move</button>
-            <button class="act-btn" disabled={stage !== 'design'}>✕ Delete</button>
-            <button class="act-btn" disabled={stage !== 'design'}>◎ Trace</button>
-          </div>
-
-          <div class="ri-section">
-            <div class="ri-hdr">
-              <span class="ri-lbl">Route Info</span>
-              <span class="ri-id">{selectedRoute || '—'}</span>
-              {#if selectedRoute}
-                <span class="ri-badge">{ROUTES.find(r => r.id === selectedRoute)?.status || ''}</span>
-              {/if}
+          <div class="asset-section">
+            <div class="asset-hdr">
+              <div class="asset-hdr-lbl">Selected Asset</div>
+              <div class="asset-type">—</div>
+              <div class="asset-id">—</div>
             </div>
-            {#if selectedRoute}
-              {@const r = ROUTES.find(rt => rt.id === selectedRoute)}
-              {#if r}
-                <div class="ri-from">{r.from} → {r.to}</div>
-                <div class="ri-stats">
-                  <div class="ri-stat"><div class="ri-sv {r.cap === '100%' ? 'ok' : ''}">{r.cap}</div><div class="ri-sl">Capacity</div></div>
-                  <div class="ri-stat"><div class="ri-sv">{r.len}</div><div class="ri-sl">Length</div></div>
-                  <div class="ri-stat"><div class="ri-sv">{r.fibres}</div><div class="ri-sl">Fibres</div></div>
-                  <div class="ri-stat"><div class="ri-sv">{r.assets}</div><div class="ri-sl">Assets</div></div>
-                </div>
-              {/if}
-            {/if}
+            <div class="asset-body" style="padding:12px 14px;font-size:8px;color:#3a5a70;letter-spacing:0.04em;line-height:1.8;">
+              Use Edit Asset to select and inspect an asset.
+            </div>
           </div>
-        </div>
       {/if}
     </div>
   </div>
@@ -1361,8 +1526,8 @@
   .logo-main { font-size: 12px; font-weight: 700; letter-spacing: 0.18em; color: #4dc8ff; text-shadow: 0 0 8px #00aaff66; }
   .logo-sub { font-size: 7px; color: #3a5a70; letter-spacing: 0.14em; }
   .tb-stats { display: flex; gap: 0; border-left: 1px solid #1a2d40; padding-left: 12px; }
-  .stat { display: flex; flex-direction: column; align-items: center; padding: 0 10px; border-right: 1px solid #1a2d40; }
-  .sv { font-size: 14px; font-weight: 700; line-height: 1; }
+  .stat { display: flex; flex-direction: column; align-items: center; padding: 0 7px; border-right: 1px solid #1a2d40; flex-shrink: 1; min-width: 0; }
+  .sv { font-size: 12px; font-weight: 700; line-height: 1; white-space: nowrap; }
   .sv.ok { color: #4dc8ff; }
   .sv.bad { color: #ff5555; }
   .sv.wrn { color: #ffaa44; }

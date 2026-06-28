@@ -188,12 +188,22 @@ export function traceFibre(store, uprn) {
   const queue = [entry.node];
   let found = (entry.node === popId);
 
+  // Track the deepest node reached (greatest hop-distance from the entry node).
+  // On a PARTIAL this is the break frontier — the furthest the fibre graph
+  // carries before the path home dead-ends. Mirrors v2 find_break_asset, which
+  // flies to the last asset of the longest partial path (best_partial).
+  const depth = new Map([[entry.node, 0]]);
+  let deepestNode = entry.node, deepestDepth = 0;
+
   while (queue.length && !found) {
     const cur = queue.shift();
     for (const e of (adj.get(cur) || [])) {
       if (!visited.has(e.to)) {
         visited.add(e.to);
         prev.set(e.to, { from: cur, edge: e });
+        const d = (depth.get(cur) || 0) + 1;
+        depth.set(e.to, d);
+        if (d > deepestDepth) { deepestDepth = d; deepestNode = e.to; }
         if (e.to === popId) { found = true; break; }
         queue.push(e.to);
       }
@@ -230,12 +240,35 @@ export function traceFibre(store, uprn) {
                `to the cabinet. Check the cables between that joint and the POP are drawn and snapped.`;
     }
 
+    // Break asset: walk back from the deepest-reached node toward the entry
+    // until a node resolves to a real feature with coordinates. This mirrors v2
+    // find_break_asset, which walks the longest partial path from its end
+    // backwards and returns the first asset that resolves to geometry. Preferring
+    // the deepest node points the user at the furthest live point of the build —
+    // the joint/CBT/pole where the route actually dies — not the premise.
+    let breakNode = null;
+    {
+      let bid = deepestNode;
+      const guard = new Set();
+      while (bid != null && !guard.has(bid)) {
+        guard.add(bid);
+        const n = resolveNode(store, bid);
+        if (n && Array.isArray(n.coords) && n.coords.length >= 2) {
+          breakNode = { id: String(bid), type: n.type, coords: n.coords };
+          break;
+        }
+        const p = prev.get(bid);
+        bid = p ? p.from : null;
+      }
+    }
+
     return {
       status: STATUS_PARTIAL, reason, uprn, entry,
       nodes: [entry.node], edges: [],
       hops: buildHops(store, entry, [entry.node], []),
       lengthM: lengthOf(entry.feature),
       reached: reachedTypes,
+      breakNode,   // { id, type, coords } | null — fly-to target for the UI
     };
   }
 
