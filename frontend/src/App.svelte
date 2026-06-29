@@ -22,6 +22,7 @@
   import BuildAreaForm from './BuildAreaForm.svelte';
   import { projectStore } from './projectStore.js';
   import { assignFibres } from './fibreAssign.js';
+  import { docsUrl, toolTip } from './toolDocs.js';
   import { countFibres } from './fibreCount.js';
   import { downloadSplicePlan, generateSplicePlan, downloadAllSplicePlans } from './splicePlan.js';
   import AssetEditPanel from './AssetEditPanel.svelte';
@@ -45,8 +46,11 @@
     activateSelectTool, activateMovePointTool,
     activateFibreTraceTool, clearTraceHighlight,
     activateFibreCountTool, clearCountHighlight,
-    applyCookieCutter, clearTool
+    applyCookieCutter, clearTool, getPoleLayer
   } from './mapTools.js';
+
+  export let clerk = null;
+  export let user  = null;
 
   const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY;
 
@@ -141,11 +145,43 @@
   }
 
   function onValidateResults(e) {
-    validateResults = e.detail || [];
-    selectedRoute = null;
+  validateResults = e.detail || [];
+  selectedRoute = null;
+
+  // Build the set of ROUTED UPRNs.
+  const routedUprns = new Set(
+    validateResults
+      .filter(r => r.status === 'ROUTED')
+      .map(r => String(r.uprn))
+  );
+
+  // Seed live nodes from CBTs that have at least one ROUTED aerial drop.
+  const liveNodeIds = new Set();
+  for (const drop of (projectStore.state.aerialDrops || [])) {
+    if (routedUprns.has(String(drop.properties.uprn || ''))) {
+      if (drop.properties.from_cbt) liveNodeIds.add(drop.properties.from_cbt);
+    }
   }
 
+  // Flood fill across spans: propagate liveness through pole-to-pole connections.
+  // Stops when no new nodes are added in a full pass.
+  const spans = projectStore.state.spans || [];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const span of spans) {
+      const f = span.properties.from_node;
+      const t = span.properties.to_node;
+      if (liveNodeIds.has(f) && !liveNodeIds.has(t)) { liveNodeIds.add(t); changed = true; }
+      if (liveNodeIds.has(t) && !liveNodeIds.has(f)) { liveNodeIds.add(f); changed = true; }
+    }
+  }
+
+  getPoleLayer()?.setLiveState(routedUprns, liveNodeIds);
+}
+
   let activeToolLabel = '';
+  let activeToolId    = '';   // tracks toolId of the active tool for the ⓘ help link
   let activeCat = 'civil';
 
   // validateResults: populated by ValidateRoutesPanel on:results event.
@@ -1087,6 +1123,7 @@
     const { label, category, toolId } = e.detail;
     const catLabel = category.charAt(0).toUpperCase() + category.slice(1);
     activeToolLabel = `${catLabel} — ${label}`;
+    activeToolId    = toolId;
     if (toolId === 'civil-chamber')       onPlaceChamber();
     if (toolId === 'civil-duct')          onPlaceDuct();
     if (toolId === 'civil-drop-duct')     onPlaceDropDuct();
@@ -1123,6 +1160,9 @@
     }
   }
 
+  let userMenuOpen = false;
+  function signOut() { userMenuOpen = false; clerk?.signOut(); }
+
   let showOpen = false;
   let projectList = [];
 
@@ -1146,7 +1186,7 @@
   }
 </script>
 
-<svelte:window on:click={() => showOpen = false} />
+<svelte:window on:click={() => { showOpen = false; userMenuOpen = false; }} />
 
 <div class="screen">
 
@@ -1227,6 +1267,20 @@
           </div>
         {/if}
       </div>
+      {#if user}
+        <div class="tb-avatar-wrap">
+          <button class="tb-avatar" on:click|stopPropagation={() => userMenuOpen = !userMenuOpen} title="Account">
+            {(user.firstName?.[0] ?? user.emailAddresses?.[0]?.emailAddress?.[0] ?? '?').toUpperCase()}
+          </button>
+          {#if userMenuOpen}
+            <div class="tb-user-menu" on:click|stopPropagation role="menu" tabindex="-1">
+              <p class="tum-email">{user.emailAddresses?.[0]?.emailAddress ?? ''}</p>
+              <hr class="tum-hr" />
+              <button class="tum-signout" on:click={signOut}>Sign out</button>
+            </div>
+          {/if}
+        </div>
+      {/if}
     </div>
   </div>
 
@@ -1292,9 +1346,20 @@
         <div class="active-chip">
           <div class="chip-dot"></div>
           <span>{activeToolLabel}</span>
+          {#if activeToolId}
+            <a
+              href={docsUrl(activeToolId)}
+              target="_blank"
+              rel="noopener"
+              class="chip-help"
+              title={toolTip(activeToolId)}
+              on:click|stopPropagation
+            >ⓘ</a>
+          {/if}
           <button class="chip-cancel" on:click={() => {
             clearTool(map);
             activeToolLabel = '';
+            activeToolId    = '';
             rpMode = 'default';
             pendingBuildArea = null;
             pendingCabinet = null;
@@ -1675,6 +1740,8 @@
   #map { width: 100%; height: 100%; }
   .active-chip { position: absolute; bottom: 60px; left: 50%; transform: translateX(-50%); background: #0d1520ee; border: 1px solid #00aaff44; border-radius: 20px; padding: 7px 18px 7px 12px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: #4dc8ff; display: flex; align-items: center; gap: 8px; white-space: nowrap; z-index: 5; }
   .chip-dot { width: 6px; height: 6px; border-radius: 50%; background: #4dc8ff; box-shadow: 0 0 6px #00aaff; animation: pulse 1.5s ease-in-out infinite; }
+  .chip-help { color: #4dc8ff55; font-size: 13px; text-decoration: none; padding: 0 2px; line-height: 1; transition: color 0.12s; }
+  .chip-help:hover { color: #4dc8ff; }
   .chip-cancel { background: transparent; border: none; color: #3a5a70; font-size: 11px; cursor: pointer; padding: 0 0 0 8px; line-height: 1; }
   .chip-cancel:hover { color: #ff5555; }
   @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: .3 } }
@@ -1792,4 +1859,13 @@
   .fa-actions { padding: 10px 14px; border-top: 1px solid #1a2d40; flex-shrink: 0; }
   .fa-done { width: 100%; background: #00aaff14; border: 1px solid #00aaff44; color: #4dc8ff; font-family: 'Courier New', monospace; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; padding: 8px; border-radius: 4px; cursor: pointer; }
   .fa-done:hover { background: #00aaff22; }
+  /* ── Topbar account avatar ── */
+  .tb-avatar-wrap { position: relative; }
+  .tb-avatar { width: 28px; height: 28px; border-radius: 50%; background: rgba(77,200,255,0.1); border: 1px solid rgba(77,200,255,0.28); color: #4dc8ff; font-size: 11px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.15s, border-color 0.15s; padding: 0; }
+  .tb-avatar:hover { background: rgba(77,200,255,0.2); border-color: rgba(77,200,255,0.5); }
+  .tb-user-menu { position: absolute; top: calc(100% + 6px); right: 0; background: rgba(8,14,28,0.97); border: 1px solid rgba(77,200,255,0.18); border-radius: 8px; padding: 10px 12px; min-width: 190px; z-index: 200; box-shadow: 0 8px 28px rgba(0,0,0,0.6); backdrop-filter: blur(16px); font-family: 'Inter', ui-sans-serif, sans-serif; }
+  .tum-email { font-size: 10px; color: rgba(255,255,255,0.38); margin: 0 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tum-hr { border: none; border-top: 1px solid rgba(77,200,255,0.1); margin: 0 0 8px; }
+  .tum-signout { width: 100%; padding: 6px 8px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 5px; color: rgba(255,255,255,0.68); font-size: 12px; font-family: inherit; cursor: pointer; text-align: left; transition: background 0.15s, color 0.15s; }
+  .tum-signout:hover { background: rgba(255,80,80,0.1); border-color: rgba(255,80,80,0.25); color: #ff9090; }
 </style>
