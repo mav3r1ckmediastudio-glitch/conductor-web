@@ -1,9 +1,29 @@
-import { mount } from 'svelte'
-import './app.css'
-import App from './App.svelte'
+import { mount } from 'svelte';
+import './app.css';
+import ClerkGate from './ClerkGate.svelte';
+import { Clerk } from '@clerk/clerk-js';
 
-const app = mount(App, {
+const clerk = new Clerk(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
+
+await clerk.load({ navigate: () => {} });
+
+// Only process the OAuth callback when Clerk's handshake params are
+// actually in the URL — otherwise normal loads would re-trigger it
+// and loop. After processing, strip the params so a refresh is clean.
+const params = new URLSearchParams(window.location.search);
+const isCallback = [...params.keys()].some((k) => k.startsWith('__clerk'));
+
+if (isCallback) {
+  try {
+    await clerk.handleRedirectCallback();
+  } catch (e) {
+    console.error('Clerk callback error:', e);
+  }
+  // Remove Clerk params from the URL without reloading
+  window.history.replaceState({}, '', window.location.pathname);
+}
+
+mount(ClerkGate, {
   target: document.getElementById('app'),
-})
-
-export default app
+  props: { clerk },
+});
