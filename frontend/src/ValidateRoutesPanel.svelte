@@ -1,10 +1,16 @@
 <script>
   // ValidateRoutesPanel.svelte — right panel for rpMode === 'validate-routes'.
-  // Runs validateAllRoutes over every address point, shows a result table
-  // (status / UPRN / address / reason / route length). Click a row to highlight
+  // Runs traceFibre over every address point, shows a result table
+  // (status / address / length / optical loss+margin). Click a row to highlight
   // that premise on the map. For PARTIAL rows, flies to the last resolvable node
   // in the BFS path (the break-point asset) rather than the premise coordinate.
-  // Emits 'close' and 'highlight' events.
+  // Emits 'close', 'summary', and 'highlight' events.
+  //
+  // OPTICAL COLUMNS: traceFibre() now returns result.optical for ROUTED rows.
+  //   loss_db   — total path loss in dB
+  //   margin_db — budget margin (positive = headroom, negative = fail)
+  //   link_pass — bool: margin >= 0
+  // These are carried through to each row and displayed as compact badges.
 
   import { createEventDispatcher } from 'svelte';
   import { projectStore } from './projectStore.js';
@@ -22,12 +28,16 @@
   let selected  = null;
   let cancelled = false;
 
-  $: rows = filterRows(results, filter);
+  // Optical filter: 'all' | 'fail' (show only optical budget failures among ROUTED)
+  let optFilter = 'all';
 
-  function filterRows(r, f) {
+  $: rows = filterRows(results, filter, optFilter);
+
+  function filterRows(r, f, of) {
     if (!r) return [];
-    if (f === 'all') return r;
-    return r.filter(x => x.status.toLowerCase() === f);
+    let out = f === 'all' ? r : r.filter(x => x.status.toLowerCase() === f);
+    if (of === 'fail') out = out.filter(x => x.linkPass === false);
+    return out;
   }
 
   function statusClass(s) {
@@ -50,6 +60,7 @@
   async function onRun() {
     running = true; cancelled = false;
     progress = 0; total = 0; results = null; summary = null; selected = null;
+    optFilter = 'all';
 
     // Yield to let Svelte repaint before the BFS loop blocks the thread.
     await new Promise(r => setTimeout(r, 20));
@@ -59,7 +70,7 @@
 
     if (!total) {
       results = [];
-      summary = { premises: 0, routed: 0, partial: 0, unserved: 0 };
+      summary = { premises: 0, routed: 0, partial: 0, unserved: 0, optFail: 0 };
       running = false;
       return;
     }
@@ -68,7 +79,7 @@
     const CHUNK = 50;
     const pts   = store.addressPoints;
     const res   = [];
-    const sum   = { premises: total, routed: 0, partial: 0, unserved: 0 };
+    const sum   = { premises: total, routed: 0, partial: 0, unserved: 0, optFail: 0 };
 
     for (let i = 0; i < pts.length; i += CHUNK) {
       if (cancelled) break;
@@ -78,11 +89,18 @@
         const addr = String(ap.properties?.address || ap.properties?.postcode || uprn);
         let r;
         try { r = traceFibre(store, uprn); }
-        catch (e) { r = { status: 'PARTIAL', reason: `Error: ${e.message}`, lengthM: 0, breakNode: null }; }
-        const { status, reason, lengthM, breakNode } = r;
+        catch (e) { r = { status: 'PARTIAL', reason: `Error: ${e.message}`, lengthM: 0, breakNode: null, optical: null }; }
+
+        const { status, reason, lengthM, breakNode, optical } = r;
         if      (status === STATUS_OK)      sum.routed++;
         else if (status === STATUS_PARTIAL) sum.partial++;
         else                                sum.unserved++;
+
+        // Optical stats (ROUTED only; null for PARTIAL/UNSERVED)
+        const lossDb   = optical?.loss_db   ?? null;
+        const marginDb = optical?.margin_db ?? null;
+        const linkPass = optical?.link_pass ?? null;
+        if (linkPass === false) sum.optFail++;
 
         // Precompute the fly-to target: break-point asset for PARTIAL (from
         // traceFibre.breakNode), else the premise coordinate. Stored on the row
@@ -99,6 +117,7 @@
           lengthM: Math.round(lengthM || 0),
           breakId: breakNode?.id || null,
           flyTo,
+          lossDb, marginDb, linkPass,
         });
         progress = i + res.length % CHUNK;
       }
@@ -122,6 +141,9 @@
     selected = row.uprn;
     dispatch('highlight', row); // row.flyTo already set (break-point or premise)
   }
+
+  // Count optical failures in current result set (for filter badge)
+  $: optFailCount = results ? results.filter(r => r.linkPass === false).length : 0;
 </script>
 
 <div class="vrp">
@@ -134,19 +156,29 @@
   <!-- Summary bar -->
   {#if summary}
     <div class="vrp-summary">
-      <div class="vrp-s ok"  on:click={() => filter='routed'}   class:active={filter==='routed'}   role="button" tabindex="0" on:keydown={(e)=>e.key==='Enter'&&(filter='routed')}>
+      <div class="vrp-s ok"  on:click={() => { filter='routed';   optFilter='all'; }} class:active={filter==='routed'}   role="button" tabindex="0" on:keydown={(e)=>e.key==='Enter'&&(filter='routed')}>
         <span class="vrp-sv">{summary.routed}</span><span class="vrp-sl">Routed</span>
       </div>
-      <div class="vrp-s wrn" on:click={() => filter='partial'}  class:active={filter==='partial'}  role="button" tabindex="0" on:keydown={(e)=>e.key==='Enter'&&(filter='partial')}>
+      <div class="vrp-s wrn" on:click={() => { filter='partial';  optFilter='all'; }} class:active={filter==='partial'}  role="button" tabindex="0" on:keydown={(e)=>e.key==='Enter'&&(filter='partial')}>
         <span class="vrp-sv">{summary.partial}</span><span class="vrp-sl">Partial</span>
       </div>
-      <div class="vrp-s bad" on:click={() => filter='unserved'} class:active={filter==='unserved'} role="button" tabindex="0" on:keydown={(e)=>e.key==='Enter'&&(filter='unserved')}>
+      <div class="vrp-s bad" on:click={() => { filter='unserved'; optFilter='all'; }} class:active={filter==='unserved'} role="button" tabindex="0" on:keydown={(e)=>e.key==='Enter'&&(filter='unserved')}>
         <span class="vrp-sv">{summary.unserved}</span><span class="vrp-sl">Unserved</span>
       </div>
-      <div class="vrp-s neu" on:click={() => filter='all'} class:active={filter==='all'} role="button" tabindex="0" on:keydown={(e)=>e.key==='Enter'&&(filter='all')}>
+      <div class="vrp-s neu" on:click={() => { filter='all'; optFilter='all'; }} class:active={filter==='all' && optFilter==='all'} role="button" tabindex="0" on:keydown={(e)=>e.key==='Enter'&&(filter='all')}>
         <span class="vrp-sv">{summary.premises}</span><span class="vrp-sl">All</span>
       </div>
     </div>
+    <!-- Optical budget filter row (only shown after a run with results) -->
+    {#if optFailCount > 0}
+      <div class="vrp-opt-bar">
+        <span class="vrp-opt-lbl">⚠ {optFailCount} optical budget fail{optFailCount !== 1 ? 's' : ''}</span>
+        <button class="vrp-opt-btn" class:active={optFilter==='fail'}
+          on:click={() => { filter='all'; optFilter = optFilter === 'fail' ? 'all' : 'fail'; }}>
+          {optFilter === 'fail' ? 'Show all' : 'Show fails only'}
+        </button>
+      </div>
+    {/if}
   {/if}
 
   <!-- Progress -->
@@ -165,13 +197,13 @@
     {#if results === null && !running}
       <div class="vrp-intro">
         Traces every premise to the cabinet via bundles/drops → joints → cables.
-        Reports ROUTED, PARTIAL (path breaks), or UNSERVED (not connected yet).
+        Reports ROUTED (with optical power budget), PARTIAL (path breaks), or UNSERVED (not connected yet).
         Click a row to fly to that premise. PARTIAL rows fly to the break-point asset.
       </div>
     {:else if results && results.length === 0}
       <div class="vrp-empty">No address points in the project yet.</div>
     {:else if rows.length === 0}
-      <div class="vrp-empty">No {filter} premises.</div>
+      <div class="vrp-empty">No {optFilter === 'fail' ? 'optical budget failures' : filter} premises.</div>
     {:else}
       {#each rows as row}
         <div class="vrp-row {statusClass(row.status)}" class:sel={selected===row.uprn}
@@ -180,12 +212,24 @@
           <div class="vrp-row-top">
             <span class="vrp-icon {statusClass(row.status)}">{statusIcon(row.status)}</span>
             <span class="vrp-addr">{row.address || row.uprn}</span>
+            <!-- Optical budget badge (ROUTED rows only) -->
+            {#if row.lossDb !== null}
+              <span class="vrp-opt-badge" class:pass={row.linkPass} class:fail={!row.linkPass}
+                    title="Loss: {row.lossDb.toFixed(2)} dB | Margin: {row.marginDb >= 0 ? '+' : ''}{row.marginDb.toFixed(2)} dB">
+                {row.lossDb.toFixed(1)}dB&nbsp;{row.linkPass ? '✓' : '✗'}
+              </span>
+            {/if}
             {#if row.lengthM}
               <span class="vrp-len">{row.lengthM}m</span>
             {/if}
           </div>
           {#if row.status !== 'ROUTED'}
             <div class="vrp-reason">{row.reason}</div>
+          {:else if row.linkPass === false}
+            <div class="vrp-reason fail-reason">
+              Budget fail — margin {row.marginDb >= 0 ? '+' : ''}{row.marginDb?.toFixed(2)} dB.
+              Check splitter count and route length.
+            </div>
           {/if}
         </div>
       {/each}
@@ -223,6 +267,13 @@
   .vrp-sv { display: block; font-size: 18px; font-weight: 700; line-height: 1; }
   .vrp-sl { display: block; font-size: 6.5px; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 3px; opacity: 0.7; }
 
+  /* Optical filter bar */
+  .vrp-opt-bar { display: flex; align-items: center; justify-content: space-between; padding: 5px 12px; background: #06080c; border-bottom: 1px solid #1a2d4033; flex-shrink: 0; }
+  .vrp-opt-lbl { font-size: 8px; color: #f87171; letter-spacing: 0.04em; }
+  .vrp-opt-btn { font-size: 7.5px; color: #6a8fa8; background: #0a1018; border: 1px solid #1a2d40; border-radius: 3px; padding: 3px 8px; cursor: pointer; font-family: 'Courier New', monospace; letter-spacing: 0.04em; }
+  .vrp-opt-btn:hover { color: #a0c4d8; border-color: #2a4a60; }
+  .vrp-opt-btn.active { color: #f87171; border-color: #f8717144; }
+
   .vrp-prog-wrap { padding: 8px 12px; display: flex; align-items: center; gap: 8px; flex-shrink: 0; border-bottom: 1px solid #1a2d4033; }
   .vrp-prog-bar { flex: 1; height: 6px; background: #0d1824; border-radius: 3px; overflow: hidden; }
   .vrp-prog-fill { height: 6px; background: #4dc8ff; border-radius: 3px; transition: width 0.2s; }
@@ -243,8 +294,15 @@
   .vrp-icon.wrn { color: #fbbf24; }
   .vrp-icon.bad { color: #f87171; }
   .vrp-addr { font-size: 8.5px; color: #a0c4d8; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Optical badge: compact loss dB + PASS/FAIL tick */
+  .vrp-opt-badge { font-size: 7.5px; font-weight: 600; flex-shrink: 0; padding: 1px 5px; border-radius: 3px; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+  .vrp-opt-badge.pass { color: #34d399; background: #34d39914; }
+  .vrp-opt-badge.fail { color: #f87171; background: #f8717114; }
+
   .vrp-len { font-size: 7.5px; color: #3a5a70; flex-shrink: 0; }
   .vrp-reason { font-size: 7.5px; color: #6a8fa8; line-height: 1.5; margin-top: 3px; padding-left: 20px; }
+  .vrp-reason.fail-reason { color: #f8717188; }
 
   .vrp-actions { padding: 10px 14px; border-top: 1px solid #1a2d40; display: flex; gap: 6px; flex-shrink: 0; }
   .vrp-run { flex: 1; background: #00aaff14; border: 1px solid #00aaff44; color: #4dc8ff; font-family: 'Courier New', monospace; font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase; padding: 8px; border-radius: 4px; cursor: pointer; }

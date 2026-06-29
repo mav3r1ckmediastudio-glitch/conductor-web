@@ -2886,3 +2886,66 @@ export function activateFibreTraceTool(map, onResult) {
   _activeTool = { cleanup };
   return null;
 }
+
+// ── FIBRE COUNT HIGHLIGHT ─────────────────────────────────────────────────────
+// When the user clicks a segment row in the FibreCountPanel, flash it on the map.
+// Uses a dedicated source + layers (separate from trace) so both tools can
+// coexist and neither wipes the other's overlay. The highlight auto-clears on
+// the next click or when clearCountHighlight() is called.
+//
+// Source: 'count-line-src' (geojson line)
+// Layers: 'count-glow' (wide blurred), 'count-core' (thin white)
+//
+// Colour: amber (#ffaa44) to distinguish from the cyan trace highlight.
+
+function ensureCountLayers(map) {
+  if (map.getSource('count-line-src')) return;
+  map.addSource('count-line-src', { type: 'geojson', data: emptyFC() });
+  map.addLayer({
+    id: 'count-glow',
+    type: 'line',
+    source: 'count-line-src',
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: {
+      'line-color': '#ffaa44',
+      'line-width': ['interpolate', ['linear'], ['zoom'], 10, 8, 16, 14, 20, 18],
+      'line-blur': 7,
+      'line-opacity': 0.55,
+    },
+  });
+  map.addLayer({
+    id: 'count-core',
+    type: 'line',
+    source: 'count-line-src',
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: {
+      'line-color': '#ffffff',
+      'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.5, 16, 2.5, 20, 3.5],
+      'line-opacity': 0.90,
+    },
+  });
+}
+
+export function clearCountHighlight(map) {
+  if (map?.getSource && map.getSource('count-line-src')) {
+    map.getSource('count-line-src').setData(emptyFC());
+  }
+}
+
+// Flash a segment highlight and fly to it.
+// seg: a segment object from countFibres() — has .feature (GeoJSON LineString).
+export function activateFibreCountTool(map, seg) {
+  if (!map || !seg?.feature?.geometry) return;
+  ensureCountLayers(map);
+  map.getSource('count-line-src').setData({
+    type: 'FeatureCollection',
+    features: [seg.feature],
+  });
+
+  // Fly to the segment's centroid so it's in view.
+  const coords = seg.feature.geometry.coordinates;
+  if (coords && coords.length) {
+    const mid = coords[Math.floor(coords.length / 2)];
+    map.easeTo({ center: mid, duration: 600 });
+  }
+}

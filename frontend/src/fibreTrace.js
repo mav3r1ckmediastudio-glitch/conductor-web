@@ -13,6 +13,17 @@
 // NO map / DOM dependencies. `store` is projectStore.state (or any object with
 // the same arrays). Everything is a pure function of the store + a uprn, so the
 // engine is unit-testable on its own.
+//
+// OPTICAL BUDGET
+// The ROUTED return value includes an `optical` object computed via calculateRouteBudget()
+// from optical.js — matching the loss/margin figures the v2 plugin shows in its Fibre
+// Trace popup and Validate Routes dialog. PARTIAL/UNSERVED returns carry optical: null
+// (no complete path = no meaningful budget).
+// Splice count = JOINTs + CBTs traversed (poles are structural, no splice closure).
+// Splitter ratios are collected from: has_splitter joints (declared ratio) + every CBT
+// (always a 1:8 splitter by default, or declared split_ratio if set).
+
+import { calculateRouteBudget, defaultOptical } from './optical.js';
 
 export const STATUS_OK       = 'ROUTED';
 export const STATUS_PARTIAL  = 'PARTIAL';
@@ -149,6 +160,48 @@ function resolveEntry(store, uprn) {
   return null;
 }
 
+// ── Optical budget helper ────────────────────────────────────────────────────
+// Given a completed nodePath (entry.node … popId) and the store, derive the
+// splice count and splitter ratios for calculateRouteBudget().
+//
+// Splice count: every JOINT and CBT in the path (excluding the POP) is a
+// fusion-splice closure. Poles are structural pass-throughs — no splice.
+//
+// Splitters: joints where has_splitter is set contribute their declared ratio
+// (or '1:8' if unset); CBTs always contribute their split_ratio (default '1:8')
+// — they are, by definition, terminal splitters.
+//
+// fibreLengthM is passed in unrounded (the float accumulator from trace).
+function computeOptical(store, nodePath, popId, fibreLengthM) {
+  let spliceCount = 0;
+  const splitters = [];
+
+  for (const nodeId of nodePath) {
+    if (nodeId === popId) continue; // POP adds connector loss (already in calculateRouteBudget)
+
+    const nodeInfo = resolveNode(store, nodeId);
+    if (!nodeInfo) continue;
+
+    if (nodeInfo.type === 'JOINT') {
+      spliceCount++;
+      const j = (store.joints || []).find(jf => String(jf.properties.joint_id) === nodeId);
+      if (j) {
+        const hs = j.properties.has_splitter;
+        if (hs === true || hs === 1 || hs === 'true') {
+          splitters.push(String(j.properties.split_ratio || '1:8'));
+        }
+      }
+    } else if (nodeInfo.type === 'CBT') {
+      spliceCount++;
+      const c = (store.cbts || []).find(cf => String(cf.properties.cbt_id) === nodeId);
+      splitters.push(String(c?.properties?.split_ratio || '1:8'));
+    }
+    // POLE nodes: structural pass-through, no splice closure.
+  }
+
+  return calculateRouteBudget(fibreLengthM, spliceCount, splitters, defaultOptical());
+}
+
 // ── Main trace ───────────────────────────────────────────────────────────────
 // Returns:
 //   {
@@ -160,6 +213,8 @@ function resolveEntry(store, uprn) {
 //     edges,             // ordered edge objects { to, feature, collection }
 //     hops,              // display rows: { kind, label, id }
 //     lengthM,           // total traced length (entry + every edge), metres
+//     optical,           // { loss_db, budget_db, margin_db, link_pass, breakdown } | null
+//                        // null for PARTIAL/UNSERVED (no complete path = no budget)
 //   }
 export function traceFibre(store, uprn) {
   const cabinet = store.cabinet;
@@ -167,6 +222,7 @@ export function traceFibre(store, uprn) {
     return {
       status: STATUS_UNSERVED, reason: 'No cabinet placed.',
       uprn, entry: null, nodes: [], edges: [], hops: [], lengthM: 0,
+      optical: null,
     };
   }
   const popId = String(cabinet.properties.pop_id);
@@ -177,6 +233,7 @@ export function traceFibre(store, uprn) {
       status: STATUS_UNSERVED,
       reason: 'No bundle or aerial drop connects this premise to the network.',
       uprn, entry: null, nodes: [], edges: [], hops: [], lengthM: 0,
+      optical: null,
     };
   }
 
@@ -269,6 +326,7 @@ export function traceFibre(store, uprn) {
       lengthM: lengthOf(entry.feature),
       reached: reachedTypes,
       breakNode,   // { id, type, coords } | null — fly-to target for the UI
+      optical: null,
     };
   }
 
@@ -289,11 +347,18 @@ export function traceFibre(store, uprn) {
   let lengthM = lengthOf(entry.feature);
   for (const e of edgePath) lengthM += lengthOf(e.feature);
 
+  // ── Optical power budget ───────────────────────────────────────────────────
+  // Derived from the completed nodePath: splice count (JOINT + CBT nodes, not
+  // poles) and splitter ratios (declared on joints with has_splitter, default
+  // 1:8 for CBTs). Uses the unrounded lengthM for precision.
+  const optical = computeOptical(store, nodePath, popId, lengthM);
+
   return {
     status: STATUS_OK, reason: 'Routed to cabinet.', uprn, entry,
     nodes: nodePath, edges: edgePath,
     hops: buildHops(store, entry, nodePath, edgePath),
     lengthM: Math.round(lengthM),
+    optical,
   };
 }
 
@@ -329,6 +394,7 @@ function buildHops(store, entry, nodePath, edgePath) {
       else if (coll === 'cables') { label = 'Cable';       id = ef.properties.cable_id || ''; }
       else if (coll === 'riser')  { label = 'Pole Riser';  id = ''; }
       else if (coll === 'bridge') { label = 'Chamber';     id = ''; }
+      else if (coll === 'cbttail'){ label = 'CBT Tail';    id = ef.properties.tail_id || ''; }
       else                        { label = 'Link';        id = ''; }
       hops.push({ kind: 'edge', label, id });
     }

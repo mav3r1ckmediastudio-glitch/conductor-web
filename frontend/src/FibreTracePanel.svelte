@@ -2,7 +2,8 @@
   import { createEventDispatcher } from 'svelte';
 
   // result shape (from fibreTrace.js traceFibre):
-  //   { status, reason, uprn, entry, nodes, edges, hops[], lengthM }
+  //   { status, reason, uprn, entry, nodes, edges, hops[], lengthM, optical }
+  // optical (ROUTED only): { loss_db, budget_db, margin_db, link_pass, breakdown }
   export let result = null;
 
   const dispatch = createEventDispatcher();
@@ -15,10 +16,11 @@
 
   $: meta = result ? (STATUS_META[result.status] || STATUS_META.UNSERVED) : null;
 
-  // Address lookup is best-effort — the engine only carries the uprn.
   $: lengthLabel = result && result.lengthM
     ? (result.lengthM >= 1000 ? (result.lengthM / 1000).toFixed(2) + ' km' : result.lengthM + ' m')
     : '—';
+
+  $: opt = result?.optical ?? null;
 
   // Hop glyphs per kind.
   const HOP_GLYPH = {
@@ -43,6 +45,11 @@
     <div class="ft-status {meta.cls}">
       <span class="ft-glyph">{meta.glyph}</span>
       <span class="ft-status-lbl">{meta.label}</span>
+      {#if opt}
+        <span class="ft-budget-badge" class:pass={opt.link_pass} class:fail={!opt.link_pass}>
+          {opt.link_pass ? 'PASS' : 'FAIL'}
+        </span>
+      {/if}
     </div>
 
     <div class="ft-meta">
@@ -50,6 +57,48 @@
       <div class="ft-row"><span class="ft-k">Hops</span><span class="ft-v">{result.nodes?.length ?? 0}</span></div>
       <div class="ft-row"><span class="ft-k">Length</span><span class="ft-v">{lengthLabel}</span></div>
     </div>
+
+    <!-- ── Optical power budget ────────────────────────────────────────── -->
+    {#if opt}
+      <div class="ft-opt-section">
+        <div class="ft-opt-hdr">Optical Power Budget</div>
+        <div class="ft-opt-grid">
+          <div class="ft-opt-row">
+            <span class="ft-opt-k">Fibre loss</span>
+            <span class="ft-opt-v">{opt.breakdown.fibre_db.toFixed(2)} dB</span>
+          </div>
+          <div class="ft-opt-row">
+            <span class="ft-opt-k">Splices ×{opt.breakdown.splice_count}</span>
+            <span class="ft-opt-v">{opt.breakdown.splice_db.toFixed(2)} dB</span>
+          </div>
+          <div class="ft-opt-row">
+            <span class="ft-opt-k">Splitter{opt.breakdown.splitters.length !== 1 ? 's' : ''} ({opt.breakdown.splitters.join(', ') || 'none'})</span>
+            <span class="ft-opt-v">{opt.breakdown.splitter_db.toFixed(2)} dB</span>
+          </div>
+          <div class="ft-opt-row">
+            <span class="ft-opt-k">Connectors</span>
+            <span class="ft-opt-v">{opt.breakdown.connector_db.toFixed(2)} dB</span>
+          </div>
+          <div class="ft-opt-divider"></div>
+          <div class="ft-opt-row total">
+            <span class="ft-opt-k">Total loss</span>
+            <span class="ft-opt-v">{opt.loss_db.toFixed(2)} dB</span>
+          </div>
+          <div class="ft-opt-row">
+            <span class="ft-opt-k">Budget (B+, −3dB)</span>
+            <span class="ft-opt-v">{opt.budget_db.toFixed(2)} dB</span>
+          </div>
+          <div class="ft-opt-row" class:pass-row={opt.link_pass} class:fail-row={!opt.link_pass}>
+            <span class="ft-opt-k">Margin</span>
+            <span class="ft-opt-v margin" class:pass={opt.link_pass} class:fail={!opt.link_pass}>
+              {opt.margin_db >= 0 ? '+' : ''}{opt.margin_db.toFixed(2)} dB
+            </span>
+          </div>
+        </div>
+      </div>
+    {:else if result.status === 'PARTIAL'}
+      <div class="ft-opt-na">No optical budget — route does not reach cabinet.</div>
+    {/if}
 
     {#if result.reason}
       <div class="ft-reason {meta.cls}">{result.reason}</div>
@@ -99,12 +148,35 @@
   .ft-status.ok  .ft-glyph, .ft-status.ok  .ft-status-lbl { color: #4dc8ff; }
   .ft-status.wrn .ft-glyph, .ft-status.wrn .ft-status-lbl { color: #ffaa44; }
   .ft-status.bad .ft-glyph, .ft-status.bad .ft-status-lbl { color: #ff5555; }
-  .ft-status-lbl { font-size: 13px; font-weight: 700; letter-spacing: 0.12em; }
+  .ft-status-lbl { font-size: 13px; font-weight: 700; letter-spacing: 0.12em; flex: 1; }
+
+  /* PASS / FAIL badge in the status bar */
+  .ft-budget-badge { font-size: 8px; font-weight: 700; letter-spacing: 0.12em; padding: 2px 7px; border-radius: 3px; }
+  .ft-budget-badge.pass { background: #34d39922; border: 1px solid #34d39966; color: #34d399; }
+  .ft-budget-badge.fail { background: #f8717122; border: 1px solid #f8717166; color: #f87171; }
 
   .ft-meta { padding: 0 14px 6px; }
   .ft-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid #0f1a24; }
   .ft-k { font-size: 8.5px; color: #6a8fa8; text-transform: uppercase; letter-spacing: 0.06em; }
   .ft-v { font-size: 10px; color: #a0c4d8; font-weight: 600; }
+
+  /* ── Optical budget section ─────────────────────────────────────────── */
+  .ft-opt-section { margin: 6px 14px 4px; background: #060d14; border: 1px solid #1a2d40; border-radius: 6px; overflow: hidden; }
+  .ft-opt-hdr { font-size: 7.5px; color: #3a5a70; letter-spacing: 0.14em; text-transform: uppercase; padding: 7px 10px 5px; border-bottom: 1px solid #0f1a24; }
+  .ft-opt-grid { padding: 4px 0; }
+  .ft-opt-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 10px; }
+  .ft-opt-row.total { border-top: 1px solid #1a2d4055; margin-top: 2px; padding-top: 5px; }
+  .ft-opt-row.pass-row { background: #34d39908; }
+  .ft-opt-row.fail-row { background: #f8717108; }
+  .ft-opt-k { font-size: 8px; color: #6a8fa8; }
+  .ft-opt-v { font-size: 9px; color: #7ab8d4; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .ft-opt-row.total .ft-opt-k { color: #a0c4d8; font-weight: 600; }
+  .ft-opt-row.total .ft-opt-v { color: #a0c4d8; font-size: 10px; }
+  .ft-opt-v.margin.pass { color: #34d399; }
+  .ft-opt-v.margin.fail { color: #f87171; }
+  .ft-opt-divider { height: 1px; background: #0f1a24; margin: 3px 0; }
+
+  .ft-opt-na { margin: 4px 14px 6px; font-size: 8px; color: #3a5a70; font-style: italic; padding: 4px 0; }
 
   .ft-reason { margin: 8px 14px; padding: 8px 10px; border-radius: 5px; font-size: 8.5px; line-height: 1.6; letter-spacing: 0.02em; }
   .ft-reason.ok  { background: #00aaff0a; color: #6a9ab5; }

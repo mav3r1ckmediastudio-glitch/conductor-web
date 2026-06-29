@@ -16,6 +16,7 @@
   import StreamCrossingForm from './StreamCrossingForm.svelte';
   import PIAChamberForm from './PIAChamberForm.svelte';
   import PIADuctForm from './PIADuctForm.svelte';
+  import PIADropForm from './PIADropForm.svelte';
   import ProjectSetup from './ProjectSetup.svelte';
   import AddressImporter from './AddressImporter.svelte';
   import BuildAreaForm from './BuildAreaForm.svelte';
@@ -33,6 +34,7 @@
   import SldPanel from './SldPanel.svelte';
   import ValidateRoutesPanel from './ValidateRoutesPanel.svelte';
   import DesignHealthPanel from './DesignHealthPanel.svelte';
+  import CabinetCostPanel from './CabinetCostPanel.svelte';
   import {
     ensureSources, ensureTerrainLayers, syncToMap,
     activateCabinetTool, activateBuildAreaTool, activateChamberTool,
@@ -94,6 +96,7 @@
   let pendingStreamCrossing  = null;
   let pendingPIAChamber      = null;
   let pendingPIADuct         = null;
+  let pendingPIADrop         = null;
   let selectedAsset    = null;
   let assetPickerHits  = null;
   let fibreTraceResult = null;
@@ -924,10 +927,25 @@
       feature.properties.installation_method = 'PIA_UG';
       feature.properties.drop_type           = 'PIA_UG';
       feature.properties.owner               = 'Openreach';
-      projectStore.addDropDuct(feature);
-      syncToMap(map);
+      pendingPIADrop = feature;
+      rpMode = 'pia-drop-form';
+      activeToolLabel = '';
     });
     if (err) { alert(err.error); activeToolLabel = ''; }
+  }
+
+  function onPIADropSaved(e) {
+    projectStore.addDropDuct(e.detail);
+    syncToMap(map);
+    pendingPIADrop = null;
+    rpMode = 'default';
+  }
+
+  function onPIADropCancelled() {
+    pendingPIADrop = null;
+    rpMode = 'default';
+    clearTool(map);
+    activeToolLabel = '';
   }
 
   // ── fibre-trace (Tier 2) ─────────────────────────────────────────────────
@@ -1048,6 +1066,16 @@
     rpMode = 'design-health';
   }
   function onDesignHealthClose() { rpMode = 'default'; }
+
+  // ── Cabinet Cost Calculator ────────────────────────────────────────
+  function onCabinetCost() {
+    if (stage !== 'design') return;
+    if (!projectStore.cabinet) { alert('No cabinet placed yet.'); return; }
+    clearTool(map);
+    activeToolLabel = '';
+    rpMode = 'cabinet-cost';
+  }
+  function onCabinetCostClose() { rpMode = 'default'; }
 
   function onFibreCountHighlight(e) {
     const seg = e.detail;
@@ -1371,6 +1399,9 @@
       {:else if rpMode === 'pia-duct-form'}
         <PIADuctForm pending={pendingPIADuct} on:save={onPIADuctSaved} on:cancel={onPIADuctCancelled} />
 
+      {:else if rpMode === 'pia-drop-form'}
+        <PIADropForm pending={pendingPIADrop} on:save={onPIADropSaved} on:cancel={onPIADropCancelled} />
+
       {:else if rpMode === 'asset-selected'}
         <AssetEditPanel
           selected={selectedAsset}
@@ -1460,6 +1491,9 @@
       {:else if rpMode === 'design-health'}
         <DesignHealthPanel autoRun={true} on:close={onDesignHealthClose} />
 
+      {:else if rpMode === 'cabinet-cost'}
+        <CabinetCostPanel on:close={onCabinetCostClose} />
+
       {:else}
         <div class="rp-hdr">
           <span class="rp-hdr-title">Validation Summary</span>
@@ -1499,7 +1533,7 @@
           <button class="out-btn" disabled={stage !== 'design'} on:click={onSplicePlan}>↗ Splice Plan Export</button>
           <button class="out-btn" disabled={stage !== 'design'} on:click={onSld}>↗ Single Line Diagram</button>
           <button class="out-btn" disabled={stage !== 'design'} on:click={onBom}>↗ Bill of Materials</button>
-          <button class="out-btn" disabled={stage !== 'design'}>↗ Cabinet Cost Calculator</button>
+          <button class="out-btn" disabled={stage !== 'design'} on:click={onCabinetCost}>↗ Cabinet Cost Calculator</button>
         </div>
 
           <div class="rp-splitter"></div>

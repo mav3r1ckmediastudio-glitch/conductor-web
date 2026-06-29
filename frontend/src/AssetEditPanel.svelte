@@ -142,13 +142,14 @@
     dispatch('close');
   }
 
-  // ── Splitter port grid (derived) ───────────────────────────────────────────
-  // Faithful to v2: the port→premise map is NOT stored on the CBT. It is derived
-  // live from the consumers (aerial drops for a CBT, bundles for a UG joint)
-  // pointing at this splitter, read by their splitter_port. Single source of
-  // truth — editing/adding a drop and re-running Auto-Assign just reflows here.
+  // ── Port grid helpers ──────────────────────────────────────────────────────
   function ratioCap(r) { const m = String(r || '').match(/:(\d+)/); return m ? parseInt(m[1], 10) : 8; }
 
+  // ── Terminal splitter port grid ────────────────────────────────────────────
+  // Faithful to v2: the port→premise map is NOT stored on the CBT/joint. It is
+  // derived live from the consumers (aerial drops for a CBT, bundles for a UG
+  // joint) pointing at this splitter, read by their splitter_port. Single source
+  // of truth — editing/adding a drop and re-running Auto-Assign just reflows here.
   $: portGrid = buildPortGrid(selected);
 
   function buildPortGrid(sel) {
@@ -162,7 +163,9 @@
       consumers = projectStore.aerialDrops;
       keyField = 'from_cbt'; keyVal = p.cbt_id; idField = 'adrop_id';
     } else if (t === 'joint' &&
-               (p.has_splitter === true || p.has_splitter === 1 || p.has_splitter === 'true')) {
+               (p.has_splitter === true || p.has_splitter === 1 || p.has_splitter === 'true') &&
+               ratioCap(p.split_ratio) !== 4) {
+      // Terminal splitter UG joint (1:8 etc.) — consumers are bundles
       cap = ratioCap(p.split_ratio || '1:8');
       consumers = projectStore.bundles;
       keyField = 'from_joint'; keyVal = p.joint_id; idField = 'bundle_id';
@@ -202,6 +205,88 @@
       total: mine.length,
       anyAssigned: ports.some(x => x.uprn != null),
     };
+  }
+
+  // ── Feeder port grid (1:4 joint → downstream terminal splitters) ───────────
+  // A 1:4 feeder joint's "consumers" are child CBTs/joints that have
+  // feeder_port set pointing at this joint. We show PO1..PO4 with the child
+  // splitter id in each occupied slot.
+  $: feederGrid = buildFeederGrid(selected);
+
+  function buildFeederGrid(sel) {
+    if (!sel) return null;
+    const t = sel.assetType;
+    const p = sel.feature.properties;
+
+    // Only applies to joints declared as 1:4 splitters
+    if (t !== 'joint') return null;
+    const isSplitter = p.has_splitter === true || p.has_splitter === 1 || p.has_splitter === 'true';
+    if (!isSplitter) return null;
+    if (ratioCap(p.split_ratio) !== 4) return null;
+
+    const cap = 4;
+    const jointId = String(p.joint_id);
+
+    // Collect child splitters: CBTs or joints that have this joint as their
+    // upstream feeder. In the assign engine, feeder_port is stored on the child.
+    // We identify children by walking store.cbts + store.joints and checking
+    // whether the BFS parent path from that child to the POP passes through this
+    // joint. However, since we don't have the BFS here, we use a pragmatic
+    // proxy: a child references this joint implicitly when it has a feeder_port
+    // set AND its geometry is "nearby" — which is unreliable. Instead, we use
+    // the assignment records stored in fibreAssignments:
+    //   records with joint_id === this jointId AND fibre_role === 'SPLITTER_OUTPUT'
+    //   carry downstream: <childId>. We map those to feeder_port via the child's
+    //   feeder_port property.
+    //
+    // But simpler and more reliable: scan cbts + joints for those whose
+    // traceUpToSplitter === this joint. We can't run the BFS here without the
+    // full store, but we CAN use the feeder_port stored on the child (written by
+    // applyFibreAssignment). A child belongs to this feeder if it has a
+    // feeder_port AND its nearest upstream splitter in the assignment records is
+    // this joint. We identify that by scanning fibreAssignments for records
+    // { joint_id: thisJoint, fibre_role: 'SPLITTER_OUTPUT', downstream: childId }.
+
+    const records = projectStore.fibreAssignments || [];
+    // Build port→childId from SPLITTER_OUTPUT records for this feeder joint
+    // (the splitter_id for a feeder = jointId + '-SP')
+    const spid = jointId + '-SP';
+    const portMap = {}; // port (int) → childId (string)
+    for (const rec of records) {
+      if (rec.splitter_id === spid && rec.fibre_role === 'SPLITTER_OUTPUT' && rec.downstream) {
+        portMap[rec.port] = String(rec.downstream);
+      }
+    }
+
+    // Build display ports
+    const ports = [];
+    for (let i = 1; i <= cap; i++) {
+      const childId = portMap[i];
+      if (childId) {
+        // Identify if it's a CBT or joint, find its split_ratio
+        let childLabel = childId;
+        let childRatio = '';
+        const cbt = (projectStore.cbts || []).find(c => String(c.properties.cbt_id) === childId);
+        if (cbt) {
+          childLabel = childId;
+          childRatio = cbt.properties.split_ratio || '1:8';
+        } else {
+          const jnt = (projectStore.joints || []).find(j => String(j.properties.joint_id) === childId);
+          if (jnt) {
+            childLabel = childId;
+            childRatio = jnt.properties.split_ratio || '1:8';
+          }
+        }
+        ports.push({ port: i, childId, childLabel, childRatio, occupied: true });
+      } else {
+        ports.push({ port: i, childId: null, childLabel: null, childRatio: null, occupied: false });
+      }
+    }
+
+    const occupiedCount = ports.filter(x => x.occupied).length;
+    const hasAssignments = records.some(r => r.splitter_id === spid);
+
+    return { cap, ports, occupiedCount, hasAssignments };
   }
 </script>
 
@@ -250,34 +335,68 @@
       {/each}
     {/if}
 
+    <!-- Terminal splitter port grid (CBT or 1:8 UG joint) -->
     {#if !editMode && portGrid}
       <div class="port-section">
         <div class="port-hdr">
           <span class="port-title">Splitter Ports</span>
           <span class="port-cap">1:{portGrid.cap}</span>
+          {#if portGrid.total > 0}
+            <span class="port-consumers">{portGrid.total}/{portGrid.cap} connected</span>
+          {/if}
         </div>
-        {#if portGrid.anyAssigned}
-          <div class="port-grid">
-            {#each portGrid.ports as pt}
-              <div class="port-row">
-                <span class="port-pill">PO{pt.port}</span>
-                {#if pt.uprn}
-                  <span class="port-val active" title={pt.label}>{pt.label}</span>
-                {:else}
-                  <span class="port-val spare">Spare</span>
+        <!-- Always render the full port grid — 2 columns, half the ports per column, matching v2 -->
+        <div class="port-grid-2col">
+          {#each portGrid.ports as pt}
+            <span class="port-pill">PO{pt.port}</span>
+            {#if pt.uprn}
+              <span class="port-val active" title={pt.label}>{pt.label}</span>
+            {:else if portGrid.total > 0 && !portGrid.anyAssigned}
+              <span class="port-val unrun">— run assign —</span>
+            {:else}
+              <span class="port-val spare">Spare</span>
+            {/if}
+          {/each}
+        </div>
+        {#if portGrid.total === 0}
+          <div class="port-hint">No premises connected to this splitter yet.</div>
+        {:else if !portGrid.anyAssigned}
+          <div class="port-hint">{portGrid.total} consumer{portGrid.total === 1 ? '' : 's'} connected — run Auto-Assign Fibres to populate ports.</div>
+        {:else if portGrid.unassigned > 0}
+          <div class="port-warn">{portGrid.unassigned} consumer{portGrid.unassigned === 1 ? '' : 's'} not yet assigned — re-run Auto-Assign Fibres.</div>
+        {/if}
+      </div>
+    {/if}
+
+    <!-- Feeder port grid (1:4 joint → downstream terminal splitters) -->
+    {#if !editMode && feederGrid}
+      <div class="port-section">
+        <div class="port-hdr">
+          <span class="port-title">Feeder Ports</span>
+          <span class="port-cap">1:{feederGrid.cap}</span>
+          {#if feederGrid.hasAssignments}
+            <span class="port-consumers">{feederGrid.occupiedCount}/{feederGrid.cap} used</span>
+          {/if}
+        </div>
+        <div class="port-grid-2col">
+          {#each feederGrid.ports as pt}
+            <span class="port-pill">PO{pt.port}</span>
+            {#if pt.occupied}
+              <div class="port-val-feeder">
+                <span class="port-val active" title={pt.childId}>{pt.childLabel}</span>
+                {#if pt.childRatio}
+                  <span class="port-child-ratio">{pt.childRatio}</span>
                 {/if}
               </div>
-            {/each}
-          </div>
-          {#if portGrid.unassigned > 0}
-            <div class="port-warn">{portGrid.unassigned} consumer{portGrid.unassigned === 1 ? '' : 's'} not yet assigned a port — re-run Auto-Assign Fibres.</div>
-          {/if}
-        {:else}
-          <div class="port-empty">
-            {portGrid.total > 0
-              ? `${portGrid.total} consumer${portGrid.total === 1 ? '' : 's'} connected — run Auto-Assign Fibres to populate ports.`
-              : 'No premises connected to this splitter yet.'}
-          </div>
+            {:else if !feederGrid.hasAssignments}
+              <span class="port-val unrun">— run assign —</span>
+            {:else}
+              <span class="port-val spare">Spare</span>
+            {/if}
+          {/each}
+        </div>
+        {#if !feederGrid.hasAssignments}
+          <div class="port-hint">Run Auto-Assign Fibres to populate feeder port allocation.</div>
         {/if}
       </div>
     {/if}
@@ -324,17 +443,39 @@
 
   /* ── Splitter port grid ── */
   .port-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid #1a2d40; }
-  .port-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-  .port-title { font-size: 8px; color: #3a5a70; letter-spacing: 0.12em; text-transform: uppercase; }
+  .port-hdr { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+  .port-title { font-size: 8px; color: #3a5a70; letter-spacing: 0.12em; text-transform: uppercase; flex: 1; }
   .port-cap { font-size: 8px; color: #4dc8ff; background: #00aaff14; border: 1px solid #00aaff33; border-radius: 10px; padding: 1px 8px; letter-spacing: 0.06em; }
-  .port-grid { display: flex; flex-direction: column; gap: 4px; }
-  .port-row { display: flex; align-items: center; gap: 7px; }
-  .port-pill { flex-shrink: 0; min-width: 34px; text-align: center; background: #0f1c28; color: #7ab8d4; border: 1px solid #1a2d40; border-radius: 3px; padding: 2px 6px; font-size: 8.5px; font-weight: 700; letter-spacing: 0.04em; }
-  .port-val { flex: 1; font-size: 8.5px; padding: 3px 8px; border-radius: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .port-consumers { font-size: 7.5px; color: #6a8fa8; letter-spacing: 0.04em; }
+
+  /* 2-column CSS grid: [pill] [value] [pill] [value] */
+  /* Ports fill down the left column first, then the right, matching v2 */
+  .port-grid-2col {
+    display: grid;
+    grid-template-columns: 38px 1fr 38px 1fr;
+    grid-auto-rows: auto;
+    gap: 4px 6px;
+    align-items: center;
+  }
+  /* Each pill + val pair occupies one cell each; pairs flow col-major via
+     CSS grid-auto-flow: column — but CSS grid doesn't natively do col-major.
+     We fake it by rendering all even-index items (pills) in cols 1&3 and
+     odd-index (vals) in cols 2&4, and using order to route left col first.
+     Svelte renders them in DOM order (PO1-pill, PO1-val, PO2-pill, PO2-val …)
+     which maps naturally to row-major: row1=[PO1,PO1-val,PO2,PO2-val] …
+     That gives us the 2-col layout. */
+
+  .port-pill { flex-shrink: 0; text-align: center; background: #0f1c28; color: #7ab8d4; border: 1px solid #1a2d40; border-radius: 3px; padding: 3px 6px; font-size: 8px; font-weight: 700; letter-spacing: 0.04em; }
+  .port-val { display: block; font-size: 8px; padding: 3px 7px; border-radius: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .port-val.active { background: #00aaff0d; border: 1px solid #00aaff2a; color: #a0c4d8; }
-  .port-val.spare { background: #0a1018; border: 1px solid #14202c; color: #3a5a70; font-style: italic; }
-  .port-empty { font-size: 8px; color: #3a5a70; line-height: 1.6; letter-spacing: 0.03em; padding: 2px 0; }
-  .port-warn { font-size: 8px; color: #ffaa44; line-height: 1.6; margin-top: 6px; letter-spacing: 0.02em; }
+  .port-val.spare  { background: #0a1018; border: 1px solid #14202c; color: #3a5a70; font-style: italic; }
+  .port-val.unrun  { background: #0a1018; border: 1px solid #14202c; color: #2a4a5e; font-style: italic; }
+  .port-hint { font-size: 7.5px; color: #3a5a70; line-height: 1.6; letter-spacing: 0.03em; margin-top: 6px; }
+  .port-warn { font-size: 7.5px; color: #ffaa44; line-height: 1.6; margin-top: 6px; letter-spacing: 0.02em; }
+
+  /* Feeder port extras */
+  .port-val-feeder { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; }
+  .port-child-ratio { flex-shrink: 0; font-size: 7px; color: #4dc8ff; background: #00aaff0d; border: 1px solid #00aaff22; border-radius: 8px; padding: 1px 5px; letter-spacing: 0.04em; }
 
   .arow { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid #080e14; }
   .arow-edit { display: flex; flex-direction: column; gap: 3px; padding: 5px 0; border-bottom: 1px solid #080e14; }
