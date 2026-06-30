@@ -88,7 +88,9 @@ export function computeSummary(store) {
   try {
     const { grandTotal } = buildBom(store);
     materials_cost = grandTotal;
-  } catch (_) {}
+  } catch (e) {
+    console.error('[validateRoutes] BoM calculation failed — materials_cost will read as 0, not a real total:', e);
+  }
 
   // Route validation pass
   const { summary } = validateAllRoutes(store);

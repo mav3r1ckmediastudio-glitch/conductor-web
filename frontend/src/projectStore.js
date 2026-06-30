@@ -3,6 +3,7 @@
 // Workflow stages: 'setup' → 'import' → 'build-area' → 'cabinet' → 'design'
 
 import proj4 from 'proj4';
+import { showError } from './toast.js';
 
 // EPSG:27700 (OSGB36 / British National Grid) → EPSG:4326 (WGS84).
 // Includes the +towgs84 7-parameter datum shift, so output matches QGIS's
@@ -24,10 +25,14 @@ function newId() {
 }
 function readIndex() {
   try { return JSON.parse(localStorage.getItem(INDEX_KEY)) || []; }
-  catch { return []; }
+  catch (e) {
+    showError('Could not read your saved-projects list. It may not show recent projects until this is resolved.');
+    return [];
+  }
 }
 function writeIndex(list) {
-  try { localStorage.setItem(INDEX_KEY, JSON.stringify(list)); } catch (e) { /* ignore */ }
+  try { localStorage.setItem(INDEX_KEY, JSON.stringify(list)); }
+  catch (e) { showError('Could not update your saved-projects list — this project may not appear in "Open" next time.'); }
 }
 function upsertIndex(id, state) {
   const list = readIndex();
@@ -42,10 +47,14 @@ function upsertIndex(id, state) {
   writeIndex(list);
 }
 // One-time migration: adopt the legacy single-project blob as the first indexed project.
+// Console-only (not a toast): this runs invisibly once on first load for very old
+// projects and there's nothing the user can do about a migration failure in the
+// moment — but it should be diagnosable, not silently swallowed, if it ever fires.
 function migrateLegacy() {
   if (readIndex().length) return;                    // already migrated
   let raw;
-  try { raw = localStorage.getItem(STORAGE_KEY); } catch (e) { return; }
+  try { raw = localStorage.getItem(STORAGE_KEY); }
+  catch (e) { console.error('[projectStore] could not read legacy project for migration:', e); return; }
   if (!raw) return;
   try {
     const state = JSON.parse(raw);
@@ -54,7 +63,7 @@ function migrateLegacy() {
     upsertIndex(id, state);
     localStorage.setItem(ACTIVE_KEY, id);
     // legacy key intentionally left in place as a backup.
-  } catch (e) { /* ignore */ }
+  } catch (e) { console.error('[projectStore] legacy project migration failed:', e); }
 }
 
 // ── BNG (EPSG:27700) → WGS84 (EPSG:4326) conversion via proj4 ────────────────
@@ -242,12 +251,15 @@ function load() {
         // Retro-fit fibre fields onto pre-existing spans/drops, then persist so
         // the migration only runs once per project.
         if (backfillFibreFields(state)) {
-          try { localStorage.setItem(projectKey(id), JSON.stringify(state)); } catch (e) { /* ignore */ }
+          try { localStorage.setItem(projectKey(id), JSON.stringify(state)); }
+          catch (e) { showError('A background data update could not be saved — it will retry next time you open this project.'); }
         }
         return state;
       }
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    showError('Could not load your saved project from local storage. Starting with a blank project — your data may still be recoverable from a .conductor file if you saved one.');
+  }
   return { ...DEFAULT_STATE };
 }
 
@@ -257,7 +269,14 @@ function save(state) {
     if (!id) { id = newId(); localStorage.setItem(ACTIVE_KEY, id); }
     localStorage.setItem(projectKey(id), JSON.stringify(state));
     upsertIndex(id, state);
-  } catch (e) { /* storage full — ignore */ }
+  } catch (e) {
+    // This is the local crash-cache write, not your primary save. If a
+    // .conductor file is bound, FSAA (fsaa.js) still has the durable copy and
+    // shows its own status indicator — this failure means the *backup* layer
+    // is degraded, which still matters (e.g. if the tab crashes before the
+    // next autosave) but isn't a sign you've lost your work outright.
+    showError('Local backup save failed (storage may be full). If you have a project file open, your work is still safe there — otherwise, save a .conductor file now as a precaution.');
+  }
 }
 
 class ProjectStore {
@@ -467,12 +486,18 @@ class ProjectStore {
   }
 
   activeId() {
-    try { return localStorage.getItem(ACTIVE_KEY); } catch (e) { return null; }
+    try { return localStorage.getItem(ACTIVE_KEY); }
+    catch (e) { console.error('[projectStore] could not read active project id:', e); return null; }
   }
 
+  // NOTE: failures here return false and are surfaced by the caller (App.svelte
+  // already shows "Could not open that project." on a false return) — kept as
+  // console.error here, not a toast, to avoid showing the user two messages
+  // for the same failure.
   openProject(id) {
     let raw;
-    try { raw = localStorage.getItem(projectKey(id)); } catch (e) { return false; }
+    try { raw = localStorage.getItem(projectKey(id)); }
+    catch (e) { console.error('[projectStore] could not read project for open:', e); return false; }
     if (!raw) return false;
     try {
       localStorage.setItem(ACTIVE_KEY, id);
@@ -480,7 +505,7 @@ class ProjectStore {
       if (backfillFibreFields(this._state)) save(this._state);
       this._emit('reset');
       return true;
-    } catch (e) { return false; }
+    } catch (e) { console.error('[projectStore] failed to open project:', e); return false; }
   }
 
   // Replace the entire working state from an external source — i.e. a .conductor
@@ -498,7 +523,8 @@ class ProjectStore {
   // Start a brand-new project. The current project stays saved under its own id.
   newProject() {
     const id = newId();
-    try { localStorage.setItem(ACTIVE_KEY, id); } catch (e) { /* ignore */ }
+    try { localStorage.setItem(ACTIVE_KEY, id); }
+    catch (e) { showError('Could not set this as your active project — it may not reopen automatically next time.'); }
     this._state = { ...DEFAULT_STATE };
     save(this._state);          // create the project key + index entry immediately
     this._emit('reset');
@@ -509,7 +535,7 @@ class ProjectStore {
       localStorage.removeItem(projectKey(id));
       writeIndex(readIndex().filter(e => e.id !== id));
       if (this.activeId() === id) localStorage.removeItem(ACTIVE_KEY);
-    } catch (e) { /* ignore */ }
+    } catch (e) { showError('Could not fully delete that project — it may still appear in your project list.'); }
   }
 
   resetProject() {

@@ -126,6 +126,7 @@
   let routeStats = { routed: null, partial: null, unserved: null };
   let statsRouteRun = false;
   let statsStale = false;
+  let bomErrorToastShown = false;  // only toast once per session, see computeCheapStats
 
   // cheapStats recompute whenever the store mutates (storeVersion bumps in .on()).
   $: cheapStats = (storeVersion, computeCheapStats(projectStore.state));
@@ -143,7 +144,16 @@
       ductM += parseFloat(d.properties?.length_m || 0) || 0;
     }
     let materials_cost = 0;
-    try { const { grandTotal } = buildBom(s); materials_cost = grandTotal; } catch(_) {}
+    try {
+      const { grandTotal } = buildBom(s);
+      materials_cost = grandTotal;
+    } catch (e) {
+      // This recomputes on every store mutation, so a toast on every edit would
+      // be spammy if the BoM keeps failing — log every time for diagnosability,
+      // but only surface it to the user once per session.
+      console.error('[App] BoM calculation failed — Est. Materials will read as "—":', e);
+      if (!bomErrorToastShown) { bomErrorToastShown = true; showError('Materials cost could not be calculated — check the console for details. Other figures are unaffected.'); }
+    }
     const fibre_km = Math.round(fibreM / 100) / 10;
     const duct_km  = Math.round(ductM / 100) / 10;
     return { premises, fibre_km, duct_km, materials_cost };

@@ -2,6 +2,7 @@ import { mount } from 'svelte';
 import './app.css';
 import ClerkGate from './ClerkGate.svelte';
 import { Clerk } from '@clerk/clerk-js';
+import { showError } from './toast.js';
 
 const clerk = new Clerk(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 
@@ -18,6 +19,9 @@ if (isCallback) {
     await clerk.handleRedirectCallback();
   } catch (e) {
     console.error('Clerk callback error:', e);
+    // Fires before any UI exists yet — toast.js buffers this and shows it
+    // the moment Toast.svelte mounts inside App.svelte, a few lines below.
+    showError('Sign-in could not be completed: ' + (e?.message || e) + '. Please try signing in again.');
   }
   // Remove Clerk params from the URL without reloading
   window.history.replaceState({}, '', window.location.pathname);
