@@ -447,6 +447,7 @@ export function ensureTerrainLayers(map) {
     const poleLayer = createPoleLayer(projectStore);
     console.log('[mapTools] poleLayer object:', poleLayer);
     map.addLayer(poleLayer);
+   _poleLayerInstance = poleLayer; 
     console.log('[mapTools] pole layer added, check:', map.getLayer('poles-3d-layer'));
   }
 
@@ -462,6 +463,7 @@ export function ensureTerrainLayers(map) {
 // One full cycle at 10fps = 800ms, readable as smooth directional flow.
 
 let _pulseAnimFrame = null;
+let _poleLayerInstance = null;
 
 function startCablePulse(map) {
   if (_pulseAnimFrame) cancelAnimationFrame(_pulseAnimFrame);
@@ -511,6 +513,8 @@ export function stopCablePulse() {
     _pulseAnimFrame = null;
   }
 }
+
+export function getPoleLayer() { return _poleLayerInstance; }
 
 // ── SYNC TO MAP ───────────────────────────────────────────────────────────────
 

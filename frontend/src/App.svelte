@@ -21,6 +21,16 @@
   import AddressImporter from './AddressImporter.svelte';
   import BuildAreaForm from './BuildAreaForm.svelte';
   import { projectStore } from './projectStore.js';
+  import {
+    isSupported  as fsaaSupported,
+    onStatus     as fsaaOnStatus,
+    saveAs       as fsaaSaveAs,
+    openFile     as fsaaOpenFile,
+    saveNow      as fsaaSaveNow,
+    tryResume    as fsaaTryResume,
+    resumePrompt as fsaaResumePrompt,
+  } from './fsaa.js';
+  import { exportSheet } from './mapExport.js';
   import { assignFibres } from './fibreAssign.js';
   import { docsUrl, toolTip } from './toolDocs.js';
   import { countFibres } from './fibreCount.js';
@@ -328,11 +338,22 @@
       zoom: 15,
       pitch: 60,
       bearing: -30,
+      preserveDrawingBuffer: true,   // required so the map canvas can be captured for export
     });
 
     map.on('load', () => {
       setupMapLayers(map);
       if (projectStore.stage === 'import') rpMode = 'address-import';
+      // FSAA: silently resume the last .conductor file if still permitted,
+      // else surface a one-click Resume button (re-grant needs a user gesture).
+      fsaaTryResume().then(r => {
+        if (r.state === 'granted') {
+          rpMode = projectStore.stage === 'import' ? 'address-import' : 'default';
+          syncToMap(map);
+        } else if (r.state === 'prompt') {
+          fsaaResume = { fileName: r.fileName };
+        }
+      });
     });
   });
 
@@ -381,9 +402,18 @@
 
   // ── Workflow handlers ────────────────────────────────────────────────────────
 
-  function onProjectCreated(e) {
+  async function onProjectCreated(e) {
     projectStore.setupProject(e.detail);
     rpMode = 'address-import';
+    // Bind a real .conductor file at creation so the project is file-backed from
+    // the start — no retroactive "where should this live?" moment. This runs
+    // synchronously inside the Create-click gesture, so the save picker is
+    // permitted to open. The filename pre-fills from the area ID (e.g.
+    // SCOT-PH1.conductor). If the user cancels, the project still exists in
+    // localStorage and the save-nudge remains as a fallback.
+    if (fsaa.supported && !fsaa.fileName) {
+      await onSaveToFile();
+    }
   }
 
   function onAddressImported(e) {
@@ -1166,6 +1196,76 @@
   let showOpen = false;
   let projectList = [];
 
+  // ── File System Access (durable .conductor file) ──────────────────────────
+  let fsaa = { status: 'no-file', lastSaved: null, fileName: null, supported: false };
+  let fsaaResume = null;   // { fileName } when a saved file is waiting for a resume click
+  fsaaOnStatus(s => { fsaa = s; });
+
+  function fmtSaved(ts) {
+    if (!ts) return '';
+    return new Date(ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  async function onSaveToFile() {
+    try { await fsaaSaveAs(); }
+    catch (e) { alert('Could not save file: ' + (e?.message || e)); }
+  }
+  async function onOpenFile() {
+    try {
+      if (await fsaaOpenFile()) {
+        rpMode = 'default'; activeToolLabel = '';
+        if (map) syncToMap(map);
+      }
+    } catch (e) { alert('Could not open file: ' + (e?.message || e)); }
+  }
+  async function onResumeFile() {
+    if (await fsaaResumePrompt()) {
+      fsaaResume = null;
+      rpMode = 'default'; activeToolLabel = '';
+      if (map) syncToMap(map);
+    }
+  }
+  function onKeydown(e) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+      if (fsaa.supported && fsaa.fileName) { e.preventDefault(); fsaaSaveNow(); }
+    }
+  }
+
+  // ── Map sheet export (PNG/SVG) — 2D only ──────────────────────────────────
+  let showExport = false;
+  let exporting = false;
+  async function doExport(format) {
+    showExport = false;
+    if (is3D) { alert('Switch to 2D view before exporting the map.'); return; }
+    if (!map) return;
+    exporting = true;
+    try {
+      await exportSheet(map, projectStore.state, { format, company: 'GIGALOCH' });
+    } catch (e) {
+      const msg = String(e?.message || e);
+      const cors = /SecurityError|tainted/i.test(msg)
+        ? '\n\nThe basemap may be blocking image capture (CORS). Try the Dark or Light basemap and export again.'
+        : '';
+      alert('Export failed: ' + msg + cors);
+    } finally {
+      exporting = false;
+    }
+  }
+
+  // One-time nudge: prompt to save-to-file once real work exists (stage → 'design')
+  // and no file is bound yet. Fires once per session; dismissing just hides it.
+  let hasNudged = false;
+  let showSaveNudge = false;
+  $: if (stage === 'design' && fsaa.supported && !fsaa.fileName && !hasNudged) {
+    hasNudged = true;
+    showSaveNudge = true;
+  }
+  function dismissNudge() { showSaveNudge = false; }
+  async function onNudgeSave() {
+    showSaveNudge = false;
+    await onSaveToFile();
+  }
+
   function refreshList() { projectList = projectStore.listProjects(); }
 
   function newProject() {
@@ -1186,9 +1286,17 @@
   }
 </script>
 
-<svelte:window on:click={() => { showOpen = false; userMenuOpen = false; }} />
+<svelte:window on:click={() => { showOpen = false; userMenuOpen = false; showExport = false; }} on:keydown={onKeydown} />
 
 <div class="screen">
+
+  {#if showSaveNudge}
+    <div class="save-nudge" role="alert">
+      <span>Save this project to a file? Keeps your work safe on disk with autosave.</span>
+      <button class="sn-save" on:click={onNudgeSave}>Save File</button>
+      <button class="sn-dismiss" on:click={dismissNudge} title="Dismiss">✕</button>
+    </div>
+  {/if}
 
   {#if stage === 'setup'}
     <ProjectSetup on:create={onProjectCreated} />
@@ -1248,6 +1356,40 @@
       <div class="vtog">
         <button class="vt" class:on={is3D} on:click={() => setView(true)}>3D</button>
         <button class="vt" class:on={!is3D} on:click={() => setView(false)}>2D</button>
+      </div>
+      {#if fsaa.supported}
+        {#if fsaaResume}
+          <button class="tb-resume" on:click={onResumeFile} title="Reconnect to your last project file">↻ Resume {fsaaResume.fileName}</button>
+        {/if}
+        <div class="fsaa-grp">
+          <button class="tb-new" on:click={onSaveToFile} title="Save project to a file on disk">⤓ Save File</button>
+          <button class="tb-new" on:click={onOpenFile}  title="Open a .conductor file from disk">⤢ Open File</button>
+          <span class="fsaa-ind"
+                class:saved={fsaa.status === 'saved'}
+                class:saving={fsaa.status === 'saving'}
+                class:unsaved={fsaa.status === 'unsaved'}
+                class:error={fsaa.status === 'error'}
+                title={fsaa.fileName || ''}>
+            {#if fsaa.status === 'saving'}Saving…
+            {:else if fsaa.status === 'saved'}Saved {fmtSaved(fsaa.lastSaved)}
+            {:else if fsaa.status === 'unsaved'}Unsaved…
+            {:else if fsaa.status === 'error'}⚠ Not saved
+            {:else}No file{/if}
+          </span>
+        </div>
+      {/if}
+      <div class="tb-open-wrap">
+        <button class="tb-new" class:tb-disabled={is3D || exporting}
+                on:click|stopPropagation={() => { if (!is3D && !exporting) showExport = !showExport; }}
+                title={is3D ? 'Switch to 2D view to export the map' : 'Export map sheet (legend, totals, scale)'}>
+          {exporting ? '⏳ Exporting…' : '⎙ Export ▾'}
+        </button>
+        {#if showExport && !is3D}
+          <div class="tb-open-menu" on:click|stopPropagation>
+            <button class="tb-open-item exp-item" on:click={() => doExport('svg')}>SVG — vector, editable</button>
+            <button class="tb-open-item exp-item" on:click={() => doExport('png')}>PNG — image</button>
+          </div>
+        {/if}
       </div>
       <button class="tb-new" on:click={newProject} title="New Project">+ New</button>
       <div class="tb-open-wrap">
@@ -1673,6 +1815,34 @@
   .tb-open-item.active::before { content: '●'; color: #4dc8ff; font-size: 6px; margin-right: 6px; }
   .oi-name { font-size: 9px; color: #a0c4d8; font-family: 'Courier New', monospace; letter-spacing: 0.04em; }
   .oi-area { font-size: 8px; color: #3a5a70; font-family: 'Courier New', monospace; }
+
+  /* ── FSAA file controls ── */
+  .fsaa-grp { display: flex; align-items: center; gap: 6px; padding-left: 6px; margin-left: 2px; border-left: 1px solid #1a2d40; }
+  .tb-disabled { opacity: 0.4; cursor: not-allowed; }
+  .exp-item { color: #a0c4d8; font-family: 'Courier New', monospace; font-size: 10px; letter-spacing: 0.04em; justify-content: flex-start; }
+  .exp-item:hover { color: #4dc8ff; }
+  .fsaa-ind { font-family: 'Courier New', monospace; font-size: 8.5px; letter-spacing: 0.04em; color: #3a5a70; white-space: nowrap; min-width: 68px; }
+  .fsaa-ind.saved   { color: #5dd6a0; }
+  .fsaa-ind.saving  { color: #ffc04d; }
+  .fsaa-ind.unsaved { color: #ffc04d; }
+  .fsaa-ind.error   { color: #ff6b6b; }
+  .tb-resume { background: #102030; border: 1px solid #00aaff55; color: #4dc8ff; font-family: 'Courier New', monospace; font-size: 9px; letter-spacing: 0.05em; padding: 4px 10px; border-radius: 4px; cursor: pointer; white-space: nowrap; animation: fsaaPulse 2s ease-in-out infinite; }
+  .tb-resume:hover { background: #15273a; border-color: #4dc8ff; }
+  @keyframes fsaaPulse { 0%,100% { box-shadow: 0 0 0 0 #00aaff00; } 50% { box-shadow: 0 0 8px 0 #00aaff44; } }
+
+  /* ── Save-to-file nudge banner ── */
+  .save-nudge {
+    position: fixed; top: 56px; right: 16px; z-index: 200;
+    display: flex; align-items: center; gap: 10px;
+    background: #0d1520; border: 1px solid #00aaff55; border-radius: 6px;
+    padding: 10px 12px; box-shadow: 0 8px 24px #00000088;
+    font-family: 'Courier New', monospace; font-size: 10.5px; color: #a0c4d8;
+    max-width: 320px; animation: fsaaPulse 2.5s ease-in-out infinite;
+  }
+  .sn-save { background: #102030; border: 1px solid #4dc8ff; color: #4dc8ff; font-size: 9px; letter-spacing: 0.05em; padding: 4px 10px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+  .sn-save:hover { background: #15273a; }
+  .sn-dismiss { background: transparent; border: none; color: #5b7488; cursor: pointer; font-size: 11px; padding: 2px 4px; }
+  .sn-dismiss:hover { color: #a0c4d8; }
 
   /* ── Body ── */
   .body { display: flex; flex: 1; overflow: hidden; }

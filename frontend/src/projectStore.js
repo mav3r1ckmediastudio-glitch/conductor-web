@@ -483,6 +483,18 @@ class ProjectStore {
     } catch (e) { return false; }
   }
 
+  // Replace the entire working state from an external source — i.e. a .conductor
+  // file opened via the File System Access API (see fsaa.js). Mirrors
+  // openProject() but takes a parsed state object instead of a localStorage id.
+  // Still writes through to localStorage so the in-browser cache and the project
+  // index stay coherent. Emits 'reset' so the map + UI re-sync.
+  loadExternalState(state) {
+    this._state = { ...DEFAULT_STATE, ...(state || {}) };
+    backfillFibreFields(this._state);
+    save(this._state);
+    this._emit('reset');
+  }
+
   // Start a brand-new project. The current project stays saved under its own id.
   newProject() {
     const id = newId();

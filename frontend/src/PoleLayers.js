@@ -20,9 +20,23 @@
 //   signature and only does the EXPENSIVE mesh rebuild when that signature
 //   actually changes (or terrain is still loading, or asset counts changed).
 //   Per-span/drop geometries are disposed on each rebuild so we don't leak.
+//
+// BARBER POLE SHADER:
+//   Spans and aerial drops whose UPRN (or connected CBT) is in the last
+//   Validate Routes ROUTED set get a ShaderMaterial instead of the plain
+//   MeshPhongMaterial. The shader draws a helical cyan-and-white stripe that
+//   travels along the cylinder — a "live signal flowing" visual cue.
+//   Call setLiveState(routedUprns, liveCbtIds) after a Validate Routes run
+//   to switch assets between live and dead materials.
 
 import * as THREE from 'three';
 import maplibregl from 'maplibre-gl';
+
+// ── Barber pole animation ──────────────────────────────────────────────────────
+// PULSE_SPEED: lower = slower.  0.3 is lazy/natural.  Range: 0.1 (glacial) → 1.0 (fast).
+const PULSE_SPEED = 0.3;
+// STRIPE_DENSITY: higher = tighter coils.  8.0 is spring-like.  Range: 3.0 (wide) → 20.0 (very tight).
+const STRIPE_DENSITY = 8.0;
 
 const POLE_HEIGHT_M   = 6;
 const POLE_RADIUS_M   = 0.15;
@@ -61,6 +75,50 @@ const TAIL_RADIUS_M  = 0.06;
 // Elevation kept at 0; per-pole ground elevation is baked into mesh Y.
 const SCENE_ORIGIN = { lng: -3.77, lat: 56.71 };
 
+// ── Barber pole GLSL ──────────────────────────────────────────────────────────
+// Helical stripe in UV space. vUv.x = circumference (0→1), vUv.y = length (0→1).
+// Mixing both axes creates a diagonal helix; time offset drives forward motion.
+
+const BARBER_VERT = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const BARBER_FRAG = `
+  precision mediump float;
+  uniform float time;
+  uniform float density;
+  varying vec2 vUv;
+
+  void main() {
+    float PI2 = 6.28318530718;
+
+    // Helical stripe: 1.5 wraps around circumference, density cycles along length.
+    // density is controlled by STRIPE_DENSITY constant — higher = tighter coils.
+    // Subtract time to animate the stripe moving forward along the cylinder.
+    float phase = (vUv.x * 1.5 + vUv.y * density - time) * PI2;
+
+    // Smooth sinusoidal blend — no hard edges, looks like light through glass fibre.
+    float t = 0.5 + 0.5 * sin(phase);
+
+    // Brand cyan (#4dc8ff) <-> near-white with slight blue tint
+    vec3 cyan  = vec3(0.302, 0.784, 1.000);
+    vec3 white = vec3(0.900, 0.980, 1.000);
+    vec3 col   = mix(cyan, white, t);
+
+    // Glow: boost brightness on the white stripe for the "lit from within" feel.
+    col += t * 0.55 * vec3(0.12, 0.55, 0.85);
+
+    // Allow slight overexposure — MapLibre's WebGL context will clamp to display.
+    col = min(col, vec3(1.6));
+
+    gl_FragColor = vec4(col, 0.96);
+  }
+`;
+
 class PoleLayer {
   constructor(projectStore) {
     this.id            = 'poles-3d-layer';
@@ -86,6 +144,28 @@ class PoleLayer {
     this._lastElevSig  = null;   // signature of last sampled pole elevations
     this._dynamicGeoms = [];     // per-span/drop geometries to dispose each rebuild
     this._onData       = null;   // bound terrain `data` handler
+
+    // Live validated state — set by setLiveState() after a Validate Routes run.
+    // _liveUprns: Set of UPRN strings whose route status is ROUTED.
+    // _liveNodeIds: Set of CBT/pole IDs reachable from a live drop (flood-filled in App.svelte).
+    this._liveUprns   = new Set();
+    this._liveNodeIds = new Set();
+
+    // Shared barber-pole shader material — used by all live spans + drops.
+    // Created in onAdd(); uniform `time` is ticked in render().
+    this._pulseMaterial = null;
+  }
+
+  // ── Public API ────────────────────────────────────────────────────────────────
+
+  // Called from App.svelte after a Validate Routes run.
+  // routedUprns : Set<string>  — UPRNs with status ROUTED
+  // liveNodeIds : Set<string>  — CBT + pole IDs reachable from a live drop (flood-filled)
+  setLiveState(routedUprns, liveNodeIds) {
+    this._liveUprns   = routedUprns  || new Set();
+    this._liveNodeIds = liveNodeIds  || new Set();
+    this._update(true);
+    if (this._map) this._map.triggerRepaint();
   }
 
   onAdd(map, gl) {
@@ -164,6 +244,19 @@ class PoleLayer {
       emissive: TAIL_COLOR,
       emissiveIntensity: 0.25,
       shininess: 15,
+    });
+
+    // Barber pole shader material — shared by all live spans + drops.
+    // time uniform is ticked every render() call so the stripe animates.
+    this._pulseMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        time:    { value: 0.0 },
+        density: { value: STRIPE_DENSITY },
+      },
+      vertexShader:   BARBER_VERT,
+      fragmentShader: BARBER_FRAG,
+      transparent: true,
+      side: THREE.FrontSide,
     });
 
     this._renderer = new THREE.WebGLRenderer({
@@ -317,7 +410,7 @@ class PoleLayer {
     }
 
     // Aerial spans — solid cyan 3D lines between aerial/UG attach points.
-    // Supports: CBT (pole-top), POLE (bare pole-top), JOINT (ground level), POP (cabinet top).
+    // Live spans (endpoint is a validated live CBT) get the barber pole shader.
     for (const span of spans) {
       const fromId   = span.properties.from_node;
       const toId     = span.properties.to_node;
@@ -357,9 +450,13 @@ class PoleLayer {
       const len = dir.length();
       if (len === 0) continue;
 
+      // Live if either endpoint is a validated live node (CBT or pole).
+      const isLive = this._liveNodeIds.has(fromId) || this._liveNodeIds.has(toId);
+      const mat = isLive ? this._pulseMaterial : this._spanMaterial;
+
       const spanGeom = new THREE.CylinderGeometry(SPAN_RADIUS_M, SPAN_RADIUS_M, len, 6);
       this._dynamicGeoms.push(spanGeom);
-      const spanMesh = new THREE.Mesh(spanGeom, this._spanMaterial);
+      const spanMesh = new THREE.Mesh(spanGeom, mat);
       spanMesh.quaternion.setFromUnitVectors(
         new THREE.Vector3(0, 1, 0),
         dir.clone().normalize()
@@ -369,6 +466,7 @@ class PoleLayer {
     }
 
     // Aerial drops — 3D cylinder from a CBT pole-top DOWN to a premise.
+    // Live drops (UPRN in ROUTED set) get the barber pole shader.
     for (const adrop of adrops) {
       const coords = adrop.geometry.coordinates; // [[lng,lat](CBT), [lng,lat](premise)]
       if (!coords || coords.length < 2) continue;
@@ -392,9 +490,14 @@ class PoleLayer {
       const len = dir.length();
       if (len === 0) continue;
 
+      // Live if the drop's UPRN is in the validated ROUTED set.
+      const uprn = String(adrop.properties.uprn || '');
+      const isLive = uprn && this._liveUprns.has(uprn);
+      const mat = isLive ? this._pulseMaterial : this._adropMaterial;
+
       const dropGeom = new THREE.CylinderGeometry(ADROP_RADIUS_M, ADROP_RADIUS_M, len, 6);
       this._dynamicGeoms.push(dropGeom);
-      const dropMesh = new THREE.Mesh(dropGeom, this._adropMaterial);
+      const dropMesh = new THREE.Mesh(dropGeom, mat);
       dropMesh.quaternion.setFromUnitVectors(
         new THREE.Vector3(0, 1, 0),
         dir.clone().normalize()
@@ -505,6 +608,13 @@ class PoleLayer {
 
       if (!this._group) return;
 
+      // Tick the barber pole time uniform.
+      // PULSE_SPEED controls animation rate — see constant at top of file.
+      if (this._pulseMaterial) {
+        this._pulseMaterial.uniforms.time.value =
+          (performance.now() / 1000) * PULSE_SPEED;
+      }
+
       // m = MapLibre's projection matrix (mercator → clip space).
       // fromArray accepts Float64Array fine.
       const m = new THREE.Matrix4().fromArray(args.defaultProjectionData.mainMatrix);
@@ -512,6 +622,12 @@ class PoleLayer {
 
       this._renderer.resetState();
       this._renderer.render(this._scene, this._camera);
+
+      // Keep repainting continuously while live pulsing assets exist.
+      // Without this, MapLibre only repaints on interaction and the stripe freezes.
+      if (this._liveUprns.size > 0 || this._liveNodeIds.size > 0) {
+        this._map.triggerRepaint();
+      }
     } catch (err) {
       console.error('[PoleLayer] render error:', err);
     }
@@ -521,17 +637,18 @@ class PoleLayer {
     if (this._map && this._onData) this._map.off('data', this._onData);
     for (const g of this._dynamicGeoms) g.dispose();
     this._dynamicGeoms = [];
-    if (this._group)         this._scene.remove(this._group);
-    if (this._geometry)      this._geometry.dispose();
-    if (this._material)      this._material.dispose();
+    if (this._group)          this._scene.remove(this._group);
+    if (this._geometry)       this._geometry.dispose();
+    if (this._material)       this._material.dispose();
     if (this._anchorGeometry) this._anchorGeometry.dispose();
     if (this._anchorMaterial) this._anchorMaterial.dispose();
-    if (this._cbtGeometry)   this._cbtGeometry.dispose();
-    if (this._cbtMaterial)   this._cbtMaterial.dispose();
-    if (this._spanMaterial)  this._spanMaterial.dispose();
-    if (this._adropMaterial) this._adropMaterial.dispose();
-    if (this._tailMaterial)  this._tailMaterial.dispose();
-    if (this._renderer)      this._renderer.dispose();
+    if (this._cbtGeometry)    this._cbtGeometry.dispose();
+    if (this._cbtMaterial)    this._cbtMaterial.dispose();
+    if (this._spanMaterial)   this._spanMaterial.dispose();
+    if (this._adropMaterial)  this._adropMaterial.dispose();
+    if (this._tailMaterial)   this._tailMaterial.dispose();
+    if (this._pulseMaterial)  this._pulseMaterial.dispose();
+    if (this._renderer)       this._renderer.dispose();
   }
 }
 
