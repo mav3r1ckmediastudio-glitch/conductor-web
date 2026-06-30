@@ -1,0 +1,41 @@
+name: Tests
+
+# Runs the test suite automatically on every push and pull request to master,
+# so the 56 tests built up over this session actually protect the codebase
+# rather than relying on someone remembering to run `npm test` before pushing.
+# This was Phase 2's recommendation in the June 2026 audit.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # All the actual project code lives in frontend/, not the repo root —
+    # this tells every step below to run from there by default.
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run the test suite
+        run: npm test
+
+      - name: Confirm the production build still compiles
+        run: npm run build
