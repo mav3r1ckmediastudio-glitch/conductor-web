@@ -14,6 +14,7 @@
     "vite": "^8.1.0"
   },
   "dependencies": {
+    "@clerk/clerk-js": "^6.23.0",
     "maplibre-gl": "^5.24.0",
     "proj4": "^2.20.9",
     "shpjs": "^6.2.0",
