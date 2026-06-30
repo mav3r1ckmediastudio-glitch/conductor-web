@@ -24,13 +24,14 @@
   import { showToast, showError } from './toast.js';
   import { projectStore } from './projectStore.js';
   import {
-    isSupported  as fsaaSupported,
-    onStatus     as fsaaOnStatus,
-    saveAs       as fsaaSaveAs,
-    openFile     as fsaaOpenFile,
-    saveNow      as fsaaSaveNow,
-    tryResume    as fsaaTryResume,
-    resumePrompt as fsaaResumePrompt,
+    isSupported     as fsaaSupported,
+    onStatus        as fsaaOnStatus,
+    saveAs          as fsaaSaveAs,
+    openFile        as fsaaOpenFile,
+    saveNow         as fsaaSaveNow,
+    tryResume       as fsaaTryResume,
+    resumePrompt    as fsaaResumePrompt,
+    resumeProjectFile as fsaaResumeProjectFile,
   } from './fsaa.js';
   import { exportSheet } from './mapExport.js';
   import { assignFibres } from './fibreAssign.js';
@@ -1291,10 +1292,49 @@
 
   function openProject(id) {
     showOpen = false;
-    if (!projectStore.openProject(id)) { showError('Could not open that project.'); return; }
-    rpMode = 'default';
-    activeToolLabel = '';
-    if (map) syncToMap(map);
+    const result = projectStore.openProject(id);
+
+    if (result.ok) {
+      rpMode = 'default';
+      activeToolLabel = '';
+      if (map) syncToMap(map);
+      return;
+    }
+
+    if (result.needsFileResume) {
+      // No cached localStorage copy — this project's data lives only in its
+      // .conductor file. We're still inside the click handler (user gesture),
+      // so re-request file permission directly rather than needing a second click.
+      fsaaResumeProjectFile(id).then(r => {
+        if (r.state === 'loaded') {
+          rpMode = 'default';
+          activeToolLabel = '';
+          if (map) syncToMap(map);
+        } else if (r.state === 'denied') {
+          showError(`Permission for "${result.fileName}" wasn't granted. Use "Open File" to pick it manually.`);
+        } else {
+          showError(`Could not find the file handle for "${result.fileName}". Use "Open File" to pick it manually.`);
+        }
+      });
+      return;
+    }
+
+    showError('Could not open that project.');
+  }
+
+  function onDeleteProject(id, name) {
+    if (!confirm(`Delete "${name || 'this project'}"? This can't be undone.`)) return;
+    const wasActive = id === projectStore.activeId();
+    projectStore.deleteProject(id);
+    refreshList();
+    if (wasActive) {
+      // The project we just deleted was the one open on screen — fall back to
+      // a fresh project rather than leaving the UI pointed at a dead id.
+      projectStore.newProject();
+      rpMode = 'default';
+      activeToolLabel = '';
+      if (map) syncToMap(map);
+    }
   }
 </script>
 
@@ -1414,10 +1454,13 @@
               <div class="tb-open-empty">No saved projects</div>
             {:else}
               {#each projectList as p}
-                <button class="tb-open-item" class:active={p.id === projectStore.activeId()} on:click={() => openProject(p.id)}>
-                  <span class="oi-name">{p.name}</span>
-                  <span class="oi-area">{p.areaId}</span>
-                </button>
+                <div class="tb-open-row">
+                  <button class="tb-open-item" class:active={p.id === projectStore.activeId()} on:click={() => openProject(p.id)}>
+                    <span class="oi-name">{p.name}</span>
+                    <span class="oi-area">{p.areaId}</span>
+                  </button>
+                  <button class="tb-open-del" title="Delete project" on:click|stopPropagation={() => onDeleteProject(p.id, p.name)}>🗑</button>
+                </div>
               {/each}
             {/if}
           </div>
@@ -1822,18 +1865,22 @@
   .tb-open-wrap { position: relative; }
   .tb-open-menu { position: absolute; top: calc(100% + 4px); right: 0; background: #0d1520; border: 1px solid #1a2d40; border-radius: 5px; min-width: 200px; z-index: 100; box-shadow: 0 8px 24px #00000088; }
   .tb-open-empty { font-size: 9px; color: #3a5a70; padding: 10px 12px; }
-  .tb-open-item { display: flex; align-items: center; justify-content: space-between; width: 100%; background: transparent; border: none; border-bottom: 1px solid #1a2d4033; padding: 8px 12px; cursor: pointer; gap: 12px; }
-  .tb-open-item:last-child { border-bottom: none; }
+  .tb-open-row { display: flex; align-items: stretch; border-bottom: 1px solid #1a2d4033; }
+  .tb-open-row:last-child { border-bottom: none; }
+  .tb-open-item { display: flex; align-items: center; justify-content: space-between; flex: 1; min-width: 0; box-sizing: border-box; background: transparent; border: none; padding: 8px 12px; cursor: pointer; gap: 12px; }
   .tb-open-item:hover { background: #0f1c28; }
   .tb-open-item.active .oi-name { color: #4dc8ff; }
   .tb-open-item.active::before { content: '●'; color: #4dc8ff; font-size: 6px; margin-right: 6px; }
+  .tb-open-del { background: transparent; border: none; padding: 8px 10px; cursor: pointer; font-size: 11px; opacity: 0.5; }
+  .tb-open-del:hover { opacity: 1; background: #2a0f0f; }
   .oi-name { font-size: 9px; color: #a0c4d8; font-family: 'Courier New', monospace; letter-spacing: 0.04em; }
   .oi-area { font-size: 8px; color: #3a5a70; font-family: 'Courier New', monospace; }
 
   /* ── FSAA file controls ── */
   .fsaa-grp { display: flex; align-items: center; gap: 6px; padding-left: 6px; margin-left: 2px; border-left: 1px solid #1a2d40; }
   .tb-disabled { opacity: 0.4; cursor: not-allowed; }
-  .exp-item { color: #a0c4d8; font-family: 'Courier New', monospace; font-size: 10px; letter-spacing: 0.04em; justify-content: flex-start; }
+  .exp-item { display: block; width: 100%; box-sizing: border-box; border-bottom: 1px solid #1a2d4033; color: #a0c4d8; font-family: 'Courier New', monospace; font-size: 10px; letter-spacing: 0.04em; text-align: left; }
+  .exp-item:last-child { border-bottom: none; }
   .exp-item:hover { color: #4dc8ff; }
   .fsaa-ind { font-family: 'Courier New', monospace; font-size: 8.5px; letter-spacing: 0.04em; color: #3a5a70; white-space: nowrap; min-width: 68px; }
   .fsaa-ind.saved   { color: #5dd6a0; }

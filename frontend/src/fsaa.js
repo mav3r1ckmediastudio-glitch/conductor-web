@@ -2,22 +2,38 @@
 //
 // Gives a project a real `.conductor` file on the user's disk with in-place
 // autosave (debounced, on every store change), plus resume-on-relaunch via an
-// IndexedDB-persisted file handle. This is the durable, user-owned store; the
-// existing localStorage layer keeps running underneath as a crash cache.
+// IndexedDB-persisted file handle. This is the durable, user-owned store.
+//
+// localStorage is a crash-cache, NOT a second permanent copy: for the project
+// currently open, it still mirrors full state on every change (so a tab crash
+// before the next debounced file write isn't a total loss). But once a project
+// is bound to a real .conductor file and you switch away from it, its full
+// localStorage blob is evicted (see projectStore.js's evictBlobIfFileBound) —
+// the file on disk is the durable copy, localStorage doesn't need to duplicate
+// it forever. Unbound projects keep full retention; they have no other copy.
+//
+// File handles are kept in IndexedDB keyed PER PROJECT ID (not a single fixed
+// slot) so multiple file-bound projects can each be resumed independently —
+// switching projects re-grants permission for that project's own handle
+// rather than clobbering a single shared one.
 //
 // Target: Windows / Chromium (Chrome, Edge). Where the API is absent,
 // isSupported() returns false and the UI should hide the File buttons.
 //
 // Public API:
-//   isSupported()        → boolean
-//   onStatus(fn)         → subscribe to {status,lastSaved,fileName,supported}; returns unsubscribe
-//   getStatus()          → current snapshot
-//   saveAs()             → pick a new file, bind it, write now           (user gesture)
-//   openFile()           → pick an existing file, load + bind it         (user gesture)
-//   saveNow()            → flush a pending write immediately
-//   tryResume()          → silent re-open of last file IF perm already granted (call on mount)
-//   resumePrompt()       → re-grant permission + load (call from a click) (user gesture)
-//   unbindFile()         → detach the current file (stops file autosave)
+//   isSupported()         → boolean
+//   onStatus(fn)          → subscribe to {status,lastSaved,fileName,supported}; returns unsubscribe
+//   getStatus()           → current snapshot
+//   saveAs()              → pick a new file, bind it, write now                  (user gesture)
+//   openFile()            → pick an existing file, load + bind it                (user gesture)
+//   saveNow()              → flush a pending write immediately
+//   tryResume()            → silent re-open of the ACTIVE project's file IF perm already granted (call on mount)
+//   resumePrompt()          → re-grant permission + load for the active project    (user gesture)
+//   resumeProjectFile(id)   → re-grant permission + load for a DIFFERENT project   (user gesture)
+//                             (used when switching to a project whose localStorage
+//                             blob was evicted but a file handle still exists)
+//   unbindFile()            → fully detach the active project's file (stops autosave,
+//                             clears its stored handle, marks it unbound)
 //
 // status values: 'no-file' | 'saved' | 'saving' | 'unsaved' | 'error'
 
@@ -58,11 +74,12 @@ export function onStatus(fn) {
 }
 export function getStatus() { return snapshot(); }
 
-// ── IndexedDB: persist the FileSystemFileHandle across sessions ───────────────
+// ── IndexedDB: persist FileSystemFileHandles across sessions, ONE PER PROJECT ─
 // File handles are structured-cloneable, so they store directly in IndexedDB.
+// Keyed by project id (the same id projectStore.js uses for its localStorage
+// index/blob keys) so each file-bound project can be resumed independently.
 const IDB_NAME  = 'conductor_fsaa';
 const IDB_STORE = 'handles';
-const IDB_KEY   = 'active';
 
 function idb() {
   return new Promise((resolve, reject) => {
@@ -72,30 +89,33 @@ function idb() {
     req.onerror   = () => reject(req.error);
   });
 }
-async function idbPut(handle) {
+async function idbPut(id, handle) {
+  if (!id) return;
   const db = await idb();
   return new Promise((res, rej) => {
     const tx = db.transaction(IDB_STORE, 'readwrite');
-    tx.objectStore(IDB_STORE).put(handle, IDB_KEY);
+    tx.objectStore(IDB_STORE).put(handle, id);
     tx.oncomplete = () => res();
     tx.onerror    = () => rej(tx.error);
   });
 }
-async function idbGet() {
+async function idbGet(id) {
+  if (!id) return null;
   const db = await idb();
   return new Promise((res, rej) => {
     const tx = db.transaction(IDB_STORE, 'readonly');
-    const r  = tx.objectStore(IDB_STORE).get(IDB_KEY);
+    const r  = tx.objectStore(IDB_STORE).get(id);
     r.onsuccess = () => res(r.result || null);
     r.onerror   = () => rej(r.error);
   });
 }
-async function idbClear() {
+async function idbDelete(id) {
+  if (!id) return;
   try {
     const db = await idb();
     await new Promise((res) => {
       const tx = db.transaction(IDB_STORE, 'readwrite');
-      tx.objectStore(IDB_STORE).delete(IDB_KEY);
+      tx.objectStore(IDB_STORE).delete(id);
       tx.oncomplete = () => res();
       tx.onerror    = () => res();
     });
@@ -137,11 +157,30 @@ function scheduleWrite() {
   _timer = setTimeout(writeNow, DEBOUNCE_MS);
 }
 
-async function detach() {
+async function detachInMemory() {
+  // Called when the user switches to a DIFFERENT project (legacy switcher /
+  // Open list). The file handle still belongs to the project we're leaving —
+  // it stays valid in IndexedDB and that project's index entry keeps
+  // fileBound:true, so it can be resumed later. We only need to stop writing
+  // the new project's data into the old project's file.
   clearTimeout(_timer);
   _handle = null;
   _pendingResumeHandle = null;
-  await idbClear();
+  setStatus('no-file', { lastSaved: null, fileName: null });
+}
+
+async function fullUnbind() {
+  // Called only from the explicit unbindFile() action: the user is actively
+  // disconnecting THIS project from its file. Unlike detachInMemory(), this
+  // clears the stored handle and marks the project unbound, which puts it
+  // back under full localStorage retention (its only safety net once there's
+  // no file backing it).
+  const id = projectStore.activeId();
+  clearTimeout(_timer);
+  _handle = null;
+  _pendingResumeHandle = null;
+  await idbDelete(id);
+  projectStore.setFileBound(id, false, null);
   setStatus('no-file', { lastSaved: null, fileName: null });
 }
 
@@ -160,11 +199,13 @@ async function loadFromHandle(handle) {
   catch { throw new Error('That file is not a valid Conductor project.'); }
 
   _suppressResetDetach = true;
-  projectStore.loadExternalState(state);   // emits 'reset'
+  projectStore.loadExternalState(state);   // emits 'reset'; writes under projectStore.activeId()
   _suppressResetDetach = false;
 
+  const id = projectStore.activeId();
   _handle = handle;
-  await idbPut(handle);
+  await idbPut(id, handle);
+  projectStore.setFileBound(id, true, handle.name);
   setStatus('saved', { lastSaved: Date.now(), fileName: handle.name });
 }
 
@@ -183,9 +224,11 @@ export async function saveAs() {
     if (e && e.name === 'AbortError') return false;   // user cancelled
     throw e;
   }
+  const id = projectStore.activeId();
   _handle = handle;
   _pendingResumeHandle = null;
-  await idbPut(handle);
+  await idbPut(id, handle);
+  projectStore.setFileBound(id, true, handle.name);
   setStatus('saving', { fileName: handle.name });
   await writeNow();
   return true;
@@ -216,21 +259,23 @@ export async function saveNow() {
   return true;
 }
 
-// Detach the current file. Autosave-to-file stops; localStorage keeps the data.
+// Detach the current file. Autosave-to-file stops, the stored handle is
+// cleared, and the project goes back under full localStorage retention.
 export async function unbindFile() {
-  await detach();
+  await fullUnbind();
 }
 
-// On app mount: silently re-open the last file IF permission is still granted.
-// Returns { state: 'granted'|'prompt'|'none', fileName? }.
+// On app mount: silently re-open the ACTIVE project's last file IF permission
+// is still granted. Returns { state: 'granted'|'prompt'|'none', fileName? }.
 //   'granted' → already loaded, nothing more to do.
 //   'prompt'  → a file exists but needs a user click to re-grant; show a
 //               "Resume <fileName>" button that calls resumePrompt().
 //   'none'    → nothing to resume.
 export async function tryResume() {
   if (!isSupported()) return { state: 'none' };
+  const id = projectStore.activeId();
   let handle;
-  try { handle = await idbGet(); } catch { return { state: 'none' }; }
+  try { handle = await idbGet(id); } catch { return { state: 'none' }; }
   if (!handle) return { state: 'none' };
 
   let perm;
@@ -243,7 +288,8 @@ export async function tryResume() {
       return { state: 'granted', fileName: handle.name };
     } catch (e) {
       console.error('[fsaa] silent resume failed:', e);
-      await idbClear();
+      await idbDelete(id);
+      projectStore.setFileBound(id, false, null);
       return { state: 'none' };
     }
   }
@@ -254,7 +300,8 @@ export async function tryResume() {
   return { state: 'prompt', fileName: handle.name };
 }
 
-// Call from a click handler to re-grant permission and load the deferred file.
+// Call from a click handler to re-grant permission and load the active
+// project's deferred file (the "↻ Resume <fileName>" button).
 export async function resumePrompt() {
   const handle = _pendingResumeHandle;
   if (!handle) return false;
@@ -270,15 +317,58 @@ export async function resumePrompt() {
   }
 }
 
+// Re-grant permission and load a file for a project OTHER than the one
+// currently active — used when switching projects via the Open list and
+// projectStore.openProject() reports needsFileResume (no cached localStorage
+// blob, but the project's index entry says it has a bound file).
+//
+// IMPORTANT: the caller (App.svelte) must have already pointed projectStore's
+// active id at `id` before calling this — projectStore.openProject() does
+// this as part of returning needsFileResume — because loadFromHandle() always
+// binds to whatever project is currently active in the store.
+//
+// Must be called from within a user-gesture context (e.g. directly inside a
+// click handler) since requestPermission() requires one. Returns
+// { state: 'loaded'|'denied'|'none'|'error', fileName? }.
+export async function resumeProjectFile(id) {
+  if (!isSupported()) return { state: 'none' };
+  let handle;
+  try { handle = await idbGet(id); } catch { return { state: 'none' }; }
+  if (!handle) return { state: 'none' };
+
+  let perm;
+  try { perm = await handle.queryPermission({ mode: 'readwrite' }); }
+  catch { return { state: 'none' }; }
+
+  if (perm !== 'granted') {
+    try { perm = await handle.requestPermission({ mode: 'readwrite' }); }
+    catch (e) { console.error('[fsaa] resumeProjectFile permission request failed:', e); return { state: 'denied' }; }
+  }
+  if (perm !== 'granted') return { state: 'denied' };
+
+  try {
+    await loadFromHandle(handle);
+    return { state: 'loaded', fileName: handle.name };
+  } catch (e) {
+    console.error('[fsaa] resumeProjectFile load failed:', e);
+    return { state: 'error' };
+  }
+}
+
 // ── wire into the store, once, at import time ────────────────────────────────
-projectStore.on((event) => {
+projectStore.on((event, _state, extra) => {
   if (event === 'change') {
     scheduleWrite();
   } else if (event === 'reset') {
-    // A reset we didn't trigger means the user switched/started a project via the
-    // legacy localStorage switcher. The bound file belongs to the *previous*
-    // project, so unbind it to avoid overwriting File A with Project B's data.
+    // A reset we didn't trigger means the user switched/started a project via
+    // the legacy localStorage switcher or the Open list. The bound file
+    // belongs to the *previous* project, not this one — stop writing into it,
+    // but leave its handle and fileBound flag intact so it can be resumed
+    // later. (Full unbind only happens via the explicit unbindFile() action.)
     if (_suppressResetDetach) return;
-    detach();
+    detachInMemory();
+  } else if (event === 'project-deleted') {
+    // extra is the deleted project's id — drop its stored handle, if any.
+    idbDelete(extra);
   }
 });

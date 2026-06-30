@@ -36,15 +36,34 @@ function writeIndex(list) {
 }
 function upsertIndex(id, state) {
   const list = readIndex();
+  const i = list.findIndex(e => e.id === id);
+  const prior = i >= 0 ? list[i] : null;
   const entry = {
     id,
-    name:    state.project?.name   || 'Untitled',
-    areaId:  state.project?.areaId || '',
-    savedAt: Date.now(),
+    name:      state.project?.name   || 'Untitled',
+    areaId:    state.project?.areaId || '',
+    savedAt:   Date.now(),
+    // fileBound/fileName are owned by fsaa.js via setFileBound(), not by this
+    // save path — carry them forward so a normal autosave doesn't clobber them.
+    fileBound: prior?.fileBound || false,
+    fileName:  prior?.fileName  || null,
   };
-  const i = list.findIndex(e => e.id === id);
   if (i >= 0) list[i] = entry; else list.push(entry);
   writeIndex(list);
+}
+// Drop a project's full localStorage blob, but only if it's confirmed to have
+// a real .conductor file backing it (fileBound:true in the index). The index
+// entry itself (name/area/date for the Open list) is kept regardless — this
+// only removes the duplicated full state. Unbound projects are left alone:
+// they have no other copy of their data, so full retention is their only
+// safety net. Called whenever we switch away from a project (open a
+// different one, or start a new one).
+function evictBlobIfFileBound(id) {
+  if (!id) return;
+  const entry = readIndex().find(e => e.id === id);
+  if (!entry?.fileBound) return;
+  try { localStorage.removeItem(projectKey(id)); }
+  catch (e) { console.error('[projectStore] could not evict blob for file-bound project:', e); }
 }
 // One-time migration: adopt the legacy single-project blob as the first indexed project.
 // Console-only (not a toast): this runs invisibly once on first load for very old
@@ -305,7 +324,7 @@ class ProjectStore {
   get fibreAssignments() { return this._state.fibreAssignments || []; }
 
   on(fn) { this._listeners.push(fn); return () => { this._listeners = this._listeners.filter(l => l !== fn); }; }
-  _emit(event) { this._listeners.forEach(fn => fn(event, this._state)); }
+  _emit(event, extra) { this._listeners.forEach(fn => fn(event, this._state, extra)); }
 
   _update(patch) {
     this._state = { ...this._state, ...patch };
@@ -490,22 +509,65 @@ class ProjectStore {
     catch (e) { console.error('[projectStore] could not read active project id:', e); return null; }
   }
 
-  // NOTE: failures here return false and are surfaced by the caller (App.svelte
-  // already shows "Could not open that project." on a false return) — kept as
+  // Called by fsaa.js whenever a project's file-binding changes (bound on
+  // saveAs/openFile/resume, unbound via the explicit unbindFile action, or
+  // cleared automatically if a stale handle fails to load). Lightweight index
+  // update only — never touches the full project blob.
+  setFileBound(id, bound, fileName) {
+    if (!id) return;
+    const list = readIndex();
+    const i = list.findIndex(e => e.id === id);
+    if (i < 0) return;   // project not indexed (shouldn't happen) — nothing to flag
+    list[i] = { ...list[i], fileBound: !!bound, fileName: bound ? (fileName || null) : null };
+    writeIndex(list);
+  }
+
+  // NOTE: failures here return { ok: false } and are surfaced by the caller
+  // (App.svelte shows "Could not open that project." on a falsy ok) — kept as
   // console.error here, not a toast, to avoid showing the user two messages
   // for the same failure.
+  //
+  // Returns one of:
+  //   { ok: true }                                     — loaded from localStorage as normal
+  //   { ok: false, needsFileResume: true, fileName }    — no cached blob, but this
+  //                                                        project has a bound .conductor
+  //                                                        file; caller should call
+  //                                                        fsaa.resumeProjectFile(id)
+  //   { ok: false }                                     — genuinely could not open
   openProject(id) {
+    const prevId = this.activeId();
+    if (prevId && prevId !== id) evictBlobIfFileBound(prevId);
+
     let raw;
     try { raw = localStorage.getItem(projectKey(id)); }
-    catch (e) { console.error('[projectStore] could not read project for open:', e); return false; }
-    if (!raw) return false;
-    try {
-      localStorage.setItem(ACTIVE_KEY, id);
-      this._state = { ...DEFAULT_STATE, ...JSON.parse(raw) };
-      if (backfillFibreFields(this._state)) save(this._state);
+    catch (e) { console.error('[projectStore] could not read project for open:', e); return { ok: false }; }
+
+    if (raw) {
+      try {
+        localStorage.setItem(ACTIVE_KEY, id);
+        this._state = { ...DEFAULT_STATE, ...JSON.parse(raw) };
+        if (backfillFibreFields(this._state)) save(this._state);
+        this._emit('reset');
+        return { ok: true };
+      } catch (e) { console.error('[projectStore] failed to open project:', e); return { ok: false }; }
+    }
+
+    // No cached blob. If this project has a confirmed file binding, its
+    // localStorage copy was deliberately evicted, not lost — the .conductor
+    // file is the real copy. Point the active id at it now (so a subsequent
+    // fsaa.resumeProjectFile() writes/persists under the right key) and hand
+    // back to the caller to re-grant file permission, which needs a user
+    // gesture this function call may not have.
+    const entry = readIndex().find(e => e.id === id);
+    if (entry?.fileBound) {
+      try { localStorage.setItem(ACTIVE_KEY, id); }
+      catch (e) { console.error('[projectStore] could not set active id for file resume:', e); }
+      this._state = { ...DEFAULT_STATE };
       this._emit('reset');
-      return true;
-    } catch (e) { console.error('[projectStore] failed to open project:', e); return false; }
+      return { ok: false, needsFileResume: true, fileName: entry.fileName };
+    }
+
+    return { ok: false };
   }
 
   // Replace the entire working state from an external source — i.e. a .conductor
@@ -522,6 +584,8 @@ class ProjectStore {
 
   // Start a brand-new project. The current project stays saved under its own id.
   newProject() {
+    const prevId = this.activeId();
+    if (prevId) evictBlobIfFileBound(prevId);
     const id = newId();
     try { localStorage.setItem(ACTIVE_KEY, id); }
     catch (e) { showError('Could not set this as your active project — it may not reopen automatically next time.'); }
@@ -536,6 +600,9 @@ class ProjectStore {
       writeIndex(readIndex().filter(e => e.id !== id));
       if (this.activeId() === id) localStorage.removeItem(ACTIVE_KEY);
     } catch (e) { showError('Could not fully delete that project — it may still appear in your project list.'); }
+    // Let fsaa.js drop any stored file handle for this project, whether or
+    // not the deletion above fully succeeded.
+    this._emit('project-deleted', id);
   }
 
   resetProject() {
