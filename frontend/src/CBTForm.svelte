@@ -1,5 +1,6 @@
 <script>
   import { createEventDispatcher } from 'svelte';
+  import { showToast } from './toast.js';
 
   const dispatch = createEventDispatcher();
 
@@ -17,8 +18,8 @@
 
   function onSave() {
     if (hasSplitter) {
-      if (!splitRatio)   { alert('Please select a Split Ratio.'); return; }
-      if (!cascadeLevel) { alert('Please select a Cascade Level.'); return; }
+      if (!splitRatio)   { showToast('Please select a Split Ratio.'); return; }
+      if (!cascadeLevel) { showToast('Please select a Cascade Level.'); return; }
     }
 
     dispatch('save', {

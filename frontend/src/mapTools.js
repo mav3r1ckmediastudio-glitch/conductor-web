@@ -4,6 +4,7 @@
 import { projectStore } from './projectStore.js';
 import { createPoleLayer } from './PoleLayers.js';
 import { traceFibre, resolveNode } from './fibreTrace.js';
+import { showToast } from './toast.js';
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 
@@ -671,7 +672,7 @@ export function activateBuildAreaTool(map, onFinish) {
   function onContextmenu(e) {
     e.preventDefault();
     if (vertices.length < 3) {
-      alert('A build area needs at least 3 points. Keep clicking to add corners, then right-click to finish.');
+      showToast('A build area needs at least 3 points. Keep clicking to add corners, then right-click to finish.');
       return;
     }
     finish();
@@ -841,7 +842,7 @@ export function activateChamberTool(map, onFinish) {
       chamberId = result.id;
       chamberSeq = result.seq;
     } catch (err) {
-      alert(err.message);
+      showToast(err.message);
       return;
     }
 
@@ -1044,7 +1045,7 @@ export function activateCBTTool(map, onFinish) {
   function onClick(e) {
     const snap = _snapToNode(map, e.lngLat, 16, ['POLE']);
     if (!snap) {
-      alert('Click on or near an existing pole. CBTs must be mounted on a pole.');
+      showToast('Click on or near an existing pole. CBTs must be mounted on a pole.');
       return;
     }
 
@@ -1166,7 +1167,7 @@ export function activateAerialSpanTool(map, onSaved) {
   function onContextmenu(e) {
     e.preventDefault();
     if (vertices.length < 2) {
-      alert('A span needs at least 2 points. Click CBTs to add vertices, then right-click to finish.');
+      showToast('A span needs at least 2 points. Click CBTs to add vertices, then right-click to finish.');
       return;
     }
     finish();
@@ -1334,7 +1335,7 @@ export function activateAerialDropTool(map, onSaved) {
       // First click — must snap to a CBT
       const snap = _snapToNode(map, e.lngLat, 16, ['CBT']);
       if (!snap) {
-        alert('Click on or near an existing CBT to start an aerial drop.');
+        showToast('Click on or near an existing CBT to start an aerial drop.');
         return;
       }
       pt1   = [snap.lngLat.lng, snap.lngLat.lat];
@@ -1547,7 +1548,7 @@ export function activateCBTTailTool(map, onFinish) {
     // HARD-STOP: block any vertex that would exceed 350m.
     const projected = lengthWith(candidate);
     if (projected > CBT_TAIL_MAX_M) {
-      alert(
+      showToast(
         `CBT tail hard-stop: this segment would take the tail to ` +
         `${Math.round(projected)} m, over the ${CBT_TAIL_MAX_M} m limit. ` +
         `Vertex rejected — route via a closer joint or add an intermediate joint.`
@@ -1565,11 +1566,11 @@ export function activateCBTTailTool(map, onFinish) {
       // First click — must be a CBT that does not already have a tail.
       const snap = _snapToNode(map, e.lngLat, 16, ['CBT']);
       if (!snap) {
-        alert('Click on or near an existing CBT to start a tail.');
+        showToast('Click on or near an existing CBT to start a tail.');
         return;
       }
       if (tailed.has(snap.id)) {
-        alert(`${snap.id} already has a tail. A CBT can only have one tail.`);
+        showToast(`${snap.id} already has a tail. A CBT can only have one tail.`);
         return;
       }
       commitVertex(snap);   // first vertex can never breach 350m (length 0)
@@ -1580,7 +1581,7 @@ export function activateCBTTailTool(map, onFinish) {
     // vertex; RMB is what finishes the tail (consistent with the other tools).
     const snap = _snapToNode(map, e.lngLat, 16, ['POLE', 'JOINT']);
     if (!snap) {
-      alert('Snap to a pole to follow the route, or to the parent joint, then right-click to finish.');
+      showToast('Snap to a pole to follow the route, or to the parent joint, then right-click to finish.');
       return;
     }
     // Only one joint may be committed, and it must be the last vertex. If a joint
@@ -1596,11 +1597,11 @@ export function activateCBTTailTool(map, onFinish) {
     if (!vertices.length) { cleanup(); return; }   // RMB with nothing started → exit
     // RMB finishes — but only if the tail terminates on a joint.
     if (nodeTypes[nodeTypes.length - 1] !== 'JOINT') {
-      alert('A CBT tail must end on an underground joint. Snap to the parent joint, then right-click to finish.');
+      showToast('A CBT tail must end on an underground joint. Snap to the parent joint, then right-click to finish.');
       return;
     }
     if (vertices.length < 2) {
-      alert('A tail needs at least a CBT and a joint.');
+      showToast('A tail needs at least a CBT and a joint.');
       return;
     }
     finish();
@@ -1709,7 +1710,7 @@ export function activateJointTool(map, onFinish) {
   function onClick(e) {
     const snap = _snapToNode(map, e.lngLat, 16, ['CHAMBER']);
     if (!snap) {
-      alert('Click on or near an existing chamber. Joints must be placed inside a chamber.');
+      showToast('Click on or near an existing chamber. Joints must be placed inside a chamber.');
       return;
     }
 
@@ -1964,7 +1965,7 @@ export function activateCableTool(map, onFinish) {
   function onContextmenu(e) {
     e.preventDefault();
     if (vertices.length < 2) {
-      alert('A cable needs at least 2 points. Keep clicking to add vertices, then right-click to finish.');
+      showToast('A cable needs at least 2 points. Keep clicking to add vertices, then right-click to finish.');
       return;
     }
     finish();
@@ -2238,7 +2239,7 @@ export function activateDuctTool(map, onFinish) {
   function onContextmenu(e) {
     e.preventDefault();
     if (vertices.length < 2) {
-      alert('A duct needs at least 2 points. Keep clicking to add vertices, then right-click to finish.');
+      showToast('A duct needs at least 2 points. Keep clicking to add vertices, then right-click to finish.');
       return;
     }
     finish();
@@ -2258,7 +2259,7 @@ export function activateDuctTool(map, onFinish) {
       ductId = result.id;
       ductSeq = result.seq;
     } catch (err) {
-      alert(err.message);
+      showToast(err.message);
       cleanup();
       return;
     }

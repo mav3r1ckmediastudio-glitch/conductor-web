@@ -1,5 +1,6 @@
 <script>
   import { createEventDispatcher } from 'svelte';
+  import { showToast } from './toast.js';
   const dispatch = createEventDispatcher();
 
   // existing is the current projectStore.cabinet.properties object.
@@ -62,7 +63,7 @@
   }
 
   function save() {
-    if (!popName.trim()) { alert('Site Name is required.'); return; }
+    if (!popName.trim()) { showToast('Site Name is required.'); return; }
     dispatch('save', {
       // geometry is unchanged — carried through by App.svelte
       pop_name:          popName.trim(),

@@ -1,5 +1,6 @@
 <script>
   import { createEventDispatcher } from 'svelte';
+  import { showToast } from './toast.js';
   const dispatch = createEventDispatcher();
 
   // pending: { lng, lat, joint_id, chamber_id, chamber_seq, pop_id, area_id }
@@ -21,8 +22,8 @@
 
   function save() {
     if (hasSplitter) {
-      if (!splitRatio)   { alert('Please select a Split Ratio.'); return; }
-      if (!cascadeLevel) { alert('Please select a Cascade Level.'); return; }
+      if (!splitRatio)   { showToast('Please select a Split Ratio.'); return; }
+      if (!cascadeLevel) { showToast('Please select a Cascade Level.'); return; }
     }
     dispatch('save', {
       lng:           pending.lng,

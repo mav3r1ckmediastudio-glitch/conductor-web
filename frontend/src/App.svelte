@@ -20,6 +20,8 @@
   import ProjectSetup from './ProjectSetup.svelte';
   import AddressImporter from './AddressImporter.svelte';
   import BuildAreaForm from './BuildAreaForm.svelte';
+  import Toast from './Toast.svelte';
+  import { showToast, showError } from './toast.js';
   import { projectStore } from './projectStore.js';
   import {
     isSupported  as fsaaSupported,
@@ -499,7 +501,7 @@
       rpMode = 'chamber-form';
       activeToolLabel = '';
     });
-    if (err) alert(err.error);
+    if (err) showToast(err.error);
   }
 
   function onChamberSaved(e) {
@@ -528,7 +530,7 @@
       rpMode = 'duct-form';
       activeToolLabel = '';
     });
-    if (err) alert(err.error);
+    if (err) showToast(err.error);
   }
 
   function onDuctSaved(e) {
@@ -558,7 +560,7 @@
       rpMode = 'joint-form';
       activeToolLabel = '';
     });
-    if (err) alert(err.error);
+    if (err) showToast(err.error);
   }
 
   function onJointSaved(e) {
@@ -589,7 +591,7 @@
       projectStore.addDropDuct(feature);
       syncToMap(map);
     });
-    if (err) { alert(err.error); activeToolLabel = ''; }
+    if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
   function onPlaceCable() {
@@ -600,7 +602,7 @@
       rpMode = 'cable-form';
       activeToolLabel = '';
     });
-    if (err) alert(err.error);
+    if (err) showToast(err.error);
   }
 
   function onCableSaved(e) {
@@ -629,7 +631,7 @@
       projectStore.addBundle(feature);
       syncToMap(map);
     });
-    if (err) { alert(err.error); activeToolLabel = ''; }
+    if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
   function onPlacePole() {
@@ -640,7 +642,7 @@
       rpMode = 'pole-form';
       activeToolLabel = '';
     });
-    if (err) { alert(err.error); activeToolLabel = ''; }
+    if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
   function onPoleSaved(e) {
@@ -669,7 +671,7 @@
       rpMode = 'cbt-form';
       activeToolLabel = '';
     });
-    if (err) { alert(err.error); activeToolLabel = ''; }
+    if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
   function onCBTSaved(e) {
@@ -697,7 +699,7 @@
       projectStore.addSpan(feature);
       syncToMap(map);
     });
-    if (err) { alert(err.error); activeToolLabel = ''; }
+    if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
   function onPlaceAerialDrop() {
@@ -707,7 +709,7 @@
       projectStore.addAerialDrop(feature);
       syncToMap(map);
     });
-    if (err) { alert(err.error); activeToolLabel = ''; }
+    if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
   function onPlaceCBTTail() {
@@ -718,7 +720,7 @@
       rpMode = 'cbt-tail-form';
       activeToolLabel = '';
     });
-    if (err) { alert(err.error); activeToolLabel = ''; }
+    if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
   function onCBTTailSaved(e) {
@@ -837,7 +839,7 @@
   // ── civil-edit-cabinet ───────────────────────────────────────────────────────
 
   function onEditCabinet() {
-    if (!projectStore.cabinet) { alert('No cabinet placed yet.'); return; }
+    if (!projectStore.cabinet) { showToast('No cabinet placed yet.'); return; }
     clearTool(map);
     rpMode = 'edit-cabinet-form';
   }
@@ -867,7 +869,7 @@
       rpMode = 'road-crossing-form';
       activeToolLabel = '';
     });
-    if (err) alert(err.error);
+    if (err) showToast(err.error);
   }
 
   function onRoadCrossingSaved(e) {
@@ -899,7 +901,7 @@
       rpMode = 'stream-crossing-form';
       activeToolLabel = '';
     });
-    if (err) alert(err.error);
+    if (err) showToast(err.error);
   }
 
   function onStreamCrossingSaved(e) {
@@ -931,7 +933,7 @@
       rpMode = 'pia-chamber-form';
       activeToolLabel = '';
     });
-    if (err) alert(err.error);
+    if (err) showToast(err.error);
   }
 
   function onPIAChamberSaved(e) {
@@ -962,7 +964,7 @@
       rpMode = 'pia-duct-form';
       activeToolLabel = '';
     });
-    if (err) alert(err.error);
+    if (err) showToast(err.error);
   }
 
   function onPIADuctSaved(e) {
@@ -997,7 +999,7 @@
       rpMode = 'pia-drop-form';
       activeToolLabel = '';
     });
-    if (err) { alert(err.error); activeToolLabel = ''; }
+    if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
   function onPIADropSaved(e) {
@@ -1028,7 +1030,7 @@
       fibreTraceResult = result;
       rpMode = 'fibre-trace';
     });
-    if (err) { alert(err.error); activeToolLabel = ''; }
+    if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
   function onFibreTraceClose() {
@@ -1051,7 +1053,7 @@
     clearTool(map);
     activeToolLabel = '';
     const result = assignFibres(projectStore.state);
-    if (!result.ok) { alert(result.reason); return; }
+    if (!result.ok) { showToast(result.reason); return; }
     projectStore.applyFibreAssignment(result);
     syncToMap(map);
     fibreAssignResult = result;
@@ -1074,7 +1076,7 @@
     clearCountHighlight(map);
     activeToolLabel = '';
     const result = countFibres(projectStore.state);
-    if (!result.ok) { alert(result.reason); return; }
+    if (!result.ok) { showToast(result.reason); return; }
     fibreCountResult = result;
     rpMode = 'fibre-count';
   }
@@ -1136,7 +1138,7 @@
   // ── Cabinet Cost Calculator ────────────────────────────────────────
   function onCabinetCost() {
     if (stage !== 'design') return;
-    if (!projectStore.cabinet) { alert('No cabinet placed yet.'); return; }
+    if (!projectStore.cabinet) { showToast('No cabinet placed yet.'); return; }
     clearTool(map);
     activeToolLabel = '';
     rpMode = 'cabinet-cost';
@@ -1208,7 +1210,7 @@
 
   async function onSaveToFile() {
     try { await fsaaSaveAs(); }
-    catch (e) { alert('Could not save file: ' + (e?.message || e)); }
+    catch (e) { showError('Could not save file: ' + (e?.message || e)); }
   }
   async function onOpenFile() {
     try {
@@ -1216,7 +1218,7 @@
         rpMode = 'default'; activeToolLabel = '';
         if (map) syncToMap(map);
       }
-    } catch (e) { alert('Could not open file: ' + (e?.message || e)); }
+    } catch (e) { showError('Could not open file: ' + (e?.message || e)); }
   }
   async function onResumeFile() {
     if (await fsaaResumePrompt()) {
@@ -1236,7 +1238,7 @@
   let exporting = false;
   async function doExport(format) {
     showExport = false;
-    if (is3D) { alert('Switch to 2D view before exporting the map.'); return; }
+    if (is3D) { showToast('Switch to 2D view before exporting the map.'); return; }
     if (!map) return;
     exporting = true;
     try {
@@ -1246,7 +1248,7 @@
       const cors = /SecurityError|tainted/i.test(msg)
         ? '\n\nThe basemap may be blocking image capture (CORS). Try the Dark or Light basemap and export again.'
         : '';
-      alert('Export failed: ' + msg + cors);
+      showError('Export failed: ' + msg + cors);
     } finally {
       exporting = false;
     }
@@ -1279,7 +1281,7 @@
 
   function openProject(id) {
     showOpen = false;
-    if (!projectStore.openProject(id)) { alert('Could not open that project.'); return; }
+    if (!projectStore.openProject(id)) { showError('Could not open that project.'); return; }
     rpMode = 'default';
     activeToolLabel = '';
     if (map) syncToMap(map);
@@ -1289,6 +1291,8 @@
 <svelte:window on:click={() => { showOpen = false; userMenuOpen = false; showExport = false; }} on:keydown={onKeydown} />
 
 <div class="screen">
+
+  <Toast />
 
   {#if showSaveNudge}
     <div class="save-nudge" role="alert">

@@ -1,5 +1,6 @@
 <script>
   import { createEventDispatcher } from 'svelte';
+  import { showToast } from './toast.js';
   const dispatch = createEventDispatcher();
 
   export let pending = null;  // { lng, lat, pop_id, area_id }
@@ -39,7 +40,7 @@
   }
 
   function save() {
-    if (!popName.trim()) { alert('Site Name is required.'); return; }
+    if (!popName.trim()) { showToast('Site Name is required.'); return; }
 
     if (status === 'ACTIVE' && gponOptics === 0) {
       if (!confirm('Status is ACTIVE but no GPON optics recorded. Save anyway?')) return;
