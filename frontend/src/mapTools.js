@@ -520,34 +520,43 @@ export function getPoleLayer() { return _poleLayerInstance; }
 
 export function syncToMap(map) {
   const s = projectStore.state;
-  if (!map.getSource('addresses-src')) return;
 
-  map.getSource('addresses-src').setData({
-    type: 'FeatureCollection',
-    features: s.addressPoints || [],
-  });
+  if (map.getSource('addresses-src')) {
+    map.getSource('addresses-src').setData({
+      type: 'FeatureCollection',
+      features: s.addressPoints || [],
+    });
+  }
 
-  map.getSource('build-area-src').setData(
-    s.buildArea
-      ? { type: 'FeatureCollection', features: [s.buildArea] }
-      : emptyFC()
-  );
+  if (map.getSource('build-area-src')) {
+    map.getSource('build-area-src').setData(
+      s.buildArea
+        ? { type: 'FeatureCollection', features: [s.buildArea] }
+        : emptyFC()
+    );
+  }
 
-  map.getSource('cabinet-src').setData(
-    s.cabinet
-      ? { type: 'FeatureCollection', features: [s.cabinet] }
-      : emptyFC()
-  );
+  if (map.getSource('cabinet-src')) {
+    map.getSource('cabinet-src').setData(
+      s.cabinet
+        ? { type: 'FeatureCollection', features: [s.cabinet] }
+        : emptyFC()
+    );
+  }
 
-  map.getSource('chambers-src').setData({
-    type: 'FeatureCollection',
-    features: s.chambers || [],
-  });
+  if (map.getSource('chambers-src')) {
+    map.getSource('chambers-src').setData({
+      type: 'FeatureCollection',
+      features: s.chambers || [],
+    });
+  }
 
-  map.getSource('ducts-src').setData({
-    type: 'FeatureCollection',
-    features: s.ducts || [],
-  });
+  if (map.getSource('ducts-src')) {
+    map.getSource('ducts-src').setData({
+      type: 'FeatureCollection',
+      features: s.ducts || [],
+    });
+  }
 
   if (map.getSource('joints-src')) {
     map.getSource('joints-src').setData({
