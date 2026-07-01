@@ -125,7 +125,12 @@
     {/if}
 
     <div class="ft-actions">
-      <button class="ft-btn" on:click={close}>Done</button>
+      {#if result.status === 'ROUTED'}
+        <button class="ft-btn" on:click={() => dispatch('downloadRouteSplice')}>
+          &#8659; Download Route Splice Plan
+        </button>
+      {/if}
+      <button class="ft-btn secondary" on:click={close}>Done</button>
     </div>
   {/if}
 </div>
@@ -199,7 +204,9 @@
   .ft-hop-id { font-size: 9.5px; color: #a0c4d8; letter-spacing: 0.03em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ft-hop.edge .ft-hop-id { color: #6a8fa8; }
 
-  .ft-actions { padding: 10px 14px; border-top: 1px solid #1a2d40; flex-shrink: 0; }
+  .ft-actions { padding: 10px 14px; border-top: 1px solid #1a2d40; flex-shrink: 0; display: flex; flex-direction: column; gap: 6px; }
   .ft-btn { width: 100%; background: #00aaff14; border: 1px solid #00aaff44; color: #4dc8ff; font-family: 'Courier New', monospace; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; padding: 8px; border-radius: 4px; cursor: pointer; }
   .ft-btn:hover { background: #00aaff22; }
+  .ft-btn.secondary { background: #0a1018; border-color: #1a2d40; color: #6a8fa8; }
+  .ft-btn.secondary:hover { border-color: #00aaff33; color: #4dc8ff; }
 </style>

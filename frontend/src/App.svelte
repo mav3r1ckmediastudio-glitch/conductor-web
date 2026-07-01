@@ -37,7 +37,7 @@
   import { assignFibres } from './fibreAssign.js';
   import { docsUrl, toolTip } from './toolDocs.js';
   import { countFibres } from './fibreCount.js';
-  import { downloadSplicePlan, generateSplicePlan, downloadAllSplicePlans } from './splicePlan.js';
+  import { downloadSplicePlan, generateSplicePlan, downloadAllSplicePlans, generateRouteSplicePlan } from './splicePlan.js';
   import AssetEditPanel from './AssetEditPanel.svelte';
   import AssetPickerDialog from './AssetPickerDialog.svelte';
   import FibreTracePanel from './FibreTracePanel.svelte';
@@ -1160,6 +1160,18 @@
     activeToolLabel = '';
   }
 
+  // Route Splice Export — chains the current Fibre Trace result (same engine,
+  // same click-a-premise flow) through generateRouteSplicePlan() to produce
+  // one printable HTML covering every joint/CBT in the route, in path order.
+  // Only reachable from a ROUTED trace (button is hidden otherwise in
+  // FibreTracePanel), but defensively re-checks here too.
+  function onDownloadRouteSplice() {
+    if (!fibreTraceResult || fibreTraceResult.status !== 'ROUTED') return;
+    const result = generateRouteSplicePlan(projectStore.state, fibreTraceResult.uprn);
+    if (result.error) { showError(result.error); return; }
+    downloadSplicePlan(result.html, result.filename);
+  }
+
   // ── fibre-assign (Tier 2) ────────────────────────────────────────────────
   // Not a map-click tool — runs the cascade over the whole network, writes
   // splitter_port onto consumers + splitter summaries onto CBTs/joints, then
@@ -1784,7 +1796,7 @@
         />
 
       {:else if rpMode === 'fibre-trace'}
-        <FibreTracePanel result={fibreTraceResult} on:close={onFibreTraceClose} />
+        <FibreTracePanel result={fibreTraceResult} on:close={onFibreTraceClose} on:downloadRouteSplice={onDownloadRouteSplice} />
 
       {:else if rpMode === 'fibre-assign'}
         <div class="fa-panel">

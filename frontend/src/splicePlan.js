@@ -1,12 +1,19 @@
 // splicePlan.js — Self-contained HTML splice plan generator for Conductor Web.
-// Produces per-joint HTML documents matching the v2 plugin's splice plan export.
+// Produces per-joint HTML documents matching the v2 plugin's splice plan export,
+// plus a route-level export that chains several joints into one document.
 // Pure function — no map / DOM dependencies. Takes the projectStore.state object.
 //
 // Exports:
-//   generateSplicePlan(store, jointId)   → HTML string for one joint/CBT
-//   generateAllSplicePlans(store)        → [{ filename, html, jointId, label }]
-//   downloadSplicePlan(html, filename)   → triggers browser download
-//   downloadAllSplicePlans(store)        → downloads all plans sequentially
+//   generateSplicePlan(store, jointId)      → HTML string for one joint/CBT
+//   generateRouteSplicePlan(store, uprn)     → { html, filename, jointIds, address }
+//                                               for a premise's full route to
+//                                               the cabinet, or { error } if the
+//                                               route isn't complete
+//   generateAllSplicePlans(store)            → [{ filename, html, jointId, label }]
+//   downloadSplicePlan(html, filename)       → triggers browser download
+//   downloadAllSplicePlans(store)            → downloads all plans sequentially
+
+import { traceFibre, resolveNode } from './fibreTrace.js';
 
 // ── IEC 60794 colour tables ───────────────────────────────────────────────────
 const IEC_NAMES  = ['Blue','Orange','Green','Brown','Slate','White','Red','Black','Yellow','Violet','Rose','Aqua'];
@@ -109,8 +116,40 @@ body{font-family:'Courier New',Courier,monospace;background:var(--bg);color:#1A1
 `;
 
 // ── Core generator ────────────────────────────────────────────────────────────
+//
+// generateSplicePlan() (single joint) and generateRouteSplicePlan() (a full
+// premise-to-cabinet route, see below) share the same per-joint rendering
+// logic — buildJointSpliceData() below computes everything for ONE joint
+// (header stats + body HTML: tube splice sections, splitter section, spare
+// block) without any page chrome, so both callers can wrap it differently:
+// generateSplicePlan() wraps one joint in the full standalone page (its
+// existing, unchanged behaviour); generateRouteSplicePlan() wraps several
+// joints, each under a smaller per-joint sub-header, inside ONE page.
 
-export function generateSplicePlan(store, jointId) {
+function buildLegendsHtml() {
+  const L = [];
+  L.push(`<div class="legends"><div class="legend-box">`);
+  L.push(`<div class="legend-title">Tube colour coding</div><div class="legend-items">`);
+  for (let t = 1; t <= 4; t++) {
+    const names = ['Blue','Orange','Green','Brown'];
+    L.push(`<div class="legend-item">${tubePill(t)}${names[t-1]}</div>`);
+  }
+  L.push(`</div></div><div class="legend-box">`);
+  L.push(`<div class="legend-title">Fibre colours &mdash; IEC 60794</div><div class="legend-items">`);
+  for (let f = 1; f <= 12; f++) {
+    const h = IEC_HEX[f-1], b = IEC_BORDER[f-1];
+    const bs = b ? `border:1px solid ${b};` : '';
+    L.push(`<div class="legend-item"><span style="width:11px;height:11px;border-radius:50%;display:inline-block;background:${h};${bs}"></span>${f} ${IEC_NAMES[f-1].slice(0,3)}</div>`);
+  }
+  L.push(`</div></div></div>`);
+  return L.join('\n');
+}
+
+// Computes everything needed to render ONE joint's splice detail: header
+// stats (for the caller to build whatever header style it wants) and the
+// body HTML (tube splice sections + splitter section + spare/dark block —
+// no page chrome, no <html>/<head>/header/legends/footer).
+function buildJointSpliceData(store, jointId) {
   const jid = S(jointId);
 
   // Find the joint or CBT record
@@ -210,45 +249,7 @@ export function generateSplicePlan(store, jointId) {
   const darkTubes = new Set();
   for (const r of darkRecs) darkTubes.add(r.tube_number || 1);
 
-  const H = [];
-  H.push(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">`);
-  H.push(`<title>${jid} &middot; Splice Plan</title>`);
-  H.push(`<style>${CSS}</style>`);
-  H.push(`</head><body><div class="page">`);
-
-  // ── Header ────────────────────────────────────────────────────────────────
-  H.push(`<div class="header">`);
-  H.push(`<div class="header-top"><div>`);
-  H.push(`<div class="header-title">${jid}</div>`);
-  const subParts = ['Splice Plan'];
-  if (closureType) subParts.push(`Closure: ${closureType}`);
-  subParts.push(`Type: ${jointType}`, 'Owner: Gigaloch');
-  H.push(`<div class="header-sub">${subParts.join(' &middot; ')}</div>`);
-  const locLines = [popId, chamberId].filter(Boolean);
-  H.push(`</div><div class="header-loc">${locLines.join('<br>')}</div></div>`);
-  H.push(`<div class="meta-grid">`);
-  H.push(`<div class="meta-card"><div class="meta-label">Splices</div><div class="meta-value">${nSplices}</div></div>`);
-  H.push(`<div class="meta-card"><div class="meta-label">Splitters</div><div class="meta-value">${nSplitters}</div></div>`);
-  H.push(`<div class="meta-card"><div class="meta-label">Active ports</div><div class="meta-value">${nActivePorts}</div></div>`);
-  H.push(`<div class="meta-card"><div class="meta-label">${spareTileLabel}</div><div class="meta-value">${spareTileValue}</div></div>`);
-  H.push(`</div></div>`);
-
-  // ── Legends ───────────────────────────────────────────────────────────────
-  H.push(`<div class="legends"><div class="legend-box">`);
-  H.push(`<div class="legend-title">Tube colour coding</div><div class="legend-items">`);
-  for (let t = 1; t <= 4; t++) {
-    const { bg, txt } = tubeCss(t);
-    const names = ['Blue','Orange','Green','Brown'];
-    H.push(`<div class="legend-item">${tubePill(t)}${names[t-1]}</div>`);
-  }
-  H.push(`</div></div><div class="legend-box">`);
-  H.push(`<div class="legend-title">Fibre colours &mdash; IEC 60794</div><div class="legend-items">`);
-  for (let f = 1; f <= 12; f++) {
-    const h = IEC_HEX[f-1], b = IEC_BORDER[f-1];
-    const bs = b ? `border:1px solid ${b};` : '';
-    H.push(`<div class="legend-item"><span style="width:11px;height:11px;border-radius:50%;display:inline-block;background:${h};${bs}"></span>${f} ${IEC_NAMES[f-1].slice(0,3)}</div>`);
-  }
-  H.push(`</div></div></div>`);
+  const B = [];
 
   // ── Per-tube splice sections ───────────────────────────────────────────────
   const allTubes = new Set([
@@ -263,47 +264,47 @@ export function generateSplicePlan(store, jointId) {
     if (darkTubes.has(t) && tubeSplices.length === 0) continue; // shown in spare block below
 
     const { bg, txt } = tubeCss(t);
-    H.push(`<div class="section-wrap">`);
-    H.push(`<div class="section-head" style="background:${bg};color:${txt};">`);
-    H.push(`${tubePill(t)} Tube ${t} &mdash; Through splices (${tubeSplices.length})</div>`);
-    H.push(`<table class="splice-table"><thead><tr>`);
-    H.push(`<th style="width:120px;">From cable</th><th style="width:50px;">Tube</th><th style="width:90px;">Fibre</th>`);
-    H.push(`<th style="width:110px;text-align:center;">Link</th>`);
-    H.push(`<th style="width:50px;">Tube</th><th style="width:90px;">Fibre</th><th>To cable</th>`);
-    H.push(`</tr></thead><tbody>`);
+    B.push(`<div class="section-wrap">`);
+    B.push(`<div class="section-head" style="background:${bg};color:${txt};">`);
+    B.push(`${tubePill(t)} Tube ${t} &mdash; Through splices (${tubeSplices.length})</div>`);
+    B.push(`<table class="splice-table"><thead><tr>`);
+    B.push(`<th style="width:120px;">From cable</th><th style="width:50px;">Tube</th><th style="width:90px;">Fibre</th>`);
+    B.push(`<th style="width:110px;text-align:center;">Link</th>`);
+    B.push(`<th style="width:50px;">Tube</th><th style="width:90px;">Fibre</th><th>To cable</th>`);
+    B.push(`</tr></thead><tbody>`);
 
     for (const r of tubeSplices) {
       const absFrom = (r.tube_number - 1) * 12 + (r.fibre_number || 1);
       const absTo   = (r.splice_to_tube - 1) * 12 + (r.splice_to_fibre || 1);
-      H.push(`<tr>`);
-      H.push(`<td>${shortCable(r.cable_id)}</td>`);
-      H.push(`<td>${tubePill(r.tube_number)}</td>`);
-      H.push(`<td>${fibreDot(absFrom)}</td>`);
-      H.push(`<td>${spliceLink(t)}</td>`);
-      H.push(`<td>${tubePill(r.splice_to_tube || t)}</td>`);
-      H.push(`<td>${fibreDot(absTo)}</td>`);
-      H.push(`<td>${shortCable(r.splice_to_cable)}</td>`);
-      H.push(`</tr>`);
+      B.push(`<tr>`);
+      B.push(`<td>${shortCable(r.cable_id)}</td>`);
+      B.push(`<td>${tubePill(r.tube_number)}</td>`);
+      B.push(`<td>${fibreDot(absFrom)}</td>`);
+      B.push(`<td>${spliceLink(t)}</td>`);
+      B.push(`<td>${tubePill(r.splice_to_tube || t)}</td>`);
+      B.push(`<td>${fibreDot(absTo)}</td>`);
+      B.push(`<td>${shortCable(r.splice_to_cable)}</td>`);
+      B.push(`</tr>`);
 
       // Also emit the reverse row (to_cable → from_cable) matching v2 behaviour
-      H.push(`<tr>`);
-      H.push(`<td>${shortCable(r.splice_to_cable)}</td>`);
-      H.push(`<td>${tubePill(r.splice_to_tube || t)}</td>`);
-      H.push(`<td>${fibreDot(absTo)}</td>`);
-      H.push(`<td>${spliceLink(t)}</td>`);
-      H.push(`<td>${tubePill(r.tube_number)}</td>`);
-      H.push(`<td>${fibreDot(absFrom)}</td>`);
-      H.push(`<td>${shortCable(r.cable_id)}</td>`);
-      H.push(`</tr>`);
+      B.push(`<tr>`);
+      B.push(`<td>${shortCable(r.splice_to_cable)}</td>`);
+      B.push(`<td>${tubePill(r.splice_to_tube || t)}</td>`);
+      B.push(`<td>${fibreDot(absTo)}</td>`);
+      B.push(`<td>${spliceLink(t)}</td>`);
+      B.push(`<td>${tubePill(r.tube_number)}</td>`);
+      B.push(`<td>${fibreDot(absFrom)}</td>`);
+      B.push(`<td>${shortCable(r.cable_id)}</td>`);
+      B.push(`</tr>`);
     }
 
-    H.push(`</tbody></table></div>`);
+    B.push(`</tbody></table></div>`);
   }
 
   // ── Splitter section ──────────────────────────────────────────────────────
   if (hasSplitter || isCbt) {
-    H.push(`<div class="splitter-section">`);
-    H.push(`<div class="splitter-head">&#9670; ${splitRatio} Splitter &mdash; Port Assignments</div>`);
+    B.push(`<div class="splitter-section">`);
+    B.push(`<div class="splitter-head">&#9670; ${splitRatio} Splitter &mdash; Port Assignments</div>`);
 
     // Splitter input fibre — for a CBT this arrives via its tail; show the tail
     // (or feed cable) and the parent joint it traces back to. Prefer the record
@@ -315,7 +316,7 @@ export function generateSplicePlan(store, jointId) {
       const feedLabel = feedId
         ? (feedId.includes('TAIL') ? 'CBT tail' : shortCable(feedId))
         : '(unfed — run Auto-Assign)';
-      H.push(`<div style="font-size:10px;color:#6B1D0A;margin-bottom:8px;">` +
+      B.push(`<div style="font-size:10px;color:#6B1D0A;margin-bottom:8px;">` +
         `Input fibre: ${tubePill(inpRec.tube_number||1)} ${fibreDot(absIn)} on ${feedLabel}</div>`);
     }
 
@@ -337,31 +338,31 @@ export function generateSplicePlan(store, jointId) {
       if (r.port) portMap[r.port] = r;
     }
 
-    H.push(`<div class="sp-outputs">`);
+    B.push(`<div class="sp-outputs">`);
     for (let po = 1; po <= splitterCap; po++) {
       const r = portMap[po];
-      H.push(`<div class="sp-out-row"><span class="po-pill">PO${po}</span>`);
+      B.push(`<div class="sp-out-row"><span class="po-pill">PO${po}</span>`);
       if (r && r.bundle_id) {
         const childId = S(r.bundle_id);
         if (isFeeder && childRatio[childId]) {
           // Feeder output → downstream splitter (joint or CBT). Show id + its ratio.
           const isCbtChild = (store.cbts || []).some(c => S(c.properties.cbt_id) === childId)
             || (store.joints || []).some(j => S(j.properties.joint_id) === childId && S(j.properties.joint_type) === 'CBT');
-          H.push(`<span class="po-yes">&#10003; ${childId} ` +
+          B.push(`<span class="po-yes">&#10003; ${childId} ` +
             `<span style="font-size:9px;color:#6B1D0A;opacity:0.7;">` +
             `(${isCbtChild ? 'CBT' : 'Joint'} ${childRatio[childId]})</span></span>`);
         } else {
           // Terminal output → premises. Look up UPRN → address.
           const uprn = uprnOf[childId] || '';
           const addr = addrOf[uprn] || uprn || childId;
-          H.push(`<span class="po-yes">&#10003; ${addr}</span>`);
+          B.push(`<span class="po-yes">&#10003; ${addr}</span>`);
         }
       } else {
-        H.push(`<span class="po-no">Spare / unassigned</span>`);
+        B.push(`<span class="po-no">Spare / unassigned</span>`);
       }
-      H.push(`</div>`);
+      B.push(`</div>`);
     }
-    H.push(`</div></div>`);
+    B.push(`</div></div>`);
   }
 
   // ── Spare / dark block ────────────────────────────────────────────────────
@@ -369,38 +370,163 @@ export function generateSplicePlan(store, jointId) {
   // Splitter nodes (CBT/splitter joint) report spare via the port grid + tile.
   if (!isSplitterNode && (darkTubes.size > 0 || nDark > 0)) {
     const spareFibres = Math.max(0, maxFibres - nSplices - (spInputRecs.length > 0 ? 1 : 0) - nDark);
-    H.push(`<div class="spare-block">`);
-    H.push(`<div class="spare-title">Spare / dark storage &mdash; do not disturb</div>`);
+    B.push(`<div class="spare-block">`);
+    B.push(`<div class="spare-title">Spare / dark storage &mdash; do not disturb</div>`);
 
     for (const r of darkRecs) {
       const t = r.tube_number || 1;
       const count = r.dark_count || 1;
       const { bg, txt } = tubeCss(t);
-      H.push(`<span style="font-size:10px;padding:2px 8px;border-radius:3px;` +
+      B.push(`<span style="font-size:10px;padding:2px 8px;border-radius:3px;` +
         `background:${bg};color:${txt};margin-right:4px;">` +
         `T${t} &middot; F${r.fibre_number}-${r.fibre_number + count - 1} (${count} fibre${count===1?'':'s'} spare)</span>`);
     }
 
     if (maxFibres) {
       const activePct = Math.round((nSplices + nActivePorts) / maxFibres * 100);
-      H.push(`<div style="margin-top:8px;"><div class="spare-bar-bg">` +
+      B.push(`<div style="margin-top:8px;"><div class="spare-bar-bg">` +
         `<div class="spare-bar-fill" style="width:${activePct}%;"></div></div>`);
-      H.push(`<div class="spare-stats">` +
+      B.push(`<div class="spare-stats">` +
         `<span>${nSplices + nActivePorts} fibres active</span>` +
         `<span>${nActivePorts} assigned &middot; ${spareFibres} spare &middot; ${maxFibres} total</span>` +
         `</div></div>`);
     }
-    H.push(`</div>`);
+    B.push(`</div>`);
   }
+
+  return {
+    jid, isCbt, closureType, jointType, chamberId, popId,
+    nSplices, nSplitters, nActivePorts, nSparePorts,
+    spareTileLabel, spareTileValue,
+    bodyHtml: B.join('\n'),
+  };
+}
+
+export function generateSplicePlan(store, jointId) {
+  const d = buildJointSpliceData(store, jointId);
+  const H = [];
+  H.push(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">`);
+  H.push(`<title>${d.jid} &middot; Splice Plan</title>`);
+  H.push(`<style>${CSS}</style>`);
+  H.push(`</head><body><div class="page">`);
+
+  // ── Header ────────────────────────────────────────────────────────────────
+  H.push(`<div class="header">`);
+  H.push(`<div class="header-top"><div>`);
+  H.push(`<div class="header-title">${d.jid}</div>`);
+  const subParts = ['Splice Plan'];
+  if (d.closureType) subParts.push(`Closure: ${d.closureType}`);
+  subParts.push(`Type: ${d.jointType}`, 'Owner: Gigaloch');
+  H.push(`<div class="header-sub">${subParts.join(' &middot; ')}</div>`);
+  const locLines = [d.popId, d.chamberId].filter(Boolean);
+  H.push(`</div><div class="header-loc">${locLines.join('<br>')}</div></div>`);
+  H.push(`<div class="meta-grid">`);
+  H.push(`<div class="meta-card"><div class="meta-label">Splices</div><div class="meta-value">${d.nSplices}</div></div>`);
+  H.push(`<div class="meta-card"><div class="meta-label">Splitters</div><div class="meta-value">${d.nSplitters}</div></div>`);
+  H.push(`<div class="meta-card"><div class="meta-label">Active ports</div><div class="meta-value">${d.nActivePorts}</div></div>`);
+  H.push(`<div class="meta-card"><div class="meta-label">${d.spareTileLabel}</div><div class="meta-value">${d.spareTileValue}</div></div>`);
+  H.push(`</div></div>`);
+
+  H.push(buildLegendsHtml());
+  H.push(d.bodyHtml);
 
   // ── Footer ────────────────────────────────────────────────────────────────
   H.push(`<div class="footer">`);
-  H.push(`<span>${jid} &middot; Splice Plan &middot; Gigaloch</span>`);
-  H.push(`<span>Print: Ctrl+P &middot; Works offline &middot; ${jid}.html</span>`);
+  H.push(`<span>${d.jid} &middot; Splice Plan &middot; Gigaloch</span>`);
+  H.push(`<span>Print: Ctrl+P &middot; Works offline &middot; ${d.jid}.html</span>`);
   H.push(`</div>`);
   H.push(`</div></body></html>`);
 
   return H.join('\n');
+}
+
+// ── Route Splice Export ──────────────────────────────────────────────────────
+//
+// Distinct from generateSplicePlan() above (one HTML per joint). This traces
+// a premise's full route back to the cabinet via traceFibre() (the same
+// engine Fibre Trace / Validate Routes / Design Health all use — no separate
+// routing logic here) and produces ONE HTML document covering every joint/CBT
+// in that route, in path order (premise-end first, cabinet last) — a single
+// printable document for a specific route end-to-end. Useful for aerial runs
+// where the pole chain + CBT is the construction unit, per the original v2
+// parity audit's ask.
+//
+// Poles are deliberately excluded from the joint list — they're structural
+// pass-throughs with no splice closure (same exclusion computeOptical() in
+// fibreTrace.js already makes for splice-count purposes).
+export function generateRouteSplicePlan(store, uprn) {
+  const result = traceFibre(store, uprn);
+
+  if (result.status !== 'ROUTED') {
+    return { error: result.reason || 'This premise does not have a complete route to the cabinet yet.' };
+  }
+
+  const jointIds = (result.nodes || []).filter(nodeId => {
+    const info = resolveNode(store, nodeId);
+    return info && (info.type === 'JOINT' || info.type === 'CBT');
+  });
+
+  if (jointIds.length === 0) {
+    return { error: 'This route reaches the cabinet directly with no joints or CBTs in between — nothing to export.' };
+  }
+
+  const ap = (store.addressPoints || []).find(a => S(a.properties?.uprn) === S(uprn));
+  const address = S(ap?.properties?.address || ap?.properties?.postcode || uprn);
+  const popId = S(store.cabinet?.properties?.pop_id || '');
+
+  const sections = jointIds.map(id => buildJointSpliceData(store, id));
+  const totalSplices  = sections.reduce((s, d) => s + d.nSplices, 0);
+  const totalSplitters = sections.reduce((s, d) => s + d.nSplitters, 0);
+
+  const H = [];
+  H.push(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">`);
+  H.push(`<title>Route to ${S(uprn)} &middot; Splice Plan</title>`);
+  H.push(`<style>${CSS}</style>`);
+  H.push(`</head><body><div class="page">`);
+
+  // ── Route-level header ────────────────────────────────────────────────────
+  H.push(`<div class="header">`);
+  H.push(`<div class="header-top"><div>`);
+  H.push(`<div class="header-title">Route to ${address}</div>`);
+  const subParts = ['Route Splice Plan', `${jointIds.length} joint(s)/CBT(s)`, 'Owner: Gigaloch'];
+  H.push(`<div class="header-sub">${subParts.join(' &middot; ')}</div>`);
+  const locLines = [popId, `UPRN ${S(uprn)}`].filter(Boolean);
+  H.push(`</div><div class="header-loc">${locLines.join('<br>')}</div></div>`);
+  H.push(`<div class="meta-grid">`);
+  H.push(`<div class="meta-card"><div class="meta-label">Route length</div><div class="meta-value">${Math.round(result.lengthM || 0)}m</div></div>`);
+  H.push(`<div class="meta-card"><div class="meta-label">Splices</div><div class="meta-value">${totalSplices}</div></div>`);
+  H.push(`<div class="meta-card"><div class="meta-label">Splitters</div><div class="meta-value">${totalSplitters}</div></div>`);
+  if (result.optical) {
+    const passFail = result.optical.link_pass ? 'PASS' : 'FAIL';
+    H.push(`<div class="meta-card"><div class="meta-label">Optical budget</div><div class="meta-value">${passFail}</div></div>`);
+  } else {
+    H.push(`<div class="meta-card"><div class="meta-label">Joints in route</div><div class="meta-value">${jointIds.length}</div></div>`);
+  }
+  H.push(`</div></div>`);
+
+  H.push(buildLegendsHtml());
+
+  // ── One sub-section per joint, in path order ─────────────────────────────
+  sections.forEach((d, i) => {
+    H.push(`<div class="section-wrap">`);
+    H.push(`<div class="section-head">`);
+    H.push(`<span style="font-weight:bold;">${i + 1}. ${d.jid}</span>` +
+      `<span style="margin-left:8px;color:var(--gray);font-weight:normal;">` +
+      `${d.jointType}${d.closureType ? ' &middot; ' + d.closureType : ''} &middot; ` +
+      `${d.nSplices} splice(s) &middot; ${d.spareTileLabel.toLowerCase()}: ${d.spareTileValue}</span>`);
+    H.push(`</div>`);
+    H.push(`<div style="padding:10px 12px;">${d.bodyHtml || '<div style="font-size:11px;color:var(--gray);">No splice or splitter detail recorded at this joint.</div>'}</div>`);
+    H.push(`</div>`);
+  });
+
+  // ── Footer ────────────────────────────────────────────────────────────────
+  H.push(`<div class="footer">`);
+  H.push(`<span>Route to ${S(uprn)} &middot; Route Splice Plan &middot; Gigaloch</span>`);
+  H.push(`<span>Print: Ctrl+P &middot; Works offline &middot; route-${S(uprn)}.html</span>`);
+  H.push(`</div>`);
+  H.push(`</div></body></html>`);
+
+  return { html: H.join('\n'), filename: `route-${S(uprn)}.html`, jointIds, address };
 }
 
 // ── Batch generator ───────────────────────────────────────────────────────────
