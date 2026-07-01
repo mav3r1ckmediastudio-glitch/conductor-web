@@ -612,255 +612,236 @@
     clearTool(map);
   }
 
-  function onPlaceChamber() {
+  // ── Asset placement registry ───────────────────────────────────────────
+  // Generic replacement for the 17 near-identical onPlaceX/onXSaved/
+  // onXCancelled triads. BuildArea and Cabinet are deliberately excluded —
+  // singletons (setX not addX) with extra steps (cookie-cutter, merge-into-
+  // pending-geometry) that don't fit this shape; they stay hand-written
+  // above. See docs/registry-handoff for the full divergence audit this
+  // config is derived from.
+  //
+  // Config flags, and which asset(s) need them:
+  //   skipForm               — dropDuct, bundle, aerialSpan, aerialDrop:
+  //                            activate() callback receives a complete
+  //                            feature and saves immediately, no pending/
+  //                            rpMode/form step at all.
+  //   transform(feature)     — piaDrop only: stamps PIA_UG/Openreach
+  //                            properties onto the feature before it
+  //                            becomes `pending` and is handed to the form.
+  //   wholeFeatureFromEvent  — piaDrop only: PIADropForm dispatches the
+  //                            complete updated feature on save (it started
+  //                            from a feature, not bare attrs), so the
+  //                            Saved handler must NOT reconstruct geometry
+  //                            from attrs.lng/lat/coordinates like every
+  //                            other form does.
+  //   afterSave(attrs)       — joint only: fires updateChamberFunction()
+  //                            when a SPLICE joint is saved.
+  //   cleanupOnSave          — cbtTail only: activateCBTTailTool leaves its
+  //                            listeners live while the form is open (one
+  //                            tail per CBT, no re-arm), so the caller must
+  //                            explicitly clearTool() on the Saved path too
+  //                            (Cancelled always clearTool()s regardless).
+  //   resetToolLabelOnCancel — piaDrop only: its Cancelled handler resets
+  //                            activeToolLabel; no other asset does this.
+  //   hasRubberband           — true for multi-vertex line tools, so Cancel
+  //                            clears the in-progress rubberband-src layer.
+  //                            False for point tools and the no-form line
+  //                            tools, which never populate it.
+
+  const ASSET_CONFIG = {
+    chamber: {
+      activate: activateChamberTool, geometryType: 'Point', addMethod: 'addChamber',
+      toolLabel: 'Place Chamber', rpMode: 'chamber-form',
+      setPending: (v) => pendingChamber = v, hasRubberband: false,
+    },
+    duct: {
+      activate: activateDuctTool, geometryType: 'LineString', addMethod: 'addDuct',
+      toolLabel: 'Digitise Duct — click vertices, right-click to finish', rpMode: 'duct-form',
+      setPending: (v) => pendingDuct = v, hasRubberband: true,
+    },
+    joint: {
+      activate: activateJointTool, geometryType: 'Point', addMethod: 'addJoint',
+      toolLabel: 'Place Joint — click a chamber', rpMode: 'joint-form',
+      setPending: (v) => pendingJoint = v, hasRubberband: false,
+      afterSave: (attrs) => {
+        if (attrs.joint_type === 'SPLICE') {
+          projectStore.updateChamberFunction(attrs.chamber_id, 'JOINT');
+        }
+      },
+    },
+    cable: {
+      activate: activateCableTool, geometryType: 'LineString', addMethod: 'addCable',
+      toolLabel: 'Digitise Cable — click vertices, right-click to finish', rpMode: 'cable-form',
+      setPending: (v) => pendingCable = v, hasRubberband: true,
+    },
+    pole: {
+      activate: activatePoleTool, geometryType: 'Point', addMethod: 'addPole',
+      toolLabel: 'Place Pole — click to place', rpMode: 'pole-form',
+      setPending: (v) => pendingPole = v, hasRubberband: false,
+    },
+    cbt: {
+      activate: activateCBTTool, geometryType: 'Point', addMethod: 'addCBT',
+      toolLabel: 'Place CBT — click a pole', rpMode: 'cbt-form',
+      setPending: (v) => pendingCBT = v, hasRubberband: false,
+    },
+    cbtTail: {
+      activate: activateCBTTailTool, geometryType: 'LineString', addMethod: 'addCBTTail',
+      toolLabel: 'CBT Tail — click CBT, snap through poles to the joint, RMB to finish',
+      rpMode: 'cbt-tail-form',
+      setPending: (v) => pendingCBTTail = v, hasRubberband: true, cleanupOnSave: true,
+    },
+    dropDuct: {
+      activate: activateDropDuctTool, addMethod: 'addDropDuct',
+      toolLabel: 'Drop Duct — click start, click end (RMB cancels line)',
+      skipForm: true,
+    },
+    bundle: {
+      activate: activateBundleTool, addMethod: 'addBundle',
+      toolLabel: 'Bundle — click joint, click premise (RMB cancels line)',
+      skipForm: true,
+    },
+    aerialSpan: {
+      activate: activateAerialSpanTool, addMethod: 'addSpan',
+      toolLabel: 'Aerial Span — click CBTs to add vertices, RMB to finish',
+      skipForm: true,
+    },
+    aerialDrop: {
+      activate: activateAerialDropTool, addMethod: 'addAerialDrop',
+      toolLabel: 'Aerial Drop — click CBT, then premise',
+      skipForm: true,
+    },
+    roadCrossing: {
+      activate: activateDuctTool, geometryType: 'LineString', addMethod: 'addDuct',
+      toolLabel: 'Road Crossing — click vertices, right-click to finish',
+      rpMode: 'road-crossing-form',
+      setPending: (v) => pendingRoadCrossing = v, hasRubberband: true,
+    },
+    streamCrossing: {
+      activate: activateDuctTool, geometryType: 'LineString', addMethod: 'addDuct',
+      toolLabel: 'Stream Crossing — click vertices, right-click to finish',
+      rpMode: 'stream-crossing-form',
+      setPending: (v) => pendingStreamCrossing = v, hasRubberband: true,
+    },
+    piaChamber: {
+      activate: activateChamberTool, geometryType: 'Point', addMethod: 'addChamber',
+      toolLabel: 'Place PIA UG Chamber — click a location',
+      rpMode: 'pia-chamber-form',
+      setPending: (v) => pendingPIAChamber = v, hasRubberband: false,
+    },
+    piaDuct: {
+      activate: activateDuctTool, geometryType: 'LineString', addMethod: 'addDuct',
+      toolLabel: 'PIA UG Duct — click vertices, right-click to finish',
+      rpMode: 'pia-duct-form',
+      setPending: (v) => pendingPIADuct = v, hasRubberband: true,
+    },
+    piaDrop: {
+      // shares activateDropDuctTool with plain dropDuct, but diverges: has a
+      // form, stamps PIA/Openreach properties via transform(), and its form
+      // dispatches the whole updated feature rather than bare attrs.
+      activate: activateDropDuctTool, addMethod: 'addDropDuct',
+      toolLabel: 'PIA UG Drop — click start, click end (RMB cancels line)',
+      rpMode: 'pia-drop-form',
+      setPending: (v) => pendingPIADrop = v, hasRubberband: false,
+      resetToolLabelOnCancel: true,
+      transform: (feature) => {
+        feature.properties.installation_method = 'PIA_UG';
+        feature.properties.drop_type            = 'PIA_UG';
+        feature.properties.owner                = 'Openreach';
+        return feature;
+      },
+      wholeFeatureFromEvent: true,
+    },
+  };
+
+  function buildGeometry(geometryType, attrs) {
+    return geometryType === 'Point'
+      ? { type: 'Point', coordinates: [attrs.lng, attrs.lat] }
+      : { type: 'LineString', coordinates: attrs.coordinates };
+  }
+
+  function onPlaceAsset(key) {
+    const cfg = ASSET_CONFIG[key];
     clearTool(map);
-    activeToolLabel = 'Place Chamber';
-    const err = activateChamberTool(map, (pending) => {
-      pendingChamber = pending;
-      rpMode = 'chamber-form';
-      activeToolLabel = '';
-    });
-    if (err) { showToast(err.error); activeToolLabel = ''; }
-  }
+    activeToolLabel = cfg.toolLabel;
 
-  function onChamberSaved(e) {
-    const attrs = e.detail;
-    projectStore.addChamber({
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: [attrs.lng, attrs.lat] },
-      properties: attrs,
-    });
-    syncToMap(map);
-    rpMode = 'default';
-    pendingChamber = null;
-  }
-
-  function onChamberCancelled() {
-    rpMode = 'default';
-    pendingChamber = null;
-    clearTool(map);
-  }
-
-  function onPlaceDuct() {
-    clearTool(map);
-    activeToolLabel = 'Digitise Duct — click vertices, right-click to finish';
-    const err = activateDuctTool(map, (pending) => {
-      pendingDuct = pending;
-      rpMode = 'duct-form';
-      activeToolLabel = '';
-    });
-    if (err) { showToast(err.error); activeToolLabel = ''; }
-  }
-
-  function onDuctSaved(e) {
-    const attrs = e.detail;
-    projectStore.addDuct({
-      type: 'Feature',
-      geometry: { type: 'LineString', coordinates: attrs.coordinates },
-      properties: attrs,
-    });
-    syncToMap(map);
-    rpMode = 'default';
-    pendingDuct = null;
-  }
-
-  function onDuctCancelled() {
-    rpMode = 'default';
-    pendingDuct = null;
-    clearTool(map);
-    if (map.getSource('rubberband-src')) map.getSource('rubberband-src').setData({ type: 'FeatureCollection', features: [] });
-  }
-
-  function onPlaceJoint() {
-    clearTool(map);
-    activeToolLabel = 'Place Joint — click a chamber';
-    const err = activateJointTool(map, (pending) => {
-      pendingJoint = pending;
-      rpMode = 'joint-form';
-      activeToolLabel = '';
-    });
-    if (err) { showToast(err.error); activeToolLabel = ''; }
-  }
-
-  function onJointSaved(e) {
-    const attrs = e.detail;
-    projectStore.addJoint({
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: [attrs.lng, attrs.lat] },
-      properties: attrs,
-    });
-    if (attrs.joint_type === 'SPLICE') {
-      projectStore.updateChamberFunction(attrs.chamber_id, 'JOINT');
+    if (cfg.skipForm) {
+      const err = cfg.activate(map, (feature) => {
+        projectStore[cfg.addMethod](cfg.transform ? cfg.transform(feature) : feature);
+        syncToMap(map);
+      });
+      if (err) { showToast(err.error); activeToolLabel = ''; }
+      return;
     }
-    syncToMap(map);
-    rpMode = 'default';
-    pendingJoint = null;
-  }
 
-  function onJointCancelled() {
-    rpMode = 'default';
-    pendingJoint = null;
-    clearTool(map);
-  }
-
-  function onPlaceDropDuct() {
-    clearTool(map);
-    activeToolLabel = 'Drop Duct — click start, click end (RMB cancels line)';
-    const err = activateDropDuctTool(map, (feature) => {
-      projectStore.addDropDuct(feature);
-      syncToMap(map);
-    });
-    if (err) { showToast(err.error); activeToolLabel = ''; }
-  }
-
-  function onPlaceCable() {
-    clearTool(map);
-    activeToolLabel = 'Digitise Cable — click vertices, right-click to finish';
-    const err = activateCableTool(map, (pending) => {
-      pendingCable = pending;
-      rpMode = 'cable-form';
+    const err = cfg.activate(map, (pending) => {
+      cfg.setPending(cfg.transform ? cfg.transform(pending) : pending);
+      rpMode = cfg.rpMode;
       activeToolLabel = '';
     });
     if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
-  function onCableSaved(e) {
+  function onAssetSaved(key, e) {
+    const cfg = ASSET_CONFIG[key];
     const attrs = e.detail;
-    projectStore.addCable({
-      type: 'Feature',
-      geometry: { type: 'LineString', coordinates: attrs.coordinates },
-      properties: attrs,
-    });
+    const feature = cfg.wholeFeatureFromEvent
+      ? attrs
+      : { type: 'Feature', geometry: buildGeometry(cfg.geometryType, attrs), properties: attrs };
+
+    projectStore[cfg.addMethod](feature);
+    if (cfg.afterSave) cfg.afterSave(attrs, feature);
     syncToMap(map);
+    if (cfg.cleanupOnSave) clearTool(map);
     rpMode = 'default';
-    pendingCable = null;
+    cfg.setPending(null);
   }
 
-  function onCableCancelled() {
+  function onAssetCancelled(key) {
+    const cfg = ASSET_CONFIG[key];
     rpMode = 'default';
-    pendingCable = null;
+    cfg.setPending(null);
     clearTool(map);
-    if (map.getSource('rubberband-src')) map.getSource('rubberband-src').setData({ type: 'FeatureCollection', features: [] });
+    if (cfg.hasRubberband && map.getSource('rubberband-src')) {
+      map.getSource('rubberband-src').setData({ type: 'FeatureCollection', features: [] });
+    }
+    if (cfg.resetToolLabelOnCancel) activeToolLabel = '';
   }
 
-  function onPlaceBundle() {
-    clearTool(map);
-    activeToolLabel = 'Bundle — click joint, click premise (RMB cancels line)';
-    const err = activateBundleTool(map, (feature) => {
-      projectStore.addBundle(feature);
-      syncToMap(map);
-    });
-    if (err) { showToast(err.error); activeToolLabel = ''; }
-  }
+  function onPlaceChamber() { onPlaceAsset('chamber'); }
+  function onChamberSaved(e) { onAssetSaved('chamber', e); }
+  function onChamberCancelled() { onAssetCancelled('chamber'); }
 
-  function onPlacePole() {
-    clearTool(map);
-    activeToolLabel = 'Place Pole — click to place';
-    const err = activatePoleTool(map, (pending) => {
-      pendingPole = pending;
-      rpMode = 'pole-form';
-      activeToolLabel = '';
-    });
-    if (err) { showToast(err.error); activeToolLabel = ''; }
-  }
+  function onPlaceDuct() { onPlaceAsset('duct'); }
+  function onDuctSaved(e) { onAssetSaved('duct', e); }
+  function onDuctCancelled() { onAssetCancelled('duct'); }
 
-  function onPoleSaved(e) {
-    const attrs = e.detail;
-    projectStore.addPole({
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: [attrs.lng, attrs.lat] },
-      properties: attrs,
-    });
-    syncToMap(map);
-    rpMode = 'default';
-    pendingPole = null;
-  }
+  function onPlaceJoint() { onPlaceAsset('joint'); }
+  function onJointSaved(e) { onAssetSaved('joint', e); }
+  function onJointCancelled() { onAssetCancelled('joint'); }
 
-  function onPoleCancelled() {
-    rpMode = 'default';
-    pendingPole = null;
-    clearTool(map);
-  }
+  function onPlaceDropDuct() { onPlaceAsset('dropDuct'); }
 
-  function onPlaceCBT() {
-    clearTool(map);
-    activeToolLabel = 'Place CBT — click a pole';
-    const err = activateCBTTool(map, (pending) => {
-      pendingCBT = pending;
-      rpMode = 'cbt-form';
-      activeToolLabel = '';
-    });
-    if (err) { showToast(err.error); activeToolLabel = ''; }
-  }
+  function onPlaceCable() { onPlaceAsset('cable'); }
+  function onCableSaved(e) { onAssetSaved('cable', e); }
+  function onCableCancelled() { onAssetCancelled('cable'); }
 
-  function onCBTSaved(e) {
-    const attrs = e.detail;
-    projectStore.addCBT({
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: [attrs.lng, attrs.lat] },
-      properties: attrs,
-    });
-    syncToMap(map);
-    rpMode = 'default';
-    pendingCBT = null;
-  }
+  function onPlaceBundle() { onPlaceAsset('bundle'); }
 
-  function onCBTCancelled() {
-    rpMode = 'default';
-    pendingCBT = null;
-    clearTool(map);
-  }
+  function onPlacePole() { onPlaceAsset('pole'); }
+  function onPoleSaved(e) { onAssetSaved('pole', e); }
+  function onPoleCancelled() { onAssetCancelled('pole'); }
 
-  function onPlaceAerialSpan() {
-    clearTool(map);
-    activeToolLabel = 'Aerial Span — click CBTs to add vertices, RMB to finish';
-    const err = activateAerialSpanTool(map, (feature) => {
-      projectStore.addSpan(feature);
-      syncToMap(map);
-    });
-    if (err) { showToast(err.error); activeToolLabel = ''; }
-  }
+  function onPlaceCBT() { onPlaceAsset('cbt'); }
+  function onCBTSaved(e) { onAssetSaved('cbt', e); }
+  function onCBTCancelled() { onAssetCancelled('cbt'); }
 
-  function onPlaceAerialDrop() {
-    clearTool(map);
-    activeToolLabel = 'Aerial Drop — click CBT, then premise';
-    const err = activateAerialDropTool(map, (feature) => {
-      projectStore.addAerialDrop(feature);
-      syncToMap(map);
-    });
-    if (err) { showToast(err.error); activeToolLabel = ''; }
-  }
+  function onPlaceAerialSpan() { onPlaceAsset('aerialSpan'); }
 
-  function onPlaceCBTTail() {
-    clearTool(map);
-    activeToolLabel = 'CBT Tail — click CBT, snap through poles to the joint, RMB to finish';
-    const err = activateCBTTailTool(map, (pending) => {
-      pendingCBTTail = pending;
-      rpMode = 'cbt-tail-form';
-      activeToolLabel = '';
-    });
-    if (err) { showToast(err.error); activeToolLabel = ''; }
-  }
+  function onPlaceAerialDrop() { onPlaceAsset('aerialDrop'); }
 
-  function onCBTTailSaved(e) {
-    const attrs = e.detail;
-    projectStore.addCBTTail({
-      type: 'Feature',
-      geometry: { type: 'LineString', coordinates: attrs.coordinates },
-      properties: attrs,
-    });
-    syncToMap(map);
-    rpMode = 'default';
-    pendingCBTTail = null;
-    clearTool(map);
-  }
-
-  function onCBTTailCancelled() {
-    rpMode = 'default';
-    pendingCBTTail = null;
-    clearTool(map);
-    if (map.getSource('rubberband-src')) map.getSource('rubberband-src').setData({ type: 'FeatureCollection', features: [] });
-  }
+  function onPlaceCBTTail() { onPlaceAsset('cbtTail'); }
+  function onCBTTailSaved(e) { onAssetSaved('cbtTail', e); }
+  function onCBTTailCancelled() { onAssetCancelled('cbtTail'); }
 
   // ── Asset Edit / Delete / Move ────────────────────────────────────────────
 
@@ -978,162 +959,29 @@
     rpMode = 'default';
   }
 
-  // ── civil-road (Road Crossing) ────────────────────────────────────────────
+  // ── civil-road / civil-stream / pia-* — thin wrappers onto the asset
+  // placement registry defined above (ASSET_CONFIG / onPlaceAsset /
+  // onAssetSaved / onAssetCancelled). ─────────────────────────────────────
 
-  function onPlaceRoadCrossing() {
-    clearTool(map);
-    activeToolLabel = 'Road Crossing — click vertices, right-click to finish';
-    const err = activateDuctTool(map, (pending) => {
-      pendingRoadCrossing = pending;
-      rpMode = 'road-crossing-form';
-      activeToolLabel = '';
-    });
-    if (err) { showToast(err.error); activeToolLabel = ''; }
-  }
+  function onPlaceRoadCrossing() { onPlaceAsset('roadCrossing'); }
+  function onRoadCrossingSaved(e) { onAssetSaved('roadCrossing', e); }
+  function onRoadCrossingCancelled() { onAssetCancelled('roadCrossing'); }
 
-  function onRoadCrossingSaved(e) {
-    const attrs = e.detail;
-    projectStore.addDuct({
-      type: 'Feature',
-      geometry: { type: 'LineString', coordinates: attrs.coordinates },
-      properties: attrs,
-    });
-    syncToMap(map);
-    rpMode = 'default';
-    pendingRoadCrossing = null;
-  }
+  function onPlaceStreamCrossing() { onPlaceAsset('streamCrossing'); }
+  function onStreamCrossingSaved(e) { onAssetSaved('streamCrossing', e); }
+  function onStreamCrossingCancelled() { onAssetCancelled('streamCrossing'); }
 
-  function onRoadCrossingCancelled() {
-    rpMode = 'default';
-    pendingRoadCrossing = null;
-    clearTool(map);
-    if (map.getSource('rubberband-src')) map.getSource('rubberband-src').setData({ type: 'FeatureCollection', features: [] });
-  }
+  function onPlacePIAChamber() { onPlaceAsset('piaChamber'); }
+  function onPIAChamberSaved(e) { onAssetSaved('piaChamber', e); }
+  function onPIAChamberCancelled() { onAssetCancelled('piaChamber'); }
 
-  // ── civil-stream (Stream Crossing) ───────────────────────────────────────
+  function onPlacePIADuct() { onPlaceAsset('piaDuct'); }
+  function onPIADuctSaved(e) { onAssetSaved('piaDuct', e); }
+  function onPIADuctCancelled() { onAssetCancelled('piaDuct'); }
 
-  function onPlaceStreamCrossing() {
-    clearTool(map);
-    activeToolLabel = 'Stream Crossing — click vertices, right-click to finish';
-    const err = activateDuctTool(map, (pending) => {
-      pendingStreamCrossing = pending;
-      rpMode = 'stream-crossing-form';
-      activeToolLabel = '';
-    });
-    if (err) { showToast(err.error); activeToolLabel = ''; }
-  }
-
-  function onStreamCrossingSaved(e) {
-    const attrs = e.detail;
-    projectStore.addDuct({
-      type: 'Feature',
-      geometry: { type: 'LineString', coordinates: attrs.coordinates },
-      properties: attrs,
-    });
-    syncToMap(map);
-    rpMode = 'default';
-    pendingStreamCrossing = null;
-  }
-
-  function onStreamCrossingCancelled() {
-    rpMode = 'default';
-    pendingStreamCrossing = null;
-    clearTool(map);
-    if (map.getSource('rubberband-src')) map.getSource('rubberband-src').setData({ type: 'FeatureCollection', features: [] });
-  }
-
-  // ── pia-chamber (Place PIA UG Chamber) ───────────────────────────────────
-
-  function onPlacePIAChamber() {
-    clearTool(map);
-    activeToolLabel = 'Place PIA UG Chamber — click a location';
-    const err = activateChamberTool(map, (pending) => {
-      pendingPIAChamber = pending;
-      rpMode = 'pia-chamber-form';
-      activeToolLabel = '';
-    });
-    if (err) { showToast(err.error); activeToolLabel = ''; }
-  }
-
-  function onPIAChamberSaved(e) {
-    const attrs = e.detail;
-    projectStore.addChamber({
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: [attrs.lng, attrs.lat] },
-      properties: attrs,
-    });
-    syncToMap(map);
-    rpMode = 'default';
-    pendingPIAChamber = null;
-  }
-
-  function onPIAChamberCancelled() {
-    rpMode = 'default';
-    pendingPIAChamber = null;
-    clearTool(map);
-  }
-
-  // ── pia-duct (Digitise PIA UG Duct) ──────────────────────────────────────
-
-  function onPlacePIADuct() {
-    clearTool(map);
-    activeToolLabel = 'PIA UG Duct — click vertices, right-click to finish';
-    const err = activateDuctTool(map, (pending) => {
-      pendingPIADuct = pending;
-      rpMode = 'pia-duct-form';
-      activeToolLabel = '';
-    });
-    if (err) { showToast(err.error); activeToolLabel = ''; }
-  }
-
-  function onPIADuctSaved(e) {
-    const attrs = e.detail;
-    projectStore.addDuct({
-      type: 'Feature',
-      geometry: { type: 'LineString', coordinates: attrs.coordinates },
-      properties: attrs,
-    });
-    syncToMap(map);
-    rpMode = 'default';
-    pendingPIADuct = null;
-  }
-
-  function onPIADuctCancelled() {
-    rpMode = 'default';
-    pendingPIADuct = null;
-    clearTool(map);
-    if (map.getSource('rubberband-src')) map.getSource('rubberband-src').setData({ type: 'FeatureCollection', features: [] });
-  }
-
-  // ── pia-drop (Digitise PIA UG Drop) ──────────────────────────────────────
-
-  function onPlacePIADrop() {
-    clearTool(map);
-    activeToolLabel = 'PIA UG Drop — click start, click end (RMB cancels line)';
-    const err = activateDropDuctTool(map, (feature) => {
-      feature.properties.installation_method = 'PIA_UG';
-      feature.properties.drop_type           = 'PIA_UG';
-      feature.properties.owner               = 'Openreach';
-      pendingPIADrop = feature;
-      rpMode = 'pia-drop-form';
-      activeToolLabel = '';
-    });
-    if (err) { showToast(err.error); activeToolLabel = ''; }
-  }
-
-  function onPIADropSaved(e) {
-    projectStore.addDropDuct(e.detail);
-    syncToMap(map);
-    pendingPIADrop = null;
-    rpMode = 'default';
-  }
-
-  function onPIADropCancelled() {
-    pendingPIADrop = null;
-    rpMode = 'default';
-    clearTool(map);
-    activeToolLabel = '';
-  }
+  function onPlacePIADrop() { onPlaceAsset('piaDrop'); }
+  function onPIADropSaved(e) { onAssetSaved('piaDrop', e); }
+  function onPIADropCancelled() { onAssetCancelled('piaDrop'); }
 
   // ── fibre-trace (Tier 2) ─────────────────────────────────────────────────
   // Click a premise → trace its route to the cabinet. Tool stays active so the
