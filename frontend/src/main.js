@@ -56,13 +56,40 @@ if (isCallback) {
     console.log('[clerk-debug] signIn.status:', clerk.client?.signIn?.status);
     console.log('[clerk-debug] signIn full object:', clerk.client?.signIn);
   } catch (e) {
-    console.error('Clerk callback error:', e);
-    // Fires before any UI exists yet — Toast now lives in ClerkGate (mounted
-    // unconditionally, regardless of auth state) so this reliably surfaces
-    // instead of being buffered forever behind a splash screen that never
-    // mounts App.svelte. console.error above is a belt-and-braces fallback
-    // in case that assumption ever breaks again.
-    showError('Sign-in could not be completed: ' + (e?.message || e) + '. Please try signing in again.');
+    console.error('[clerk-debug] handleRedirectCallback threw:', e, JSON.stringify(e?.errors));
+    // signIn.authenticateWithRedirect() was called with transferable: false
+    // (see SplashLogin.svelte) specifically so a "no matching account" OAuth
+    // sign-in doesn't get silently, opaquely converted into a sign-up by
+    // Clerk internally. With that flag set, the actual "no account" error
+    // does NOT throw from the outbound authenticateWithRedirect() call — it
+    // throws HERE, from handleRedirectCallback(), after the browser has
+    // already been to Google and come back. (An earlier version of this
+    // fix put the try/catch around the outbound call instead, in
+    // SplashLogin.svelte — that catch could never fire, since
+    // authenticateWithRedirect()'s job is just to start the navigation to
+    // Google; the account-transfer outcome isn't known until this point.)
+    // Per Clerk's own docs, the relevant error codes here are
+    // external_account_not_found and account_transfer_invalid — both mean
+    // "this Google account has no matching Clerk user", not a real failure.
+    const code = e?.errors?.[0]?.code;
+    const isNoAccount = code === 'external_account_not_found' || code === 'account_transfer_invalid';
+    if (isNoAccount) {
+      console.log('[clerk-debug] no matching account — falling through to sign-up:', code);
+      try {
+        await clerk.client.signUp.authenticateWithRedirect({
+          strategy: 'oauth_google',
+          redirectUrl: window.location.origin,
+          redirectUrlComplete: window.location.origin,
+        });
+        // Page navigates to Google again — nothing after this line runs
+        // until the browser comes back with a fresh callback.
+      } catch (e2) {
+        console.error('[clerk-debug] signUp.authenticateWithRedirect threw:', e2, JSON.stringify(e2?.errors));
+        showError('Sign-up could not be started: ' + (e2?.message || e2) + '. Please try again.');
+      }
+    } else {
+      showError('Sign-in could not be completed: ' + (e?.message || e) + '. Please try signing in again.');
+    }
   }
   // Remove Clerk params from the URL without reloading
   window.history.replaceState({}, '', window.location.pathname);
