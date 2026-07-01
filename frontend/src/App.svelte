@@ -59,7 +59,7 @@
     activateSelectTool, activateMovePointTool,
     activateFibreTraceTool, clearTraceHighlight,
     activateFibreCountTool, clearCountHighlight,
-    applyCookieCutter, clearTool, getPoleLayer
+    applyCookieCutter, clearTool, getPoleLayer, setSearchMarker
   } from './mapTools.js';
 
   export let clerk = null;
@@ -262,6 +262,7 @@
     if (postcodeMatches.length > 0) {
       const [lng, lat] = postcodeMatches[0].geometry.coordinates;
       map.easeTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), postcodeMatches.length > 1 ? 16 : 18), duration: 600 });
+      setSearchMarker(map, lng, lat);
       showToast(`Found ${postcodeMatches.length} premise(s) at ${q}.`);
       return;
     }
@@ -301,6 +302,7 @@
 
       if (center) {
         map.easeTo({ center, zoom: Math.max(map.getZoom(), 18), duration: 600 });
+        setSearchMarker(map, center[0], center[1]);
         showToast(`Found ${found.label} ${q}.`);
       } else {
         showToast(`Found ${found.label} ${q}, but it has no location to zoom to.`);
@@ -319,6 +321,7 @@
           const { longitude, latitude } = data.result || {};
           if (typeof longitude === 'number' && typeof latitude === 'number') {
             map.easeTo({ center: [longitude, latitude], zoom: Math.max(map.getZoom(), 15), duration: 600 });
+            setSearchMarker(map, longitude, latitude);
             showToast(`Found ${q} via postcodes.io — not in this project's imported premises.`);
             return;
           }

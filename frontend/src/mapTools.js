@@ -38,6 +38,51 @@ function addSquareIcon(map, name, fillColor, strokeColor, glowColor, size) {
   map.addImage(name, { width: size, height: size, data: ctx.getImageData(0, 0, size, size).data });
 }
 
+// Classic map-pin/teardrop for the search-result marker: a domed head
+// tapering to a point at the bottom, which is the anchor (the point sits
+// exactly on the found coordinate — see icon-anchor: 'bottom' on the layer
+// below). Styled in the same neon pink used for the basemap's road glow
+// (roads-glow #ff00aa / roads-neon #ff44cc, see App.svelte) so a search
+// result reads as part of the same "neon" visual language as the roads,
+// not a mismatched marker style.
+function addPinIcon(map, name, fillColor, glowColor, size) {
+  if (map.hasImage(name)) return;
+  const canvas = document.createElement('canvas');
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext('2d');
+
+  const cx     = size / 2;
+  const headR  = size * 0.28;
+  const headCy = size * 0.32;
+  const tipY   = size * 0.96;
+
+  ctx.shadowColor = glowColor;
+  ctx.shadowBlur = size * 0.35;
+
+  ctx.beginPath();
+  ctx.moveTo(cx - headR, headCy);
+  ctx.arc(cx, headCy, headR, Math.PI, 2 * Math.PI, false);   // dome over the top
+  ctx.lineTo(cx, tipY);                                       // right side down to the point
+  ctx.closePath();                                            // point back up to the left side
+  ctx.fillStyle = fillColor;
+  ctx.fill();
+
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = size * 0.05;
+  ctx.strokeStyle = '#ffffff';
+  ctx.stroke();
+
+  // Hollow centre punched through the head — a stylised look, and it lets
+  // the map show through rather than a solid disc.
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.beginPath();
+  ctx.arc(cx, headCy, headR * 0.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+
+  map.addImage(name, { width: size, height: size, data: ctx.getImageData(0, 0, size, size).data });
+}
+
 export function ensureSources(map) {
   addSquareIcon(map, 'icon-cabinet', '#4dc8ff', '#00aaff', '#00aaff', 22);
   addSquareIcon(map, 'icon-chamber', '#0d1520', '#ffffff', '#aaddff', 14);
@@ -324,6 +369,26 @@ export function ensureSources(map) {
         'circle-stroke-width': 2,
         'circle-stroke-color': '#ffaa44',
       }
+    });
+  }
+
+  // ── Search result marker ──────────────────────────────────────────────
+  // Set by App.svelte's onAssetSearch() whenever a postcode or asset search
+  // finds a location — a scratch layer like snap-src/rubberband-src above,
+  // cleared by clearTool() so it doesn't linger once you start digitising.
+  addPinIcon(map, 'icon-search-pin', '#ff44cc', '#ff00aa', 40);
+  if (!map.getSource('search-marker-src')) {
+    map.addSource('search-marker-src', { type: 'geojson', data: emptyFC() });
+    map.addLayer({
+      id: 'search-marker-layer',
+      type: 'symbol',
+      source: 'search-marker-src',
+      layout: {
+        'icon-image': 'icon-search-pin',
+        'icon-size': 0.9,
+        'icon-anchor': 'bottom',
+        'icon-allow-overlap': true,
+      },
     });
   }
 }
@@ -635,7 +700,21 @@ export function clearTool(map) {
     if (map.getSource('rubberband-src')) map.getSource('rubberband-src').setData(emptyFC());
     if (map.getSource('snap-src'))       map.getSource('snap-src').setData(emptyFC());
     if (map.getSource('ba-rubber-src'))  map.getSource('ba-rubber-src').setData(emptyFC());
+    if (map.getSource('search-marker-src')) map.getSource('search-marker-src').setData(emptyFC());
   }
+}
+
+// Called by App.svelte's onAssetSearch() when a search finds a location.
+// Replaces any previous marker (each new search moves the pin rather than
+// stacking markers). Cleared automatically by clearTool() above.
+export function setSearchMarker(map, lng, lat) {
+  if (!map || !map.getSource('search-marker-src')) return;
+  map.getSource('search-marker-src').setData(pointFC(lng, lat));
+}
+
+export function clearSearchMarker(map) {
+  if (!map || !map.getSource('search-marker-src')) return;
+  map.getSource('search-marker-src').setData(emptyFC());
 }
 
 // ── BUILD AREA TOOL ───────────────────────────────────────────────────────────
