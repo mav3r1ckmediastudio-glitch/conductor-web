@@ -14,9 +14,19 @@ await clerk.load({ navigate: () => {} });
 const params = new URLSearchParams(window.location.search);
 const isCallback = [...params.keys()].some((k) => k.startsWith('__clerk'));
 
+// TEMP DEBUG — remove once the silent-sign-in-failure is diagnosed.
+console.log('[clerk-debug] full URL on load:', window.location.href);
+console.log('[clerk-debug] search params:', [...params.entries()]);
+console.log('[clerk-debug] isCallback:', isCallback);
+
 if (isCallback) {
   try {
-    await clerk.handleRedirectCallback();
+    const result = await clerk.handleRedirectCallback();
+    console.log('[clerk-debug] handleRedirectCallback resolved:', result);
+    console.log('[clerk-debug] clerk.user after callback:', clerk.user);
+    console.log('[clerk-debug] clerk.session after callback:', clerk.session);
+    console.log('[clerk-debug] signIn.status:', clerk.client?.signIn?.status);
+    console.log('[clerk-debug] signIn full object:', clerk.client?.signIn);
   } catch (e) {
     console.error('Clerk callback error:', e);
     // Fires before any UI exists yet — Toast now lives in ClerkGate (mounted
