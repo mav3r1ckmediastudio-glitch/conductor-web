@@ -11,7 +11,7 @@
 //   INFO    -> completeness / cost only         -> verdict GO (if no errors/warnings)
 //
 // Check 1  — Route validation (PARTIAL→ERROR, ROUTED-no-splitter→ERROR, UNSERVED→WARNING)
-// Check 1b — No passive splitter on a ROUTED path (operator-agnostic PON requirement)
+// Check 1b — Splitter cascade must be exactly two stages (operator-agnostic PON requirement)
 // Check 2  — Topology / FK integrity (spans, drops, tails, cables, bundles)
 // Check 2b — Splitter capacity & declaration (overcapacity→ERROR, undeclared→WARNING)
 // Check 2c — Broader FK integrity (cables from/to_node, bundles from_joint, drop from_cbt)
@@ -72,10 +72,10 @@ export function runDesignHealth(store) {
         'No address points imported — import a CSV to enable route checking.', '', '');
     } else {
       const PARTIAL_CAP  = 10;
-      const NO_SPLIT_CAP = 10;
+      const BAD_CASCADE_CAP = 10;
       let partialShown   = 0;
-      let noSplitCount   = 0;
-      let noSplitShown   = 0;
+      let badCascadeCount = 0;
+      let badCascadeShown = 0;
 
       for (const ap of addressPoints) {
         const r = traceFibre(store, ap.properties?.uprn);
@@ -83,19 +83,29 @@ export function runDesignHealth(store) {
         if (r.status === 'ROUTED') {
           routed++;
 
-          // Check 1b — splitter presence (operator-agnostic PON requirement).
-          // traceFibre returns r.optical.breakdown.splitters[] for every ROUTED
-          // path. An empty array means the route reaches the cabinet without
-          // passing through any passive optical splitter — physically impossible
-          // to serve a PON customer on this path regardless of operator topology.
+          // Check 1b — splitter cascade stage count (operator-agnostic PON
+          // requirement). A viable premises connection requires EXACTLY TWO
+          // passive splitter stages between the premise and the cabinet —
+          // that's a structural PON invariant, not an operator-specific rule.
+          // How each ISP achieves that 1:32 (Gigaloch: 1:4 feeder → four
+          // 1:8 terminals; another operator might do 1:2 → 1:16, etc.) is
+          // deliberately NOT checked here — ratios are validated separately
+          // in Check 2b (capacity/declaration drift) using each splitter's
+          // own split_ratio field, never a hardcoded value.
           const splitters = r.optical?.breakdown?.splitters;
-          if (splitters && splitters.length === 0) {
-            noSplitCount++;
-            if (noSplitShown < NO_SPLIT_CAP) {
-              add(issues, 'error', 'No splitter on route',
-                `Routed but no passive splitter found — cannot serve a PON customer: ${ap.properties?.address || ap.properties?.uprn || '?'}`,
+          if (splitters && splitters.length !== 2) {
+            badCascadeCount++;
+            if (badCascadeShown < BAD_CASCADE_CAP) {
+              const n = splitters.length;
+              const detail = n === 0
+                ? 'no passive splitter found'
+                : n === 1
+                  ? 'only one splitter stage found — a viable PON connection needs two'
+                  : `${n} splitter stages found — a viable PON connection needs exactly two`;
+              add(issues, 'error', 'Wrong splitter cascade',
+                `Routed but ${detail}: ${ap.properties?.address || ap.properties?.uprn || '?'}`,
                 String(ap.properties?.uprn || ''), 'premises');
-              noSplitShown++;
+              badCascadeShown++;
             }
           }
 
@@ -117,9 +127,9 @@ export function runDesignHealth(store) {
           `…and ${partial - PARTIAL_CAP} more partial route(s) — showing first ${PARTIAL_CAP} only.`,
           '', 'premises');
       }
-      if (noSplitCount > NO_SPLIT_CAP) {
-        add(issues, 'error', 'No splitter on route',
-          `…and ${noSplitCount - NO_SPLIT_CAP} more route(s) with no splitter — showing first ${NO_SPLIT_CAP} only.`,
+      if (badCascadeCount > BAD_CASCADE_CAP) {
+        add(issues, 'error', 'Wrong splitter cascade',
+          `…and ${badCascadeCount - BAD_CASCADE_CAP} more route(s) with a wrong splitter cascade — showing first ${BAD_CASCADE_CAP} only.`,
           '', 'premises');
       }
       if (unserved > 0) {
