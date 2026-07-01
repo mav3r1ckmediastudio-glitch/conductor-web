@@ -620,7 +620,7 @@
       rpMode = 'chamber-form';
       activeToolLabel = '';
     });
-    if (err) showToast(err.error);
+    if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
   function onChamberSaved(e) {
@@ -649,7 +649,7 @@
       rpMode = 'duct-form';
       activeToolLabel = '';
     });
-    if (err) showToast(err.error);
+    if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
   function onDuctSaved(e) {
@@ -679,7 +679,7 @@
       rpMode = 'joint-form';
       activeToolLabel = '';
     });
-    if (err) showToast(err.error);
+    if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
   function onJointSaved(e) {
@@ -721,7 +721,7 @@
       rpMode = 'cable-form';
       activeToolLabel = '';
     });
-    if (err) showToast(err.error);
+    if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
   function onCableSaved(e) {
@@ -988,7 +988,7 @@
       rpMode = 'road-crossing-form';
       activeToolLabel = '';
     });
-    if (err) showToast(err.error);
+    if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
   function onRoadCrossingSaved(e) {
@@ -1020,7 +1020,7 @@
       rpMode = 'stream-crossing-form';
       activeToolLabel = '';
     });
-    if (err) showToast(err.error);
+    if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
   function onStreamCrossingSaved(e) {
@@ -1052,7 +1052,7 @@
       rpMode = 'pia-chamber-form';
       activeToolLabel = '';
     });
-    if (err) showToast(err.error);
+    if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
   function onPIAChamberSaved(e) {
@@ -1083,7 +1083,7 @@
       rpMode = 'pia-duct-form';
       activeToolLabel = '';
     });
-    if (err) showToast(err.error);
+    if (err) { showToast(err.error); activeToolLabel = ''; }
   }
 
   function onPIADuctSaved(e) {
