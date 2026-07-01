@@ -5,7 +5,9 @@
 // exactly the kind of customer-facing "would this route actually work"
 // verdict the rest of the suite holds to a hand-verified bar. This suite
 // closes that gap for Check 1b specifically (the splitter-cascade-count
-// rule), which was tightened this session from "≥1 splitter" to "exactly 2".
+// rule), which was tightened this session from "≥1 splitter" to "exactly 2",
+// and was extended same-session to cover Check 1c (the strict Gigaloch
+// cascade-order rule layered on top of 1b — see that describe block below).
 //
 // THE RULE UNDER TEST (Check 1b): a viable premises connection needs EXACTLY
 // TWO passive splitter stages between the premise and the cabinet. This is a
@@ -14,6 +16,12 @@
 // checks live separately in Check 2b, keyed off each splitter's own
 // split_ratio field. If these tests ever need a hardcoded ratio to pass,
 // that's a sign Check 1b has regressed into an operator-specific rule.
+//
+// THE RULE UNDER TEST (Check 1c): once 1b confirms exactly two stages exist,
+// 1c additionally requires Gigaloch's SPECIFIC convention — 1:8 nearest the
+// premises, 1:4 nearest the cabinet, in that order. This one IS deliberately
+// operator-specific (hardcoded, not derived from Check 2b's split_ratio
+// logic) — it's testing a Gigaloch build-standard rule, not a PON invariant.
 //
 // Every fixture is a small hand-built synthetic network: premise → bundle →
 // a chain of N joints (each independently splitter or not) → cable(s) → the
@@ -61,6 +69,20 @@ function cascadeIssues(result) {
   return result.issues.filter(i => i.category === 'Wrong splitter cascade');
 }
 
+function orderIssues(result) {
+  return result.issues.filter(i => i.category === 'Wrong splitter cascade order');
+}
+
+// Two-joint chain with independently-set ratios per position, for Check 1c
+// (order-sensitive) testing. JNT-1 is nearest the premise (bundle attaches
+// there); JNT-2 is nearest the cabinet — same convention chainedStore() uses.
+function orderedTwoStageStore(nearPremiseRatio, nearCabinetRatio) {
+  const store = chainedStore(2);
+  store.joints[0].properties.split_ratio = nearPremiseRatio;
+  store.joints[1].properties.split_ratio = nearCabinetRatio;
+  return store;
+}
+
 describe('Design Health — Check 1b: splitter cascade must be exactly two stages', () => {
   it('flags ZERO splitters as an error, with a "no passive splitter" message', () => {
     const result = runDesignHealth(chainedStore(0));
@@ -79,7 +101,11 @@ describe('Design Health — Check 1b: splitter cascade must be exactly two stage
   });
 
   it('does NOT flag exactly TWO splitters — the valid cascade shape', () => {
-    const result = runDesignHealth(chainedStore(2));
+    // Explicit correct Gigaloch ratios (1:8 near premise, 1:4 near cabinet) so
+    // this fixture is clean under Check 1c too — this test is isolating 1b's
+    // shape/count logic specifically, not asserting anything about ratios.
+    // See the "Check 1c" describe block below for order/ratio-specific cases.
+    const result = runDesignHealth(orderedTwoStageStore('1:8', '1:4'));
     expect(cascadeIssues(result)).toHaveLength(0);
     // With no other errors/warnings in this clean fixture, verdict should be GO.
     expect(result.verdict).toBe(VERDICT.GO);
@@ -94,9 +120,16 @@ describe('Design Health — Check 1b: splitter cascade must be exactly two stage
     expect(flags[0].message).toContain('needs exactly two');
   });
 
-  it('is ratio-agnostic: two splitters at a NON-Gigaloch ratio (1:2 + 1:16) still passes', () => {
+  it('is ratio-agnostic: two splitters at a NON-Gigaloch ratio (1:2 + 1:16) still passes 1b', () => {
     // Deliberately not 1:4/1:8 — proves this check counts stages, not ratios,
     // and isn't secretly re-encoding one operator's cascade as "the" rule.
+    // NOTE: this fixture WILL trip Check 1c below (it's not the Gigaloch pair)
+    // — that's correct and expected, not a contradiction. 1b's job is "is
+    // this a valid PON shape for any operator"; 1c's job is "is this
+    // specifically Gigaloch's cascade". They're deliberately answering
+    // different questions, so only cascadeIssues (1b's category) is checked
+    // here — see orderedTwoStageStore('1:2', '1:16') in the 1c block for the
+    // same fixture asserted the other way.
     const store = chainedStore(2);
     store.joints[0].properties.split_ratio = '1:2';
     store.joints[1].properties.split_ratio = '1:16';
@@ -131,6 +164,94 @@ describe('Design Health — Check 1b: splitter cascade must be exactly two stage
 
     const result = runDesignHealth(store);
     const flags = cascadeIssues(result);
+    // 10 individual + 1 summary "…and 5 more" line.
+    expect(flags).toHaveLength(11);
+    expect(flags[flags.length - 1].message).toContain('…and 5 more');
+  });
+});
+
+describe('Design Health — Check 1c: strict Gigaloch cascade order (1:8 near premise, 1:4 near cabinet)', () => {
+  // Unlike 1b, this check is deliberately operator-specific — it hardcodes
+  // Gigaloch's build standard rather than deriving from declared ratios. It
+  // only runs when 1b has already confirmed exactly two stages exist (see
+  // designHealth.js: the two checks are mutually exclusive per-premise, not
+  // layered — a route either fails 1b's count check or is eligible for 1c's
+  // order check, never both, so counts below don't double up).
+
+  it('does NOT flag the correct order — 1:8 nearest premise, 1:4 nearest cabinet', () => {
+    const result = runDesignHealth(orderedTwoStageStore('1:8', '1:4'));
+    expect(orderIssues(result)).toHaveLength(0);
+    expect(result.verdict).toBe(VERDICT.GO);
+  });
+
+  it('flags a REVERSED cascade (1:4 nearest premise, 1:8 nearest cabinet), worded as "reversed"', () => {
+    const result = runDesignHealth(orderedTwoStageStore('1:4', '1:8'));
+    const flags = orderIssues(result);
+    expect(flags).toHaveLength(1);
+    expect(flags[0].tier).toBe('error');
+    expect(flags[0].message).toContain('cascade order is reversed');
+  });
+
+  it('flags a matched-but-wrong pair (1:8 + 1:8), worded as "wrong split ratios" not "reversed"', () => {
+    const result = runDesignHealth(orderedTwoStageStore('1:8', '1:8'));
+    const flags = orderIssues(result);
+    expect(flags).toHaveLength(1);
+    expect(flags[0].tier).toBe('error');
+    expect(flags[0].message).toContain('wrong split ratios');
+    expect(flags[0].message).not.toContain('reversed');
+  });
+
+  it('flags a non-Gigaloch but internally-valid pair (1:2 near premise, 1:16 near cabinet)', () => {
+    // Same fixture as the 1b ratio-agnostic test above, asserted the other
+    // way: 1b doesn't care, 1c does — both are correct simultaneously.
+    const result = runDesignHealth(orderedTwoStageStore('1:2', '1:16'));
+    const flags = orderIssues(result);
+    expect(flags).toHaveLength(1);
+    expect(flags[0].message).toContain('wrong split ratios');
+  });
+
+  it('a wrong-order cascade drives verdict to NO-GO (error tier), same as a wrong-count cascade', () => {
+    expect(runDesignHealth(orderedTwoStageStore('1:4', '1:8')).verdict).toBe(VERDICT.NOGO);
+  });
+
+  it('does NOT double-flag when the stage count itself is wrong (0, 1, or 3 splitters)', () => {
+    // 1c only evaluates when splitters.length === 2 — a wrong-count route is
+    // 1b's problem exclusively, and shouldn't also produce a spurious 1c
+    // "wrong order" issue on top of the count error.
+    expect(orderIssues(runDesignHealth(chainedStore(0)))).toHaveLength(0);
+    expect(orderIssues(runDesignHealth(chainedStore(1)))).toHaveLength(0);
+    expect(orderIssues(runDesignHealth(chainedStore(3)))).toHaveLength(0);
+  });
+
+  it('caps displayed order issues and summarises the overflow (>10 bad routes)', () => {
+    // 15 premises, each fed by their own reversed-order two-joint chain
+    // sharing one cabinet — mirrors the 1b overflow test above.
+    const store = orderedTwoStageStore('1:4', '1:8'); // reversed: JNT-1, JNT-2
+    const extraJoints = [];
+    const extraCables = [];
+    const extraBundles = [];
+    const addressPoints = [{ properties: { uprn: '1000001', address: 'Premise 1' } }];
+    for (let i = 2; i <= 15; i++) {
+      const near = `JNT-EXTRA-${i}-A`;
+      const far  = `JNT-EXTRA-${i}-B`;
+      extraJoints.push(
+        { properties: { joint_id: near, has_splitter: true, split_ratio: '1:4' }, geometry: { coordinates: [0, 0] } },
+        { properties: { joint_id: far,  has_splitter: true, split_ratio: '1:8' }, geometry: { coordinates: [0, 0] } },
+      );
+      extraCables.push(
+        { properties: { cable_id: `CBL-EXTRA-${i}-A`, from_node: near, to_node: far,     length_m: 50 } },
+        { properties: { cable_id: `CBL-EXTRA-${i}-B`, from_node: far,  to_node: 'CAB-1',  length_m: 50 } },
+      );
+      extraBundles.push({ properties: { uprn: String(1000000 + i), bundle_id: `BUN-${i}`, from_joint: near, length_m: 10 } });
+      addressPoints.push({ properties: { uprn: String(1000000 + i), address: `Premise ${i}` } });
+    }
+    store.joints.push(...extraJoints);
+    store.cables.push(...extraCables);
+    store.bundles.push(...extraBundles);
+    store.addressPoints = addressPoints;
+
+    const result = runDesignHealth(store);
+    const flags = orderIssues(result);
     // 10 individual + 1 summary "…and 5 more" line.
     expect(flags).toHaveLength(11);
     expect(flags[flags.length - 1].message).toContain('…and 5 more');

@@ -12,6 +12,7 @@
 //
 // Check 1  — Route validation (PARTIAL→ERROR, ROUTED-no-splitter→ERROR, UNSERVED→WARNING)
 // Check 1b — Splitter cascade must be exactly two stages (operator-agnostic PON requirement)
+// Check 1c — Strict Gigaloch cascade order: 1:8 nearest premises, 1:4 nearest cabinet
 // Check 2  — Topology / FK integrity (spans, drops, tails, cables, bundles)
 // Check 2b — Splitter capacity & declaration (overcapacity→ERROR, undeclared→WARNING, stale→WARNING)
 // Check 2c — Broader FK integrity (cables from/to_node, bundles from_joint, drop from_cbt)
@@ -31,6 +32,16 @@ function capOf(ratio) {
   const m = String(ratio || '').match(/:(\d+)/);
   return m ? parseInt(m[1], 10) : 8;
 }
+
+// Gigaloch's specific two-stage cascade convention (Check 1c). Unlike Check 1b
+// (operator-agnostic — any two stages, any ratios), this is deliberately
+// hardcoded to Gigaloch's build standard: 1:8 nearest the premises (terminal
+// splitter), 1:4 nearest the cabinet (feeder splitter). Per memory: "Gigaloch
+// 1:4x1:8 GPON cascade on Calix E7-2." A different operator running this tool
+// would want this check disabled or reconfigured, not applied — it is NOT a
+// PON invariant the way Check 1b's stage-count is.
+const GIGALOCH_NEAR_PREMISE_RATIO = '1:8';
+const GIGALOCH_NEAR_CABINET_RATIO = '1:4';
 
 /**
  * Run the design readiness check against the current project store state.
@@ -74,9 +85,12 @@ export function runDesignHealth(store) {
     } else {
       const PARTIAL_CAP  = 10;
       const BAD_CASCADE_CAP = 10;
+      const BAD_ORDER_CAP = 10;
       let partialShown   = 0;
       let badCascadeCount = 0;
       let badCascadeShown = 0;
+      let badOrderCount = 0;
+      let badOrderShown = 0;
 
       for (const ap of addressPoints) {
         const r = traceFibre(store, ap.properties?.uprn);
@@ -108,6 +122,34 @@ export function runDesignHealth(store) {
                 String(ap.properties?.uprn || ''), 'premises');
               badCascadeShown++;
             }
+          } else if (splitters && splitters.length === 2) {
+            // Check 1c — strict Gigaloch cascade order. Only meaningful once
+            // 1b has already confirmed exactly two stages exist; this is a
+            // stricter, Gigaloch-specific rule layered on top, not a
+            // replacement for 1b's operator-agnostic count check. optical.js's
+            // splitters array is built by walking nodePath, which fibreTrace.js
+            // constructs as entry.node (premise side) … popId (cabinet),
+            // reversed into that order — so splitters[0] is nearest the
+            // premise and splitters[1] is nearest the cabinet, not the reverse.
+            const [nearPremise, nearCabinet] = splitters;
+            const wrongOrder =
+              nearPremise !== GIGALOCH_NEAR_PREMISE_RATIO ||
+              nearCabinet !== GIGALOCH_NEAR_CABINET_RATIO;
+            if (wrongOrder) {
+              badOrderCount++;
+              if (badOrderShown < BAD_ORDER_CAP) {
+                const swapped =
+                  nearPremise === GIGALOCH_NEAR_CABINET_RATIO &&
+                  nearCabinet === GIGALOCH_NEAR_PREMISE_RATIO;
+                const detail = swapped
+                  ? `cascade order is reversed (${nearPremise} nearest premises, ${nearCabinet} nearest cabinet — should be ${GIGALOCH_NEAR_PREMISE_RATIO} then ${GIGALOCH_NEAR_CABINET_RATIO})`
+                  : `wrong split ratios (${nearPremise} nearest premises, ${nearCabinet} nearest cabinet — Gigaloch standard is ${GIGALOCH_NEAR_PREMISE_RATIO} nearest premises, ${GIGALOCH_NEAR_CABINET_RATIO} nearest cabinet)`;
+                add(issues, 'error', 'Wrong splitter cascade order',
+                  `Routed but ${detail}: ${ap.properties?.address || ap.properties?.uprn || '?'}`,
+                  String(ap.properties?.uprn || ''), 'premises');
+                badOrderShown++;
+              }
+            }
           }
 
         } else if (r.status === 'PARTIAL') {
@@ -131,6 +173,11 @@ export function runDesignHealth(store) {
       if (badCascadeCount > BAD_CASCADE_CAP) {
         add(issues, 'error', 'Wrong splitter cascade',
           `…and ${badCascadeCount - BAD_CASCADE_CAP} more route(s) with a wrong splitter cascade — showing first ${BAD_CASCADE_CAP} only.`,
+          '', 'premises');
+      }
+      if (badOrderCount > BAD_ORDER_CAP) {
+        add(issues, 'error', 'Wrong splitter cascade order',
+          `…and ${badOrderCount - BAD_ORDER_CAP} more route(s) with the wrong cascade order — showing first ${BAD_ORDER_CAP} only.`,
           '', 'premises');
       }
       if (unserved > 0) {
