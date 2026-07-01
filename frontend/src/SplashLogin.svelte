@@ -355,19 +355,6 @@
     margin-bottom: 28px;
   }
 
-  /* ── Error ── */
-  .error {
-    background: rgba(255, 60, 60, 0.09);
-    border: 1px solid rgba(255, 80, 80, 0.26);
-    border-radius: 10px;
-    padding: 11px 14px;
-    color: #ff9090;
-    font-size: 13px;
-    text-align: left;
-    margin-bottom: 16px;
-    line-height: 1.5;
-  }
-
   /* ── Google button ── */
   .g-btn {
     display: flex;
