@@ -6,7 +6,24 @@ import { showError } from './toast.js';
 
 const clerk = new Clerk(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 
-await clerk.load({ navigate: () => {} });
+// IMPORTANT: this was previously `navigate: () => {}` — a no-op. Clerk's
+// redirect-based flows (including the OAuth dev-instance handshake hop
+// through accounts.dev) call navigate() to actually move the browser to
+// wherever it needs to go next. A no-op means Clerk *thinks* it navigated
+// and proceeds as if the flow continued, but the browser never goes
+// anywhere — so the flow dies silently with no error, no thrown
+// exception, and no callback params ever landing back on this app. This
+// matches every symptom seen in the OAuth sign-in investigation: Google
+// completes fine, Clerk's own APIs return 200, but __client_uat stays 0
+// and clerk.client.signIn stays at its default 'needs_identifier' state
+// even after a full round-trip — because the round-trip's later hops
+// were silently no-op'd by this stub.
+await clerk.load({
+  navigate: (to) => {
+    window.location.href = to;
+    return Promise.resolve();
+  },
+});
 
 // Only process the OAuth callback when Clerk's handshake params are
 // actually in the URL — otherwise normal loads would re-trigger it
