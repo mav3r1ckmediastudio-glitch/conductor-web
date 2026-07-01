@@ -1,7 +1,6 @@
 <script>
   import { createEventDispatcher } from 'svelte';
   import { parseAddressCsv } from './projectStore.js';
-  import shpjs from 'shpjs';
 
   const dispatch = createEventDispatcher();
 
@@ -38,6 +37,12 @@
         const parsed = parseAddressCsv(text);
         result = parsed;
       } else if (name.endsWith('.zip') || name.endsWith('.shp')) {
+        // Dynamic import: shpjs is only needed for this one, comparatively
+        // rare file type (per the 1 Jul audit's bundle-size finding — most
+        // imports here are CSV). Deferring it out of the initial bundle
+        // costs nothing on this path, since we're already in an async
+        // function gated behind the user actually dropping a shapefile.
+        const shpjs = (await import('shpjs')).default;
         const buffer = await file.arrayBuffer();
         const geojson = await shpjs(buffer);
         const fc = geojson.type === 'FeatureCollection' ? geojson : { type: 'FeatureCollection', features: [geojson] };
