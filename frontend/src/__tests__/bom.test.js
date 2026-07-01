@@ -13,7 +13,7 @@
 // Run with: npm test
 
 import { describe, it, expect } from 'vitest';
-import { buildBom, DEFAULT_COSTS } from '../bom.js';
+import { buildBom, generateBomHtml, DEFAULT_COSTS } from '../bom.js';
 
 // ── Fixture: a small, fully-accounted project ───────────────────────────────
 // Deliberately has NO cabinet — buildBom only adds a "Network Equip" section
@@ -172,5 +172,48 @@ describe('buildBom — empty project baseline', () => {
       expect(section.rows).toEqual([]);
       expect(section.subtotal).toBe(0);
     }
+  });
+});
+
+describe('generateBomHtml — HTML escaping (1 Jul audit §3.4)', () => {
+  // projName is the highest-risk field here — free text, directly
+  // user-entered (project setup), not constrained by any dropdown.
+  it('escapes a malicious project name — no raw tag reaches the output document', () => {
+    const store = {
+      project: { name: '<img src=x onerror=alert(1)>' },
+      cabinet: null, cables: [], spans: [], cbtTails: [], bundles: [],
+      dropDucts: [], aerialDrops: [], joints: [], ducts: [], chambers: [],
+      poles: [], cbts: [],
+    };
+    const html = generateBomHtml(store);
+    expect(html).not.toContain('<img src=x onerror=alert(1)>');
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+  });
+
+  it('escapes a closure_type value that flows through into a BoM row description', () => {
+    // closure_type is the same free-text-capable field flagged in
+    // splicePlan.js's escaping fix — confirms the fix covers it here too,
+    // since it reaches the HTML via a completely different code path
+    // (buildBom's joint-grouping logic, not splicePlan's per-joint render).
+    const store = {
+      cabinet: null, cables: [], spans: [], cbtTails: [], bundles: [],
+      dropDucts: [], aerialDrops: [], ducts: [], chambers: [], poles: [], cbts: [],
+      joints: [{ properties: { joint_type: 'SPLICE', closure_type: '"><script>x</script>' } }],
+    };
+    const html = generateBomHtml(store);
+    expect(html).not.toContain('"><script>x</script>');
+    expect(html).toContain('&quot;&gt;&lt;script&gt;x&lt;/script&gt;');
+  });
+
+  it('an ampersand in a project name renders as a literal & when viewed, not double-escaped', () => {
+    const store = {
+      project: { name: 'Smith & Sons Farm' },
+      cabinet: null, cables: [], spans: [], cbtTails: [], bundles: [],
+      dropDucts: [], aerialDrops: [], joints: [], ducts: [], chambers: [],
+      poles: [], cbts: [],
+    };
+    const html = generateBomHtml(store);
+    expect(html).toContain('Smith &amp; Sons Farm');
+    expect(html).not.toContain('Smith & Sons Farm');
   });
 });

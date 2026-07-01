@@ -53,6 +53,41 @@ function twoJointRoutedStore() {
   };
 }
 
+describe('generateRouteSplicePlan — HTML escaping (1 Jul audit §3.4)', () => {
+  it('escapes a malicious address from CSV import — no raw <script> tag reaches the output document', () => {
+    const store = twoJointRoutedStore();
+    store.addressPoints[0].properties.address = '<script>alert(1)</script>';
+    const result = generateRouteSplicePlan(store, '1000001');
+    expect(result.html).not.toContain('<script>alert(1)</script>');
+    expect(result.html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    // The RAW value is still returned in result.address for the caller to
+    // use elsewhere (e.g. a Svelte {address} binding, which auto-escapes
+    // its own text content) — only the embedded HTML document itself is
+    // escaped. Pre-escaping the returned field too would double-escape
+    // wherever it's used outside this module.
+    expect(result.address).toBe('<script>alert(1)</script>');
+  });
+
+  it('an ampersand in an address renders as a literal & when the document is viewed, not &amp;-of-&amp;', () => {
+    const store = twoJointRoutedStore();
+    store.addressPoints[0].properties.address = 'Smith & Sons Farm';
+    const result = generateRouteSplicePlan(store, '1000001');
+    expect(result.html).toContain('Smith &amp; Sons Farm');
+    expect(result.html).not.toContain('Smith & Sons Farm');
+  });
+
+  it('the actual download filename is NOT escaped even when uprn is unusual — escaping would corrupt it', () => {
+    // uprn is normally numeric, but nothing stops a store containing a
+    // stray non-numeric one; the filename field must stay exactly usable
+    // as a filename regardless, since it's a data value, not HTML text.
+    const store = twoJointRoutedStore();
+    store.addressPoints[0].properties.uprn = '10&20';
+    store.bundles[0].properties.uprn = '10&20';
+    const result = generateRouteSplicePlan(store, '10&20');
+    expect(result.filename).toBe('route-10&20.html');
+  });
+});
+
 describe('generateRouteSplicePlan — ROUTED path', () => {
   const store = twoJointRoutedStore();
   const result = generateRouteSplicePlan(store, '1000001');

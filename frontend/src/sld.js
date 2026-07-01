@@ -24,6 +24,7 @@
 //   downloadSld(html, name)   → browser download
 
 import { traceFibre } from './fibreTrace.js';
+import { escapeHtml } from './htmlEscape.js';
 
 const NAVY = '#1A3A5C', TEAL = '#1D7A6E', ORANGE = '#C85A00';
 const AERIAL = '#00AAFF', GREEN = '#00CC00', BROWN = '#8B4513';
@@ -211,7 +212,7 @@ function renderNode(nodeId, net, visited, depth = 0) {
       const tag = c.is_tail ? ' &#x26D3;' : (c.is_aerial ? ' &#x1F4F6;' : '');
       H.push(`<div class="cable-branch">`);
       H.push(`<div class="cable-line" style="${ls}"></div>`);
-      H.push(`<div class="cable-label" style="color:${col};">${cid} &middot; ${c.fibre_count}F &middot; ${c.length_m}m${tag}</div>`);
+      H.push(`<div class="cable-label" style="color:${col};">${escapeHtml(cid)} &middot; ${c.fibre_count}F &middot; ${c.length_m}m${tag}</div>`);
       H.push(renderNode(c.to_node, net, visited, depth + 1));
       H.push(`</div>`);
     }
@@ -224,7 +225,7 @@ function renderNode(nodeId, net, visited, depth = 0) {
     const boxCls = isPole ? 'node-joint node-pole' : 'node-joint';
     const icon = isPole ? '&#x1F4F6; ' : '';
     H.push(`<div class="tree-node"><div class="${boxCls}">`);
-    H.push(`<div class="node-id">${icon}${nodeId}</div>`);
+    H.push(`<div class="node-id">${icon}${escapeHtml(nodeId)}</div>`);
     H.push(`<div class="node-meta">${isPole ? 'Pole — aerial span' : 'Pass-through'}</div></div>`);
     renderChildren();
     H.push(`</div>`);
@@ -234,15 +235,15 @@ function renderNode(nodeId, net, visited, depth = 0) {
   if (joint) {
     const isCbt = joint.joint_type === 'CBT';
     let spLabel, boxCls;
-    if (isCbt) { spLabel = 'CBT' + (joint.chamber_id ? ' — Pole: ' + joint.chamber_id : ''); boxCls = 'node-joint node-cbt'; }
-    else if (joint.has_splitter) { spLabel = (joint.split_ratio || '') + ' splitter'; boxCls = 'node-joint node-splitter'; }
+    if (isCbt) { spLabel = 'CBT' + (joint.chamber_id ? ' — Pole: ' + escapeHtml(joint.chamber_id) : ''); boxCls = 'node-joint node-cbt'; }
+    else if (joint.has_splitter) { spLabel = escapeHtml(joint.split_ratio || '') + ' splitter'; boxCls = 'node-joint node-splitter'; }
     else if (joint.joint_type === 'END_OF_LINE') { spLabel = 'End of line'; boxCls = 'node-joint node-eol'; }
     else { spLabel = 'Pass-through'; boxCls = 'node-joint'; }
 
     H.push(`<div class="tree-node"><div class="${boxCls}">`);
-    H.push(`<div class="node-id">${joint.id}</div>`);
+    H.push(`<div class="node-id">${escapeHtml(joint.id)}</div>`);
     H.push(`<div class="node-meta">${spLabel}</div>`);
-    if (joint.chamber_id && !isCbt) H.push(`<div class="node-chamber">${joint.chamber_id}</div>`);
+    if (joint.chamber_id && !isCbt) H.push(`<div class="node-chamber">${escapeHtml(joint.chamber_id)}</div>`);
     H.push(`</div>`);
 
     // UG bundles
@@ -250,8 +251,8 @@ function renderNode(nodeId, net, visited, depth = 0) {
       H.push(`<div class="bundle-list">`);
       for (const b of jbundles) {
         H.push(`<div class="bundle-row"><div class="bundle-line"></div><div class="bundle-box">`);
-        H.push(`<span class="bundle-id">${b.bundle_id}</span>`);
-        H.push(`<span class="bundle-addr">${b.address}</span>`);
+        H.push(`<span class="bundle-id">${escapeHtml(b.bundle_id)}</span>`);
+        H.push(`<span class="bundle-addr">${escapeHtml(b.address)}</span>`);
         H.push(`<span class="bundle-meta">${b.fibre_count}F &middot; ${b.length_m}m</span>`);
         if (b.loss_db != null) {
           const cls = b.link_pass ? 'budget-pass' : 'budget-fail';
@@ -268,8 +269,8 @@ function renderNode(nodeId, net, visited, depth = 0) {
       H.push(`<div class="aerial-list">`);
       for (const d of jdrops) {
         H.push(`<div class="aerial-row"><div class="aerial-line"></div><div class="aerial-box">`);
-        H.push(`<span class="aerial-id">&#x1F4F6; ${d.adrop_id}</span>`);
-        H.push(`<span class="aerial-addr">${d.address}</span>`);
+        H.push(`<span class="aerial-id">&#x1F4F6; ${escapeHtml(d.adrop_id)}</span>`);
+        H.push(`<span class="aerial-addr">${escapeHtml(d.address)}</span>`);
         H.push(`<span class="aerial-meta">${d.length_m}m &middot; Aerial drop</span>`);
         if (d.loss_db != null) {
           const cls = d.link_pass ? 'budget-pass' : 'budget-fail';
@@ -322,7 +323,7 @@ export function generateSld(store) {
     if (!c) continue;
     const col = CABLE_COLOURS[c.cable_type] || NAVY;
     tree += `<div class="cable-branch"><div class="cable-line" style="border-color:${col};"></div>`;
-    tree += `<div class="cable-label" style="color:${col};">${cid} &middot; ${c.fibre_count}F &middot; ${c.length_m}m</div>`;
+    tree += `<div class="cable-label" style="color:${col};">${escapeHtml(cid)} &middot; ${c.fibre_count}F &middot; ${c.length_m}m</div>`;
     tree += renderNode(c.to_node, net, visited);
     tree += `</div>`;
   }
@@ -382,8 +383,8 @@ export function generateSld(store) {
 
   const H = [];
   H.push(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">`);
-  H.push(`<title>${areaId} &middot; Single Line Diagram</title><style>${CSS}</style></head><body><div class="page">`);
-  H.push(`<div class="header"><div class="header-title">${areaId} &middot; Single Line Diagram</div>`);
+  H.push(`<title>${escapeHtml(areaId)} &middot; Single Line Diagram</title><style>${CSS}</style></head><body><div class="page">`);
+  H.push(`<div class="header"><div class="header-title">${escapeHtml(areaId)} &middot; Single Line Diagram</div>`);
   H.push(`<div class="header-sub">Full network topology &middot; Cabinet to customer &middot; Gigaloch</div>`);
   H.push(`<div class="stat-row">`);
   for (const [lbl, v, extra] of [
@@ -413,10 +414,10 @@ export function generateSld(store) {
   }
   H.push(`</div>`);
 
-  H.push(`<div class="cabinet"><span class="cab-icon">&#x1F4E6;</span>${cabinet} &middot; Cabinet</div>`);
+  H.push(`<div class="cabinet"><span class="cab-icon">&#x1F4E6;</span>${escapeHtml(cabinet)} &middot; Cabinet</div>`);
   H.push(`<div class="tree">${tree}</div>`);
 
-  H.push(`<div class="footer"><span>${areaId} &middot; Single Line Diagram &middot; Gigaloch</span>`);
+  H.push(`<div class="footer"><span>${escapeHtml(areaId)} &middot; Single Line Diagram &middot; Gigaloch</span>`);
   H.push(`<span>Print: Ctrl+P &middot; Save as PDF from print dialog</span></div>`);
   H.push(`</div></body></html>`);
 

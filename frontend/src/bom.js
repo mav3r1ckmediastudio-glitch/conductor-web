@@ -19,6 +19,8 @@
 //   downloadBom(text, filename, mime?) → browser download
 //   DEFAULT_COSTS
 
+import { escapeHtml } from './htmlEscape.js';
+
 export const DEFAULT_COSTS = {
   // Fibre cable — per metre by core count
   cable_12f_m: 0.47, cable_24f_m: 0.54, cable_48f_m: 0.62, cable_72f_m: 0.65, cable_96f_m: 0.99,
@@ -429,9 +431,9 @@ tr:last-child td{border-bottom:none;}
 
   const H = [];
   H.push(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">`);
-  H.push(`<title>${areaId} · Bill of Materials</title><style>${CSS}</style></head><body><div class="page">`);
+  H.push(`<title>${escapeHtml(areaId)} · Bill of Materials</title><style>${CSS}</style></head><body><div class="page">`);
   H.push(`<div class="header"><div class="header-title">Bill of Materials</div>`);
-  H.push(`<div class="header-sub">${projName}${areaId ? ' · ' + areaId : ''} · Gigaloch · Exported from Conductor · prices ex. VAT</div>`);
+  H.push(`<div class="header-sub">${escapeHtml(projName)}${areaId ? ' · ' + escapeHtml(areaId) : ''} · Gigaloch · Exported from Conductor · prices ex. VAT</div>`);
   H.push(`<div class="grand"><span class="grand-lbl">Estimated Total (ex. VAT)</span><span class="grand-val">${gbp(grandTotal)}</span></div></div>`);
 
   for (const sec of sections) {
@@ -439,15 +441,15 @@ tr:last-child td{border-bottom:none;}
     H.push(`<div class="section"><div class="section-head"><span>${sec.name}</span><span class="section-sub">${gbp(sec.subtotal)}</span></div>`);
     H.push(`<table><thead><tr><th>Description</th><th class="r">Qty</th><th>Unit</th><th class="r">Unit £</th><th class="r">Total £</th><th>Notes</th></tr></thead><tbody>`);
     for (const row of sec.rows) {
-      H.push(`<tr><td class="desc">${S(row.description)}</td>` +
-        `<td class="r">${S(row.qty)}</td><td>${S(row.unit)}</td>` +
+      H.push(`<tr><td class="desc">${escapeHtml(row.description)}</td>` +
+        `<td class="r">${escapeHtml(row.qty)}</td><td>${escapeHtml(row.unit)}</td>` +
         `<td class="r">${gbp(row.unit_cost)}</td><td class="r">${gbp(row.total)}</td>` +
-        `<td class="notes">${S(row.notes)}</td></tr>`);
+        `<td class="notes">${escapeHtml(row.notes)}</td></tr>`);
     }
     H.push(`</tbody></table></div>`);
   }
 
-  H.push(`<div class="footer"><span>${projName} · Bill of Materials · Gigaloch</span>`);
+  H.push(`<div class="footer"><span>${escapeHtml(projName)} · Bill of Materials · Gigaloch</span>`);
   H.push(`<span>Print: Ctrl+P · ${gbp(grandTotal)} ex. VAT</span></div>`);
   H.push(`</div></body></html>`);
   return H.join('\n');

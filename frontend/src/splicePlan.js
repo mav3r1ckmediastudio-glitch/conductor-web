@@ -14,6 +14,7 @@
 //   downloadAllSplicePlans(store)            → downloads all plans sequentially
 
 import { traceFibre, resolveNode } from './fibreTrace.js';
+import { escapeHtml } from './htmlEscape.js';
 
 // ── IEC 60794 colour tables ───────────────────────────────────────────────────
 const IEC_NAMES  = ['Blue','Orange','Green','Brown','Slate','White','Red','Black','Yellow','Violet','Rose','Aqua'];
@@ -67,10 +68,12 @@ function spliceLink(t) {
 }
 
 // Short cable label: last segment after '-' e.g. "ENG-CH3-CBL-001" → "001"
+// Escaped here (not just S()'d) since this function's only purpose is to
+// produce a value that gets pushed straight into an HTML table cell.
 function shortCable(id) {
   if (!id) return '—';
   const parts = S(id).split('-');
-  return parts.length >= 2 ? parts.slice(-2).join('-') : S(id);
+  return escapeHtml(parts.length >= 2 ? parts.slice(-2).join('-') : S(id));
 }
 
 // ── CSS ───────────────────────────────────────────────────────────────────────
@@ -150,25 +153,31 @@ function buildLegendsHtml() {
 // body HTML (tube splice sections + splitter section + spare/dark block —
 // no page chrome, no <html>/<head>/header/legends/footer).
 function buildJointSpliceData(store, jointId) {
-  const jid = S(jointId);
+  // jid and the free-text/ID fields below are escaped here, not just S()'d —
+  // this function's return value (`d`) is a private intermediate used only
+  // by generateSplicePlan()/generateRouteSplicePlan() to build HTML in this
+  // same module; nothing outside splicePlan.js ever consumes `d` as raw
+  // data, so it's safe (and simplest) to escape once, at the source, rather
+  // than at every H.push/B.push call site downstream.
+  const jid = escapeHtml(jointId);
 
   // Find the joint or CBT record
-  const jointFeat = (store.joints  || []).find(j => S(j.properties.joint_id) === jid)
-                 || (store.cbts    || []).find(c => S(c.properties.cbt_id)   === jid);
-  const isCbt = !!(store.cbts || []).find(c => S(c.properties.cbt_id) === jid);
+  const jointFeat = (store.joints  || []).find(j => S(j.properties.joint_id) === S(jointId))
+                 || (store.cbts    || []).find(c => S(c.properties.cbt_id)   === S(jointId));
+  const isCbt = !!(store.cbts || []).find(c => S(c.properties.cbt_id) === S(jointId));
 
   const p = jointFeat?.properties || {};
-  const closureType  = S(p.closure_type  || p.notes || '');
-  const jointType    = S(p.joint_type    || (isCbt ? 'CBT' : 'SPLICE'));
-  const chamberId    = S(p.chamber_id    || '');
-  const popId        = S(p.pop_id        || store.cabinet?.properties?.pop_id || '');
+  const closureType  = escapeHtml(p.closure_type || p.notes || '');
+  const jointType    = escapeHtml(p.joint_type   || (isCbt ? 'CBT' : 'SPLICE'));
+  const chamberId    = escapeHtml(p.chamber_id   || '');
+  const popId        = escapeHtml(p.pop_id       || store.cabinet?.properties?.pop_id || '');
   const hasSplitter  = !!(p.has_splitter === true || p.has_splitter === 1 || p.has_splitter === 'true');
   const splitRatio   = S(p.split_ratio   || (hasSplitter || isCbt ? '1:8' : ''));
   const splitterCap  = splitRatio ? parseInt((splitRatio.match(/:(\d+)/) || [])[1] || '8', 10) : 0;
 
   // Pull assignment records for this joint
   const allRecs = store.fibreAssignments || [];
-  const recs = allRecs.filter(r => S(r.joint_id) === jid);
+  const recs = allRecs.filter(r => S(r.joint_id) === S(jointId));
 
   // Build address lookup from addressPoints
   const addrOf = {};
@@ -348,14 +357,14 @@ function buildJointSpliceData(store, jointId) {
           // Feeder output → downstream splitter (joint or CBT). Show id + its ratio.
           const isCbtChild = (store.cbts || []).some(c => S(c.properties.cbt_id) === childId)
             || (store.joints || []).some(j => S(j.properties.joint_id) === childId && S(j.properties.joint_type) === 'CBT');
-          B.push(`<span class="po-yes">&#10003; ${childId} ` +
+          B.push(`<span class="po-yes">&#10003; ${escapeHtml(childId)} ` +
             `<span style="font-size:9px;color:#6B1D0A;opacity:0.7;">` +
-            `(${isCbtChild ? 'CBT' : 'Joint'} ${childRatio[childId]})</span></span>`);
+            `(${isCbtChild ? 'CBT' : 'Joint'} ${escapeHtml(childRatio[childId])})</span></span>`);
         } else {
           // Terminal output → premises. Look up UPRN → address.
           const uprn = uprnOf[childId] || '';
           const addr = addrOf[uprn] || uprn || childId;
-          B.push(`<span class="po-yes">&#10003; ${addr}</span>`);
+          B.push(`<span class="po-yes">&#10003; ${escapeHtml(addr)}</span>`);
         }
       } else {
         B.push(`<span class="po-no">Spare / unassigned</span>`);
@@ -480,17 +489,17 @@ export function generateRouteSplicePlan(store, uprn) {
 
   const H = [];
   H.push(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">`);
-  H.push(`<title>Route to ${S(uprn)} &middot; Splice Plan</title>`);
+  H.push(`<title>Route to ${escapeHtml(uprn)} &middot; Splice Plan</title>`);
   H.push(`<style>${CSS}</style>`);
   H.push(`</head><body><div class="page">`);
 
   // ── Route-level header ────────────────────────────────────────────────────
   H.push(`<div class="header">`);
   H.push(`<div class="header-top"><div>`);
-  H.push(`<div class="header-title">Route to ${address}</div>`);
+  H.push(`<div class="header-title">Route to ${escapeHtml(address)}</div>`);
   const subParts = ['Route Splice Plan', `${jointIds.length} joint(s)/CBT(s)`, 'Owner: Gigaloch'];
   H.push(`<div class="header-sub">${subParts.join(' &middot; ')}</div>`);
-  const locLines = [popId, `UPRN ${S(uprn)}`].filter(Boolean);
+  const locLines = [escapeHtml(popId), `UPRN ${escapeHtml(uprn)}`].filter(Boolean);
   H.push(`</div><div class="header-loc">${locLines.join('<br>')}</div></div>`);
   H.push(`<div class="meta-grid">`);
   H.push(`<div class="meta-card"><div class="meta-label">Route length</div><div class="meta-value">${Math.round(result.lengthM || 0)}m</div></div>`);
@@ -521,8 +530,8 @@ export function generateRouteSplicePlan(store, uprn) {
 
   // ── Footer ────────────────────────────────────────────────────────────────
   H.push(`<div class="footer">`);
-  H.push(`<span>Route to ${S(uprn)} &middot; Route Splice Plan &middot; Gigaloch</span>`);
-  H.push(`<span>Print: Ctrl+P &middot; Works offline &middot; route-${S(uprn)}.html</span>`);
+  H.push(`<span>Route to ${escapeHtml(uprn)} &middot; Route Splice Plan &middot; Gigaloch</span>`);
+  H.push(`<span>Print: Ctrl+P &middot; Works offline &middot; route-${escapeHtml(uprn)}.html</span>`);
   H.push(`</div>`);
   H.push(`</div></body></html>`);
 
