@@ -8,12 +8,12 @@
 //   showToast('A build area needs at least 3 points.');   // info, auto-dismiss ~4s
 //   showError('Could not save file: ' + e.message);       // error, auto-dismiss ~8s, red
 //
-// BUFFERING: a few call sites (projectStore.js's initial load/migration,
-// main.js's Clerk OAuth callback) can fire before the Toast component has
-// mounted — there's no UI on screen yet to show anything. Rather than lose
-// those silently, emit() buffers them in _pending and onToast() flushes the
-// buffer to the first real listener that subscribes, so an error at app boot
-// still surfaces the moment the UI is actually on screen.
+// BUFFERING: a few call sites (e.g. projectStore.js's initial load/
+// migration) can fire before the Toast component has mounted — there's
+// no UI on screen yet to show anything. Rather than lose those silently,
+// emit() buffers them in _pending and onToast() flushes the buffer to
+// the first real listener that subscribes, so an error at app boot still
+// surfaces the moment the UI is actually on screen.
 
 let _listeners = [];
 let _pending = [];

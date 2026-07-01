@@ -61,9 +61,6 @@
     applyCookieCutter, clearTool, getPoleLayer, setSearchMarker
   } from './mapTools.js';
 
-  export let clerk = null;
-  export let user  = null;
-
   const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY;
 
   // ── Basemap definitions ──────────────────────────────────────────────────────
@@ -1170,9 +1167,6 @@
     }
   }
 
-  let userMenuOpen = false;
-  function signOut() { userMenuOpen = false; clerk?.signOut(); }
-
   let showOpen = false;
   let projectList = [];
 
@@ -1305,7 +1299,7 @@
   }
 </script>
 
-<svelte:window on:click={() => { showOpen = false; userMenuOpen = false; showExport = false; }} on:keydown={onKeydown} />
+<svelte:window on:click={() => { showOpen = false; showExport = false; }} on:keydown={onKeydown} />
 
 <div class="screen">
 
@@ -1431,20 +1425,6 @@
           </div>
         {/if}
       </div>
-      {#if user}
-        <div class="tb-avatar-wrap">
-          <button class="tb-avatar" on:click|stopPropagation={() => userMenuOpen = !userMenuOpen} title="Account">
-            {(user.firstName?.[0] ?? user.emailAddresses?.[0]?.emailAddress?.[0] ?? '?').toUpperCase()}
-          </button>
-          {#if userMenuOpen}
-            <div class="tb-user-menu" on:click|stopPropagation role="menu" tabindex="-1">
-              <p class="tum-email">{user.emailAddresses?.[0]?.emailAddress ?? ''}</p>
-              <hr class="tum-hr" />
-              <button class="tum-signout" on:click={signOut}>Sign out</button>
-            </div>
-          {/if}
-        </div>
-      {/if}
     </div>
   </div>
 
@@ -2056,12 +2036,5 @@
   .fa-done { width: 100%; background: #00aaff14; border: 1px solid #00aaff44; color: #4dc8ff; font-family: 'Courier New', monospace; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; padding: 8px; border-radius: 4px; cursor: pointer; }
   .fa-done:hover { background: #00aaff22; }
   /* ── Topbar account avatar ── */
-  .tb-avatar-wrap { position: relative; }
-  .tb-avatar { width: 28px; height: 28px; border-radius: 50%; background: rgba(77,200,255,0.1); border: 1px solid rgba(77,200,255,0.28); color: #4dc8ff; font-size: 11px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.15s, border-color 0.15s; padding: 0; }
-  .tb-avatar:hover { background: rgba(77,200,255,0.2); border-color: rgba(77,200,255,0.5); }
-  .tb-user-menu { position: absolute; top: calc(100% + 6px); right: 0; background: rgba(8,14,28,0.97); border: 1px solid rgba(77,200,255,0.18); border-radius: 8px; padding: 10px 12px; min-width: 190px; z-index: 200; box-shadow: 0 8px 28px rgba(0,0,0,0.6); backdrop-filter: blur(16px); font-family: 'Inter', ui-sans-serif, sans-serif; }
-  .tum-email { font-size: 10px; color: rgba(255,255,255,0.38); margin: 0 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .tum-hr { border: none; border-top: 1px solid rgba(77,200,255,0.1); margin: 0 0 8px; }
-  .tum-signout { width: 100%; padding: 6px 8px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 5px; color: rgba(255,255,255,0.68); font-size: 12px; font-family: inherit; cursor: pointer; text-align: left; transition: background 0.15s, color 0.15s; }
-  .tum-signout:hover { background: rgba(255,80,80,0.1); border-color: rgba(255,80,80,0.25); color: #ff9090; }
+
 </style>

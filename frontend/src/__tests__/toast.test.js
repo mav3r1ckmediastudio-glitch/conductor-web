@@ -2,10 +2,9 @@
 //
 // The buffering behaviour added tonight (toast.js) is genuinely new logic, not
 // just wiring — it exists specifically to fix a real gap: a few call sites
-// (projectStore.js's initial load, main.js's Clerk OAuth callback) fire before
-// any UI has mounted, so there's no listener yet to show anything. Worth a
-// direct test rather than trusting it by inspection, same as everything else
-// tonight.
+// (e.g. projectStore.js's initial load) fire before any UI has mounted, so
+// there's no listener yet to show anything. Worth a direct test rather than
+// trusting it by inspection, same as everything else tonight.
 //
 // Run with: npm test
 
