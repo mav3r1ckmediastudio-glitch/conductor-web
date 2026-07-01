@@ -12,12 +12,23 @@ await clerk.load({ navigate: () => {} });
 // actually in the URL — otherwise normal loads would re-trigger it
 // and loop. After processing, strip the params so a refresh is clean.
 const params = new URLSearchParams(window.location.search);
-const isCallback = [...params.keys()].some((k) => k.startsWith('__clerk'));
+const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+const isCallback =
+  [...params.keys()].some((k) => k.startsWith('__clerk')) ||
+  [...hashParams.keys()].some((k) => k.startsWith('__clerk'));
 
 // TEMP DEBUG — remove once the silent-sign-in-failure is diagnosed.
 console.log('[clerk-debug] full URL on load:', window.location.href);
 console.log('[clerk-debug] search params:', [...params.entries()]);
+console.log('[clerk-debug] hash params:', [...hashParams.entries()]);
 console.log('[clerk-debug] isCallback:', isCallback);
+// Check unconditionally — the Client object may already reflect a
+// pending/completed sign-in attempt via cookies even if we never
+// detected callback params in the URL at all.
+console.log('[clerk-debug] clerk.client.signIn (unconditional):', clerk.client?.signIn);
+console.log('[clerk-debug] clerk.client.signUp (unconditional):', clerk.client?.signUp);
+console.log('[clerk-debug] clerk.user (unconditional):', clerk.user);
+console.log('[clerk-debug] clerk.session (unconditional):', clerk.session);
 
 if (isCallback) {
   try {
