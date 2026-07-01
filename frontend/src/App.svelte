@@ -233,14 +233,23 @@
   let searchQuery = '';
 
   // Postcode/asset search — the "Zoom to postcode or asset..." bar existed as
-  // a bare placeholder with no handler; this wires it up. Two passes:
+  // a bare placeholder with no handler; this wires it up. Three passes, in
+  // order of cost — cheapest/most-likely first:
   //   1. Postcode match against addressPoints (spaces-insensitive — "FK20 8RU"
-  //      and "fk208ru" both match).
+  //      and "fk208ru" both match). Instant, no network.
   //   2. Asset ID match across every ID-bearing collection, exact match first,
   //      then a "starts with" fallback so a partial ID still finds something.
-  // No new engine file needed — this is a self-contained lookup + map.easeTo(),
-  // same pattern used by onDrawerRowClick() above.
-  function onAssetSearch() {
+  //      Instant, no network.
+  //   3. ONLY if the query looks postcode-shaped AND nothing local matched:
+  //      a live geocode via postcodes.io (free, no auth) — covers a postcode
+  //      outside this project's imported premises, matching what v2's
+  //      postcode_zoom.py did. Skipped entirely for non-postcode-shaped
+  //      queries so a mistyped asset ID never costs a network round-trip.
+  //      5s timeout; any failure (offline, timeout, genuinely not a postcode)
+  //      falls through to the same "not found" toast rather than erroring.
+  const UK_POSTCODE_RE = /^[A-Z]{1,2}\d[A-Z\d]?\d[A-Z]{2}$/;
+
+  async function onAssetSearch() {
     const q = searchQuery.trim();
     if (!q) return;
     const qNorm = q.toUpperCase();
@@ -297,6 +306,30 @@
         showToast(`Found ${found.label} ${q}, but it has no location to zoom to.`);
       }
       return;
+    }
+
+    if (UK_POSTCODE_RE.test(qPostcode)) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        const res = await fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(qPostcode)}`, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+          const data = await res.json();
+          const { longitude, latitude } = data.result || {};
+          if (typeof longitude === 'number' && typeof latitude === 'number') {
+            map.easeTo({ center: [longitude, latitude], zoom: Math.max(map.getZoom(), 15), duration: 600 });
+            showToast(`Found ${q} via postcodes.io — not in this project's imported premises.`);
+            return;
+          }
+        }
+        // 404 (not a real postcode) or an unexpected response shape — fall
+        // through to the generic "not found" toast below, same as before.
+      } catch (e) {
+        // Offline, timed out, or postcodes.io is down — fail quietly to the
+        // same "not found" toast rather than surfacing a raw network error.
+        console.error('[search] postcodes.io lookup failed:', e);
+      }
     }
 
     showToast(`No postcode or asset matching "${q}" found in this project.`);
