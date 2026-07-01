@@ -20,7 +20,6 @@
   import ProjectSetup from './ProjectSetup.svelte';
   import AddressImporter from './AddressImporter.svelte';
   import BuildAreaForm from './BuildAreaForm.svelte';
-  import Toast from './Toast.svelte';
   import { showToast, showError } from './toast.js';
   import { projectStore } from './projectStore.js';
   import {
@@ -1309,8 +1308,6 @@
 <svelte:window on:click={() => { showOpen = false; userMenuOpen = false; showExport = false; }} on:keydown={onKeydown} />
 
 <div class="screen">
-
-  <Toast />
 
   {#if showSaveNudge}
     <div class="save-nudge" role="alert">

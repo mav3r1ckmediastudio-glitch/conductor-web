@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import App from './App.svelte';
   import SplashLogin from './SplashLogin.svelte';
+  import Toast from './Toast.svelte';
 
   let { clerk } = $props();
 
@@ -19,6 +20,8 @@
     return unsub;
   });
 </script>
+
+<Toast />
 
 {#if !ready}
   <div style="position:fixed;inset:0;background:#060a12;"></div>

@@ -19,8 +19,11 @@ if (isCallback) {
     await clerk.handleRedirectCallback();
   } catch (e) {
     console.error('Clerk callback error:', e);
-    // Fires before any UI exists yet — toast.js buffers this and shows it
-    // the moment Toast.svelte mounts inside App.svelte, a few lines below.
+    // Fires before any UI exists yet — Toast now lives in ClerkGate (mounted
+    // unconditionally, regardless of auth state) so this reliably surfaces
+    // instead of being buffered forever behind a splash screen that never
+    // mounts App.svelte. console.error above is a belt-and-braces fallback
+    // in case that assumption ever breaks again.
     showError('Sign-in could not be completed: ' + (e?.message || e) + '. Please try signing in again.');
   }
   // Remove Clerk params from the URL without reloading
