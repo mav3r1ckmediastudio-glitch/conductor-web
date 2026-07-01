@@ -151,3 +151,144 @@ describe('Design Health — Check 2b stays ratio-agnostic (sanity check, not a r
     expect(capFlags).toHaveLength(0);
   });
 });
+
+describe('Design Health — Check 2b stale-declaration drift class', () => {
+  it('flags a genuinely isolated splitter (bundleCount=0, feeds nothing downstream)', () => {
+    // A joint declared as a splitter but not connected onward to anything —
+    // no bundles, and its only cable neighbour is a non-splitter joint.
+    const store = chainedStore(1);
+    // chainedStore(1) already has JNT-1 as a splitter WITH one bundle
+    // attached (that's the entry joint) — add a second, genuinely orphaned
+    // splitter joint that isn't fed by anything and feeds nothing.
+    store.joints.push({
+      properties: { joint_id: 'JNT-ORPHAN', has_splitter: true, split_ratio: '1:8' },
+      geometry: { coordinates: [0.5, 0.5] },
+    });
+    const result = runDesignHealth(store);
+    const staleFlags = result.issues.filter(i => i.category === 'Stale splitter declaration' && i.assetId === 'JNT-ORPHAN');
+    expect(staleFlags).toHaveLength(1);
+    expect(staleFlags[0].tier).toBe('warning');
+  });
+
+  it('does NOT flag a feeder splitter whose only consumers are downstream splitter joints (not bundles)', () => {
+    // This is the exact case that would false-positive on a naive
+    // bundleCount===0 check: a 1:4 feeder's real consumers are other
+    // splitter joints in the cascade, not bundles directly. Explicit
+    // assertion (chainedStore(2)'s second joint IS this case already,
+    // covered implicitly by the "exactly two splitters" test — this makes
+    // the guarantee explicit and names it).
+    const result = runDesignHealth(chainedStore(2));
+    const staleFlags = result.issues.filter(i => i.category === 'Stale splitter declaration');
+    expect(staleFlags).toHaveLength(0);
+  });
+
+  it('does NOT flag a joint feeding a CBT (CBTs are always splitters, no has_splitter toggle to check)', () => {
+    const store = chainedStore(1);
+    store.cbts.push({ properties: { cbt_id: 'CBT-1', split_ratio: '1:8' }, geometry: { coordinates: [0.5, 0.5] } });
+    store.cables.push({ properties: { cable_id: 'CBL-TO-CBT', from_node: 'JNT-1', to_node: 'CBT-1', length_m: 20 } });
+    const result = runDesignHealth(store);
+    // JNT-1 has a bundle attached anyway in this fixture, so this mainly
+    // proves the CBT-feed path doesn't throw or misclassify — the dedicated
+    // "feeds nothing" case is covered by the isolated-joint test above.
+    const staleFlags = result.issues.filter(i => i.category === 'Stale splitter declaration' && i.assetId === 'JNT-1');
+    expect(staleFlags).toHaveLength(0);
+  });
+});
+
+describe('Design Health — Check 2d: cable duct_id FK', () => {
+  it('does not flag a null duct_id (normal unmatched state)', () => {
+    const store = chainedStore(2);
+    store.cables[0].properties.duct_id = null;
+    const result = runDesignHealth(store);
+    expect(result.issues.filter(i => i.message.includes('duct_id'))).toHaveLength(0);
+  });
+
+  it('does not flag a duct_id that resolves to a real duct', () => {
+    const store = chainedStore(2);
+    store.ducts = [{ properties: { duct_id: 'DCT-1' } }];
+    store.cables[0].properties.duct_id = 'DCT-1';
+    const result = runDesignHealth(store);
+    expect(result.issues.filter(i => i.message.includes('duct_id'))).toHaveLength(0);
+  });
+
+  it('flags a set-but-dangling duct_id', () => {
+    const store = chainedStore(2);
+    store.cables[0].properties.duct_id = 'DCT-DELETED';
+    const result = runDesignHealth(store);
+    const flags = result.issues.filter(i => i.message.includes('duct_id'));
+    expect(flags).toHaveLength(1);
+    expect(flags[0].tier).toBe('error');
+    expect(flags[0].assetId).toBe('CBL-1');
+  });
+});
+
+describe('Design Health — Check 2d: joint chamber_id FK', () => {
+  it('does not flag a chamber_id that resolves to a real chamber', () => {
+    const store = chainedStore(2);
+    store.chambers = [{ properties: { chamber_id: 'CH-1' } }];
+    store.joints[0].properties.chamber_id = 'CH-1';
+    const result = runDesignHealth(store);
+    expect(result.issues.filter(i => i.message.includes('chamber_id'))).toHaveLength(0);
+  });
+
+  it('flags a set-but-dangling chamber_id', () => {
+    const store = chainedStore(2);
+    store.joints[0].properties.chamber_id = 'CH-DELETED';
+    const result = runDesignHealth(store);
+    const flags = result.issues.filter(i => i.message.includes('chamber_id'));
+    expect(flags).toHaveLength(1);
+    expect(flags[0].tier).toBe('error');
+    expect(flags[0].assetId).toBe('JNT-1');
+  });
+});
+
+describe('Design Health — Check 2d: bundle uprn FK', () => {
+  it('does not flag a null uprn (normal unmatched state)', () => {
+    const store = chainedStore(2);
+    store.bundles[0].properties.uprn = null;
+    const result = runDesignHealth(store);
+    expect(result.issues.filter(i => i.message.includes('uprn'))).toHaveLength(0);
+  });
+
+  it('flags a set-but-dangling uprn', () => {
+    const store = chainedStore(2);
+    store.bundles[0].properties.uprn = '9999999';
+    const result = runDesignHealth(store);
+    const flags = result.issues.filter(i => i.message.includes('uprn'));
+    expect(flags).toHaveLength(1);
+    expect(flags[0].tier).toBe('error');
+    expect(flags[0].assetId).toBe('BUN-1');
+  });
+});
+
+describe('Design Health — Check 2d: fibreAssignments FKs (role-aware)', () => {
+  // IMPORTANT: fibreAssignments records are FLAT objects (see fibreAssign.js's
+  // rec() helper — `{ assign_id, ...o }`, no GeoJSON .properties wrapper like
+  // every other collection). designHealth.js's `p = assignment.properties ||
+  // assignment` fallback handles this, but the fixtures below deliberately
+  // match the real shape rather than lean on that fallback.
+  it('does not flag a real cable_id, a synthetic "-SP" splitter pigtail id, or a real joint_id/bundle_id', () => {
+    const store = chainedStore(2);
+    store.fibreAssignments = [
+      { assign_id: 'ASN-0001', cable_id: 'CBL-1', joint_id: 'JNT-1', fibre_role: 'SPLITTER_INPUT' },
+      { assign_id: 'ASN-0002', cable_id: 'JNT-1-SP', joint_id: 'JNT-1', bundle_id: 'BUN-1', fibre_role: 'SPLITTER_OUTPUT' },
+      // Stage-1 convention: bundle_id holds a downstream CHILD JOINT id, not a bundle.
+      { assign_id: 'ASN-0003', cable_id: 'JNT-1-SP', joint_id: 'JNT-1', bundle_id: 'JNT-2', fibre_role: 'SPLITTER_OUTPUT' },
+    ];
+    const result = runDesignHealth(store);
+    expect(result.issues.filter(i => i.layer === 'fibreAssignments')).toHaveLength(0);
+  });
+
+  it('flags a dangling joint_id, a dangling non-synthetic cable_id, and a dangling bundle_id', () => {
+    const store = chainedStore(2);
+    store.fibreAssignments = [
+      { assign_id: 'ASN-0001', joint_id: 'JNT-DOES-NOT-EXIST', fibre_role: 'SPLITTER_INPUT' },
+      { assign_id: 'ASN-0002', cable_id: 'CBL-DOES-NOT-EXIST', joint_id: 'JNT-1', fibre_role: 'DARK_STORAGE' },
+      { assign_id: 'ASN-0003', joint_id: 'JNT-1', bundle_id: 'NEITHER-BUNDLE-NOR-JOINT', fibre_role: 'SPLITTER_OUTPUT' },
+    ];
+    const result = runDesignHealth(store);
+    const flags = result.issues.filter(i => i.layer === 'fibreAssignments');
+    expect(flags).toHaveLength(3);
+    expect(flags.every(f => f.tier === 'error')).toBe(true);
+  });
+});

@@ -230,6 +230,78 @@
     return 'color:#ffaa44;';
   }
 
+  let searchQuery = '';
+
+  // Postcode/asset search — the "Zoom to postcode or asset..." bar existed as
+  // a bare placeholder with no handler; this wires it up. Two passes:
+  //   1. Postcode match against addressPoints (spaces-insensitive — "FK20 8RU"
+  //      and "fk208ru" both match).
+  //   2. Asset ID match across every ID-bearing collection, exact match first,
+  //      then a "starts with" fallback so a partial ID still finds something.
+  // No new engine file needed — this is a self-contained lookup + map.easeTo(),
+  // same pattern used by onDrawerRowClick() above.
+  function onAssetSearch() {
+    const q = searchQuery.trim();
+    if (!q) return;
+    const qNorm = q.toUpperCase();
+    const qPostcode = qNorm.replace(/\s+/g, '');
+
+    const postcodeMatches = (projectStore.addressPoints || []).filter(a => {
+      const pc = String(a.properties?.postcode || '').replace(/\s+/g, '').toUpperCase();
+      return pc && pc === qPostcode;
+    });
+    if (postcodeMatches.length > 0) {
+      const [lng, lat] = postcodeMatches[0].geometry.coordinates;
+      map.easeTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), postcodeMatches.length > 1 ? 16 : 18), duration: 600 });
+      showToast(`Found ${postcodeMatches.length} premise(s) at ${q}.`);
+      return;
+    }
+
+    const collections = [
+      { arr: projectStore.chambers,      idProp: 'chamber_id', label: 'Chamber' },
+      { arr: projectStore.ducts,         idProp: 'duct_id',    label: 'Duct' },
+      { arr: projectStore.joints,        idProp: 'joint_id',   label: 'Joint' },
+      { arr: projectStore.dropDucts,     idProp: 'ddct_id',    label: 'Drop Duct' },
+      { arr: projectStore.cables,        idProp: 'cable_id',   label: 'Cable' },
+      { arr: projectStore.bundles,       idProp: 'bundle_id',  label: 'Bundle' },
+      { arr: projectStore.poles,         idProp: 'pole_id',    label: 'Pole' },
+      { arr: projectStore.cbts,          idProp: 'cbt_id',     label: 'CBT' },
+      { arr: projectStore.spans,         idProp: 'span_id',    label: 'Span' },
+      { arr: projectStore.aerialDrops,   idProp: 'adrop_id',   label: 'Aerial Drop' },
+      { arr: projectStore.cbtTails,      idProp: 'tail_id',    label: 'CBT Tail' },
+      { arr: projectStore.addressPoints, idProp: 'uprn',       label: 'Premise' },
+    ];
+
+    let found = null;
+    for (const { arr, idProp, label } of collections) {
+      const exact = (arr || []).find(f => String(f.properties?.[idProp] || '').toUpperCase() === qNorm);
+      if (exact) { found = { feature: exact, label }; break; }
+    }
+    if (!found) {
+      for (const { arr, idProp, label } of collections) {
+        const partial = (arr || []).find(f => String(f.properties?.[idProp] || '').toUpperCase().startsWith(qNorm));
+        if (partial) { found = { feature: partial, label }; break; }
+      }
+    }
+
+    if (found) {
+      const geom = found.feature.geometry;
+      let center = null;
+      if (geom?.type === 'Point') center = geom.coordinates;
+      else if (geom?.type === 'LineString' && geom.coordinates?.length) center = geom.coordinates[Math.floor(geom.coordinates.length / 2)];
+
+      if (center) {
+        map.easeTo({ center, zoom: Math.max(map.getZoom(), 18), duration: 600 });
+        showToast(`Found ${found.label} ${q}.`);
+      } else {
+        showToast(`Found ${found.label} ${q}, but it has no location to zoom to.`);
+      }
+      return;
+    }
+
+    showToast(`No postcode or asset matching "${q}" found in this project.`);
+  }
+
   function onDrawerRowClick(r) {
     selectedRoute = r.uprn;
     if (r.flyTo) {
@@ -1404,8 +1476,8 @@
     </div>
     <div class="tb-right">
       <div style="display:flex;align-items:center;gap:6px;">
-        <input class="srch" placeholder="Zoom to postcode or asset..." />
-        <button class="go">GO</button>
+        <input class="srch" placeholder="Zoom to postcode or asset..." bind:value={searchQuery} on:keydown={(e) => e.key === 'Enter' && onAssetSearch()} />
+        <button class="go" on:click={onAssetSearch}>GO</button>
       </div>
       <div class="vtog">
         <button class="vt" class:on={is3D} on:click={() => setView(true)}>3D</button>

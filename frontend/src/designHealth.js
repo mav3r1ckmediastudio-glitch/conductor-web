@@ -13,8 +13,9 @@
 // Check 1  — Route validation (PARTIAL→ERROR, ROUTED-no-splitter→ERROR, UNSERVED→WARNING)
 // Check 1b — Splitter cascade must be exactly two stages (operator-agnostic PON requirement)
 // Check 2  — Topology / FK integrity (spans, drops, tails, cables, bundles)
-// Check 2b — Splitter capacity & declaration (overcapacity→ERROR, undeclared→WARNING)
+// Check 2b — Splitter capacity & declaration (overcapacity→ERROR, undeclared→WARNING, stale→WARNING)
 // Check 2c — Broader FK integrity (cables from/to_node, bundles from_joint, drop from_cbt)
+// Check 2d — Remaining FK checks (cable duct_id, joint chamber_id, bundle uprn, fibre assignments)
 // Check 3  — Design completeness (INFO only)
 
 import { traceFibre } from './fibreTrace.js';
@@ -149,7 +150,7 @@ export function runDesignHealth(store) {
   // 2b  — Splitter capacity and declaration
   // 2c  — Broader FK checks: cables, bundles, aerial drops
   try {
-    // Build ID lookup sets (used by 2a, 2b, 2c)
+    // Build ID lookup sets (used by 2a, 2b, 2c, 2d)
     const chamberIds = new Set(
       (store.chambers || []).map(f => String(f.properties?.chamber_id || '')).filter(Boolean));
     const jointIds = new Set(
@@ -158,6 +159,16 @@ export function runDesignHealth(store) {
       (store.poles || []).map(f => String(f.properties?.pole_id || '')).filter(Boolean));
     const cbtIds = new Set(
       (store.cbts || []).map(f => String(f.properties?.cbt_id || '')).filter(Boolean));
+    const ductIds = new Set(
+      (store.ducts || []).map(f => String(f.properties?.duct_id || '')).filter(Boolean));
+    const bundleIds = new Set(
+      (store.bundles || []).map(f => String(f.properties?.bundle_id || '')).filter(Boolean));
+    const cableIds = new Set(
+      (store.cables || []).map(f => String(f.properties?.cable_id || '')).filter(Boolean));
+    const aerialDropIds = new Set(
+      (store.aerialDrops || []).map(f => String(f.properties?.adrop_id || f.properties?.drop_id || '')).filter(Boolean));
+    const addressUprns = new Set(
+      (store.addressPoints || []).map(f => String(f.properties?.uprn || '')).filter(Boolean));
 
     // All node IDs — includes both cabinet_id and pop_id since different tools
     // may use either field as the cable endpoint reference.
@@ -249,6 +260,35 @@ export function runDesignHealth(store) {
           add(issues, 'error', 'Splitter overcapacity',
             `Joint ${id} has ${bundleCount} bundle(s) but split ratio is ${ratio} (${cap} ports) — ${bundleCount - cap} over capacity.`,
             id, 'joints');
+        } else if (bundleCount === 0) {
+          // Stale declaration: has_splitter is set but nothing downstream needs
+          // it. IMPORTANT: a splitter's consumers aren't always bundles — a
+          // feeder splitter's consumers are OTHER downstream splitter joints
+          // or CBTs (that's the whole point of a cascade), so bundleCount===0
+          // is a feeder's NORMAL state, not staleness. Only flag when this
+          // joint isn't feeding anything at all: no bundles, and no cable
+          // connects it onward to another declared splitter joint or CBT.
+          const feedsAnotherSplitter = (store.cables || []).some(c => {
+            const cp = c.properties || {};
+            const other = String(cp.from_node || '') === id ? String(cp.to_node || '')
+                        : String(cp.to_node || '') === id ? String(cp.from_node || '')
+                        : null;
+            if (!other || other === id) return false;
+            if (cbtIds.has(other)) return true;   // CBTs are always splitters
+            const otherJoint = (store.joints || []).find(j => String(j.properties?.joint_id) === other);
+            const ohs = otherJoint?.properties?.has_splitter;
+            return ohs === true || ohs === 1 || ohs === 'true';
+          });
+          if (!feedsAnotherSplitter) {
+            // Not dangerous the way oversubscription or an undeclared splitter
+            // are (it doesn't understate an optical budget or imply false
+            // capacity), but it's real drift worth a note — this joint is
+            // carrying splitter insertion loss in any route through it for
+            // no reason.
+            add(issues, 'warning', 'Stale splitter declaration',
+              `Joint ${id} has has_splitter set (${ratio}) but feeds no premises or downstream splitters — declaration may be stale.`,
+              id, 'joints');
+          }
         }
       } else if (bundleCount > 0) {
         // Joint has bundles but no splitter declared.
@@ -299,6 +339,91 @@ export function runDesignHealth(store) {
         add(issues, 'error', 'Broken connectivity',
           `Aerial drop ${did}: from_cbt "${p.from_cbt}" not found — drop has no CBT to connect to.`,
           did, 'aerialDrops');
+      }
+    }
+
+    // ── 2d. Remaining FK checks (duct, chamber, UPRN, fibre assignments) ────
+    // Closes the last gaps vs v2's validate_integrity.py DIRECT_CHECKS list.
+
+    // Cables: duct_id, when set, must resolve to a real duct. duct_id is
+    // legitimately null when no matching duct was found at digitise time
+    // (e.g. an aerial cable, or a UG cable digitised before its duct) — that's
+    // a normal, expected state, not an error. Only a SET-but-dangling
+    // reference (duct existed, then got deleted) is flagged.
+    for (const cable of (store.cables || [])) {
+      const p = cable.properties || {};
+      const cid = p.cable_id || '?';
+      if (p.duct_id && !ductIds.has(String(p.duct_id))) {
+        add(issues, 'error', 'Broken connectivity',
+          `Cable ${cid}: duct_id "${p.duct_id}" not found — was the duct deleted after this cable was matched to it?`,
+          cid, 'cables');
+      }
+    }
+
+    // Joints: chamber_id must resolve to a real chamber. Unlike duct_id above,
+    // chamber_id is set by the Joint tool only when snapped to an existing
+    // Chamber feature — it should never legitimately be missing or dangling,
+    // so a broken reference here specifically means the chamber was deleted
+    // out from under an existing joint.
+    for (const joint of (store.joints || [])) {
+      const p = joint.properties || {};
+      const jid = p.joint_id || '?';
+      if (p.chamber_id && !chamberIds.has(String(p.chamber_id))) {
+        add(issues, 'error', 'Broken connectivity',
+          `Joint ${jid}: chamber_id "${p.chamber_id}" not found — was the chamber deleted after this joint was placed?`,
+          jid, 'joints');
+      }
+    }
+
+    // Bundles: uprn, when set, must resolve to a real address point. Like
+    // duct_id, a null uprn is a normal unmatched state (premise not yet
+    // imported, or matched manually later) — only a set-but-dangling
+    // reference is flagged.
+    for (const bundle of (store.bundles || [])) {
+      const p = bundle.properties || {};
+      const bid = p.bundle_id || '?';
+      if (p.uprn && !addressUprns.has(String(p.uprn))) {
+        add(issues, 'error', 'Broken connectivity',
+          `Bundle ${bid}: uprn "${p.uprn}" not found in imported address points.`,
+          bid, 'bundles');
+      }
+    }
+
+    // Fibre assignments: joint_id / cable_id / bundle_id are DELIBERATELY
+    // role-aware here, not a blind "must exist in collection X" check —
+    // fibreAssign.js reuses cable_id and bundle_id for synthetic values
+    // depending on fibre_role (see fibreAssign.js's rec() call sites), so a
+    // naive check would false-positive on every legitimate synthetic record:
+    //   - joint_id is always a real joint or CBT id — safe to check directly.
+    //   - cable_id is either a real cable id, OR a synthetic splitter pigtail
+    //     id in the fixed "<jointId>-SP" convention (fibreAssign.js's `spid`).
+    //     Only flag when it's neither.
+    //   - bundle_id is either a real bundle/aerial-drop consumer id (Stage 2
+    //     terminal splitters), OR a downstream child joint/CBT id (Stage 1
+    //     feeder splitters — v2 field convention). Only flag when it's none
+    //     of those.
+    for (const assignment of (store.fibreAssignments || [])) {
+      const p = assignment.properties || assignment || {};
+      const aid = p.assign_id || '?';
+
+      if (p.joint_id && !jointIds.has(String(p.joint_id)) && !cbtIds.has(String(p.joint_id))) {
+        add(issues, 'error', 'Broken connectivity',
+          `Fibre assignment ${aid}: joint_id "${p.joint_id}" not found as a joint or CBT.`,
+          aid, 'fibreAssignments');
+      }
+
+      if (p.cable_id && !String(p.cable_id).endsWith('-SP') && !cableIds.has(String(p.cable_id))) {
+        add(issues, 'error', 'Broken connectivity',
+          `Fibre assignment ${aid}: cable_id "${p.cable_id}" not found — was the cable deleted after fibres were assigned?`,
+          aid, 'fibreAssignments');
+      }
+
+      if (p.bundle_id
+          && !jointIds.has(String(p.bundle_id)) && !cbtIds.has(String(p.bundle_id))
+          && !bundleIds.has(String(p.bundle_id)) && !aerialDropIds.has(String(p.bundle_id))) {
+        add(issues, 'error', 'Broken connectivity',
+          `Fibre assignment ${aid}: bundle_id "${p.bundle_id}" does not match any bundle, aerial drop, joint, or CBT — dangling reference.`,
+          aid, 'fibreAssignments');
       }
     }
 
