@@ -167,15 +167,42 @@
     signingIn = true;
     errorMsg = '';
     try {
+      // transferable: false — by default Clerk silently attempts to
+      // transfer a sign-in with no matching account into a sign-up
+      // internally. In testing that internal transfer is where new-user
+      // sign-ins were dying: it completes the OAuth round-trip with
+      // Google, then returns to this app with no callback params and no
+      // error, leaving clerk.client.signUp blank. Disabling the silent
+      // transfer makes a "no account" outcome throw instead, so we can
+      // handle sign-up ourselves below with our own explicit redirect —
+      // full control over both hops instead of one opaque one.
       await clerk.client.signIn.authenticateWithRedirect({
         strategy: 'oauth_google',
         redirectUrl: window.location.origin,
         redirectUrlComplete: window.location.origin,
+        transferable: false,
       });
       // Page navigates to Google — code below won't run until back
     } catch (e) {
-      errorMsg = e.errors?.[0]?.longMessage ?? e.message ?? 'Sign-in failed. Please try again.';
-      signingIn = false;
+      // TEMP DEBUG — remove once new-user sign-up is confirmed working.
+      // Uncertain exactly which error shape Clerk throws here for "no
+      // matching account" with transferable:false — logging the full
+      // error so this can be corrected if the fallback below doesn't
+      // trigger correctly.
+      console.error('[clerk-debug] signIn.authenticateWithRedirect threw:', e, JSON.stringify(e?.errors));
+      try {
+        await clerk.client.signUp.authenticateWithRedirect({
+          strategy: 'oauth_google',
+          redirectUrl: window.location.origin,
+          redirectUrlComplete: window.location.origin,
+        });
+        // Page navigates to Google again — code below won't run until back
+        return;
+      } catch (e2) {
+        console.error('[clerk-debug] signUp.authenticateWithRedirect ALSO threw:', e2, JSON.stringify(e2?.errors));
+        errorMsg = e2.errors?.[0]?.longMessage ?? e2.message ?? 'Sign-up failed. Please try again.';
+        signingIn = false;
+      }
     }
   }
 
