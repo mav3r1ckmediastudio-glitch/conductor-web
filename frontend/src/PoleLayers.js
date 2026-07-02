@@ -140,10 +140,15 @@ const BARBER_FRAG = `
 // rather than a flat 2D icon spinning face-on like a coin — readable most of
 // the way round, edge-on at 90°/270°, which is what actually reads as a
 // hologram rather than a spinning logo.
-const HOLOGRAM_WIDTH_M      = 1.4;
-const HOLOGRAM_HEIGHT_M     = 0.7;
-const HOLOGRAM_CBT_GAP_M    = 0.5;   // above the CBT box
-const HOLOGRAM_JOINT_HEIGHT_M = 2.2; // above ground level, joints have no existing vertical structure
+const HOLOGRAM_WIDTH_M      = 2.8;   // 2x per request 2 Jul 2026
+const HOLOGRAM_HEIGHT_M     = 1.4;   // 2x per request 2 Jul 2026
+// CBT holograms were clipping the pole-top anchor disc: attachY sits only
+// 0.25m below the actual pole top (POLE_HEIGHT_M - SPAN_DROP_M), and the
+// anchor disc extends a further 0.25m above that — the old 0.5m gap put the
+// hologram's bottom edge right at the anchor, ~0.1m of overlap. Raised by
+// ~2m per request 2 Jul 2026, comfortably clearing both.
+const HOLOGRAM_CBT_GAP_M    = 2.5;
+const HOLOGRAM_JOINT_HEIGHT_M = 2.2; // above ground level, joints have no existing vertical structure — no clipping issue, left as-is
 const HOLOGRAM_ROTATE_PERIOD_S = 10; // one full rotation every 10s — "slowly"
 const HOLOGRAM_TEXT_COLOR   = '#4dc8ff';
 const HOLOGRAM_GLOW_COLOR   = '#00aaff';
@@ -367,10 +372,15 @@ class PoleLayer {
   // Same glow-via-shadowBlur technique as the 2D icons in mapTools.js
   // (addPinIcon/addSquareIcon), just feeding a THREE.CanvasTexture instead of
   // a MapLibre map.addImage(). Cached per distinct ratio string.
+  //
+  // Resolution doubled alongside HOLOGRAM_WIDTH_M/HEIGHT_M (2 Jul 2026) to
+  // hold the same texel density on the now-larger physical plane — halving
+  // resolution while doubling plane size would have made the text visibly
+  // softer/blurrier for no reason.
   _makeSplitterTexture(ratioText) {
     if (this._splitterTexCache.has(ratioText)) return this._splitterTexCache.get(ratioText);
 
-    const W = 256, H = 128;
+    const W = 512, H = 256;
     const canvas = document.createElement('canvas');
     canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext('2d');
@@ -378,9 +388,9 @@ class PoleLayer {
     ctx.clearRect(0, 0, W, H);
 
     ctx.shadowColor = HOLOGRAM_GLOW_COLOR;
-    ctx.shadowBlur = 22;
+    ctx.shadowBlur = 44;
     ctx.fillStyle = HOLOGRAM_TEXT_COLOR;
-    ctx.font = 'bold 60px "Courier New", monospace';
+    ctx.font = 'bold 120px "Courier New", monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(ratioText, W / 2, H / 2);
@@ -389,8 +399,8 @@ class PoleLayer {
     // text. No glow on the frame itself so it doesn't compete with the text.
     ctx.shadowBlur = 0;
     ctx.strokeStyle = HOLOGRAM_FRAME_COLOR;
-    ctx.lineWidth = 3;
-    ctx.strokeRect(6, 6, W - 12, H - 12);
+    ctx.lineWidth = 6;
+    ctx.strokeRect(12, 12, W - 24, H - 24);
 
     const texture = new THREE.CanvasTexture(canvas);
     texture.needsUpdate = true;
