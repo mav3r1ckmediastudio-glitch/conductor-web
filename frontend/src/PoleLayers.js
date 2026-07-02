@@ -28,6 +28,20 @@
 //   travels along the cylinder — a "live signal flowing" visual cue.
 //   Call setLiveState(routedUprns, liveCbtIds) after a Validate Routes run
 //   to switch assets between live and dead materials.
+//
+// SPLITTER RATIO HOLOGRAM (agreed 2 Jul 2026):
+//   A rotating text plane above every CBT (always a splitter) and every UG
+//   joint with has_splitter set, showing its split_ratio ("1:8", "1:4", ...).
+//   Deliberately a real THREE.Mesh with rotation.y ticked over time, not a
+//   THREE.Sprite or a flat 2D MapLibre icon with icon-rotate — a Sprite
+//   always faces the camera (never rotates), and icon-rotate spins in the
+//   screen plane like a coin, which for text reads as upside-down half the
+//   time rather than a rotating sign. This rotates around its own vertical
+//   axis instead: readable most of the way round, edge-on at 90°/270°.
+//   Text is drawn to a canvas (same shadowBlur-glow technique as the 2D
+//   icons in mapTools.js) and used as a THREE.CanvasTexture; geometry and
+//   per-ratio-string materials are cached rather than rebuilt every frame
+//   or every rebuild — see _makeSplitterTexture()/_getSplitterMaterial().
 
 import * as THREE from 'three';
 import maplibregl from 'maplibre-gl';
@@ -119,6 +133,36 @@ const BARBER_FRAG = `
   }
 `;
 
+// ── Splitter ratio hologram ──────────────────────────────────────────────────
+// A rotating text plane above every CBT (always a splitter — that's what a
+// CBT is) and every UG joint with has_splitter set, showing its split_ratio
+// ("1:8", "1:4", ...). Requested 2 Jul 2026: a genuine 3D rotating sign
+// rather than a flat 2D icon spinning face-on like a coin — readable most of
+// the way round, edge-on at 90°/270°, which is what actually reads as a
+// hologram rather than a spinning logo.
+const HOLOGRAM_WIDTH_M      = 1.4;
+const HOLOGRAM_HEIGHT_M     = 0.7;
+const HOLOGRAM_CBT_GAP_M    = 0.5;   // above the CBT box
+const HOLOGRAM_JOINT_HEIGHT_M = 2.2; // above ground level, joints have no existing vertical structure
+const HOLOGRAM_ROTATE_PERIOD_S = 10; // one full rotation every 10s — "slowly"
+const HOLOGRAM_TEXT_COLOR   = '#4dc8ff';
+const HOLOGRAM_GLOW_COLOR   = '#00aaff';
+const HOLOGRAM_FRAME_COLOR  = '#4dc8ff88';
+
+// Matches fibreAssign.js's own tolerant has_splitter check exactly (it
+// accepts true / 1 / 'true' — see buildSplitters() there) so this stays in
+// sync with whatever the engine actually treats as a splitter, rather than
+// silently drifting from it.
+function jointHasSplitter(feature) {
+  const v = feature?.properties?.has_splitter;
+  return v === true || v === 1 || v === 'true';
+}
+
+// Same default fallback fibreAssign.js uses when split_ratio isn't set.
+function splitterRatioFor(feature) {
+  return feature?.properties?.split_ratio || '1:8';
+}
+
 class PoleLayer {
   constructor(projectStore) {
     this.id            = 'poles-3d-layer';
@@ -154,6 +198,17 @@ class PoleLayer {
     // Shared barber-pole shader material — used by all live spans + drops.
     // Created in onAdd(); uniform `time` is ticked in render().
     this._pulseMaterial = null;
+
+    // Splitter ratio holograms — rebuilt every _buildGroup() call like
+    // everything else, but rotation is ticked per-instance in render() (each
+    // mesh needs its own rotation.y, unlike the barber pole's single shared
+    // time uniform). Textures/materials are cached per distinct ratio string
+    // ("1:8", "1:4", ...) rather than regenerated per-asset — there are only
+    // ever a handful of distinct values however many splitters exist.
+    this._hologramMeshes   = [];
+    this._splitterTexCache = new Map();
+    this._splitterMatCache = new Map();
+    this._splitterGeometry = null; // created in onAdd(), shared by every hologram mesh
   }
 
   // ── Public API ────────────────────────────────────────────────────────────────
@@ -246,6 +301,11 @@ class PoleLayer {
       shininess: 15,
     });
 
+    // Shared by every splitter-ratio hologram mesh — only the material
+    // (texture) differs per distinct ratio string, cached in
+    // _getSplitterMaterial() below.
+    this._splitterGeometry = new THREE.PlaneGeometry(HOLOGRAM_WIDTH_M, HOLOGRAM_HEIGHT_M);
+
     // Barber pole shader material — shared by all live spans + drops.
     // time uniform is ticked every render() call so the stripe animates.
     this._pulseMaterial = new THREE.ShaderMaterial({
@@ -303,6 +363,57 @@ class PoleLayer {
     return null;
   }
 
+  // Canvas-drawn text texture for a split-ratio hologram ("1:8", "1:4", ...).
+  // Same glow-via-shadowBlur technique as the 2D icons in mapTools.js
+  // (addPinIcon/addSquareIcon), just feeding a THREE.CanvasTexture instead of
+  // a MapLibre map.addImage(). Cached per distinct ratio string.
+  _makeSplitterTexture(ratioText) {
+    if (this._splitterTexCache.has(ratioText)) return this._splitterTexCache.get(ratioText);
+
+    const W = 256, H = 128;
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d');
+
+    ctx.clearRect(0, 0, W, H);
+
+    ctx.shadowColor = HOLOGRAM_GLOW_COLOR;
+    ctx.shadowBlur = 22;
+    ctx.fillStyle = HOLOGRAM_TEXT_COLOR;
+    ctx.font = 'bold 60px "Courier New", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(ratioText, W / 2, H / 2);
+
+    // Thin frame — reads as a holographic sign rather than bare floating
+    // text. No glow on the frame itself so it doesn't compete with the text.
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = HOLOGRAM_FRAME_COLOR;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(6, 6, W - 12, H - 12);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    this._splitterTexCache.set(ratioText, texture);
+    return texture;
+  }
+
+  // MeshBasicMaterial (not Phong — this should read as self-lit/glowing, not
+  // reflecting the scene's directional light like the poles/CBTs do).
+  // DoubleSide + depthWrite:false so it doesn't vanish edge-on mid-rotation
+  // or cause z-fighting with other transparent meshes nearby.
+  _getSplitterMaterial(ratioText) {
+    if (this._splitterMatCache.has(ratioText)) return this._splitterMatCache.get(ratioText);
+    const material = new THREE.MeshBasicMaterial({
+      map: this._makeSplitterTexture(ratioText),
+      transparent: true,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    this._splitterMatCache.set(ratioText, material);
+    return material;
+  }
+
   // CHEAP pass: query pole elevations into a cache + change-signature. No THREE
   // objects allocated. `pending` is true if any pole's DEM tile isn't loaded.
   _samplePoleElevations() {
@@ -317,6 +428,17 @@ class PoleLayer {
       poleElev[pole.properties.pole_id] = g;
       sig += g.toFixed(1) + ';';
     }
+    // Splitter state folded into the same signature — an edit to
+    // has_splitter/split_ratio on an existing joint/CBT (via the asset edit
+    // panel, not a count change) needs to trigger a hologram rebuild too,
+    // and this is the cheapest way to catch that without a second detection
+    // path alongside the elevation one.
+    for (const cbt of (this.projectStore.cbts || [])) {
+      sig += 'C' + cbt.properties.cbt_id + ':' + splitterRatioFor(cbt) + ';';
+    }
+    for (const j of (this.projectStore.joints || [])) {
+      if (jointHasSplitter(j)) sig += 'J' + j.properties.joint_id + ':' + splitterRatioFor(j) + ';';
+    }
     return { poleElev, sig, pending };
   }
 
@@ -326,6 +448,13 @@ class PoleLayer {
     // are created fresh every rebuild and would otherwise leak GPU memory.
     for (const g of this._dynamicGeoms) g.dispose();
     this._dynamicGeoms = [];
+
+    // Hologram mesh instances aren't disposed here — geometry/materials are
+    // shared/cached (see _splitterGeometry, _getSplitterMaterial) and the
+    // meshes themselves get garbage-collected with the old _group below.
+    // Just drop the tracking array so render()'s rotation loop doesn't tick
+    // stale instances that no longer belong to the current group.
+    this._hologramMeshes = [];
 
     if (this._group) {
       this._scene.remove(this._group);
@@ -395,6 +524,30 @@ class PoleLayer {
       this._group.add(cbtMesh);
 
       cbtTop[cbt.properties.cbt_id] = new THREE.Vector3(east, attachY, -north);
+
+      // Splitter ratio hologram — every CBT is a splitter, no has_splitter
+      // check needed (see jointHasSplitter() for why joints differ).
+      const holoMesh = new THREE.Mesh(this._splitterGeometry, this._getSplitterMaterial(splitterRatioFor(cbt)));
+      holoMesh.position.set(east, attachY + CBT_SIZE_M / 2 + HOLOGRAM_CBT_GAP_M, -north);
+      this._group.add(holoMesh);
+      this._hologramMeshes.push(holoMesh);
+    }
+
+    // Splitter ratio holograms for UG joints — only where has_splitter is
+    // set (unlike CBTs, most joints are plain splice/through joints, not
+    // splitters). Ground-level position, same terrain-sampling pattern the
+    // JOINT case in resolve() below uses for span/tail endpoints.
+    for (const joint of (this.projectStore.joints || [])) {
+      if (!jointHasSplitter(joint)) continue;
+      const [lng, lat] = joint.geometry.coordinates;
+      const { east, north } = this._metresFromOrigin(lng, lat);
+      let groundElev = this._elevAt(lng, lat);
+      if (groundElev == null) groundElev = 0;
+
+      const holoMesh = new THREE.Mesh(this._splitterGeometry, this._getSplitterMaterial(splitterRatioFor(joint)));
+      holoMesh.position.set(east, groundElev + HOLOGRAM_JOINT_HEIGHT_M, -north);
+      this._group.add(holoMesh);
+      this._hologramMeshes.push(holoMesh);
     }
 
     // Allow spans/drops to attach to the cabinet/POP.
@@ -566,7 +719,8 @@ class PoleLayer {
 
     const elevRange = (elevMin === Infinity) ? 'n/a' : `${elevMin.toFixed(1)}–${elevMax.toFixed(1)}m`;
     console.log('[PoleLayer] rebuilt', poles.length, 'poles', cbts.length, 'cbts',
-      spans.length, 'spans', adrops.length, 'adrops', tails.length, 'tails · ground elev', elevRange);
+      spans.length, 'spans', adrops.length, 'adrops', tails.length, 'tails',
+      this._hologramMeshes.length, 'splitter holograms · ground elev', elevRange);
   }
 
   // Sample elevations (cheap) and rebuild the meshes only if something changed.
@@ -615,6 +769,15 @@ class PoleLayer {
           (performance.now() / 1000) * PULSE_SPEED;
       }
 
+      // Tick splitter hologram rotation. Absolute-time-based (not delta-
+      // accumulated) so every hologram stays in sync with every other one
+      // regardless of when each was created, same reasoning as the barber
+      // pole's time uniform above.
+      if (this._hologramMeshes.length) {
+        const angle = (performance.now() / 1000 / HOLOGRAM_ROTATE_PERIOD_S) * Math.PI * 2;
+        for (const mesh of this._hologramMeshes) mesh.rotation.y = angle;
+      }
+
       // m = MapLibre's projection matrix (mercator → clip space).
       // fromArray accepts Float64Array fine.
       const m = new THREE.Matrix4().fromArray(args.defaultProjectionData.mainMatrix);
@@ -623,9 +786,11 @@ class PoleLayer {
       this._renderer.resetState();
       this._renderer.render(this._scene, this._camera);
 
-      // Keep repainting continuously while live pulsing assets exist.
-      // Without this, MapLibre only repaints on interaction and the stripe freezes.
-      if (this._liveUprns.size > 0 || this._liveNodeIds.size > 0) {
+      // Keep repainting continuously while live pulsing assets exist, or any
+      // splitter hologram needs its rotation animated.
+      // Without this, MapLibre only repaints on interaction and the stripe/
+      // rotation freezes.
+      if (this._liveUprns.size > 0 || this._liveNodeIds.size > 0 || this._hologramMeshes.length > 0) {
         this._map.triggerRepaint();
       }
     } catch (err) {
@@ -648,6 +813,12 @@ class PoleLayer {
     if (this._adropMaterial)  this._adropMaterial.dispose();
     if (this._tailMaterial)   this._tailMaterial.dispose();
     if (this._pulseMaterial)  this._pulseMaterial.dispose();
+    if (this._splitterGeometry) this._splitterGeometry.dispose();
+    for (const tex of this._splitterTexCache.values()) tex.dispose();
+    for (const mat of this._splitterMatCache.values()) mat.dispose();
+    this._splitterTexCache.clear();
+    this._splitterMatCache.clear();
+    this._hologramMeshes = [];
     if (this._renderer)       this._renderer.dispose();
   }
 }
