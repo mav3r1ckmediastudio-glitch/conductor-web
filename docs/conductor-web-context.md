@@ -109,94 +109,104 @@ Aerial→layer type mapping mirrors the plugin: poles→chambers, CBTs→joints,
 
 ## Tool parity matrix
 
-The plugin has 34 registered tools. Status below is determined from live source (read June 2026).
+**Last verified against live source: 2 Jul 2026, commit `b067746`.** Verified by
+grepping `App.svelte`'s actual `onToolSelected()` dispatch table and function
+definitions — not inferred from commit messages or memory. If this section and
+a commit message ever disagree, trust this section only if its "last verified"
+commit is equal to or newer than HEAD; otherwise re-verify, don't assume.
 
-### ✅ Working in Conductor Web (10 design tools + onboarding)
+The plugin has 34 registered tools.
+
+### ✅ Working in Conductor Web (23 design tools + onboarding + asset editing + reporting)
 
 **Onboarding (outside wheel — complete):**
-- New Project, Open Project, Build Areas, Import Premises (AddressBase), Place Cabinet/POP
+New Project, Open Project, Build Areas, Import Premises (AddressBase), Place Cabinet/POP.
 
-**Design tools (wired handler in `App.svelte`):**
+**Design tools — wired handler in `App.svelte`, confirmed in dispatch table (17):**
 
 | Web tool id | Tool name |
 |---|---|
 | `civil-chamber` | Place Chamber |
 | `civil-duct` | Digitise Duct |
 | `civil-drop-duct` | Digitise Drop Duct |
+| `civil-edit-cabinet` | Edit Cabinet/POP |
+| `civil-road` | Road Crossing |
+| `civil-stream` | Stream Crossing |
 | `fibre-cable` | Digitise Cable |
 | `fibre-bundle` | Digitise Bundle |
 | `fibre-joint` | Place Joint |
+| `fibre-trace` | Fibre Trace |
+| `fibre-assign` | Assign Fibre Roles |
+| `fibre-count` | Fibre Count |
 | `aerial-pole` | Place Pole |
 | `aerial-cbt` | Place CBT |
+| `aerial-cbt-tail` | Draw CBT Tail (350m hard-stop enforced) |
 | `aerial-span` | Digitise Aerial Span |
 | `aerial-drop` | Digitise Aerial Drop |
+| `pia-chamber` | Place PIA UG Chamber |
+| `pia-duct` | Digitise PIA UG Duct |
+| `pia-drop` | Digitise PIA UG Drop |
+
+**Asset editing — confirmed present:** Edit Asset, Move Asset, Delete Asset.
+
+**Analysis & reporting — confirmed present (all as buttons/panels, not wheel tools):**
+Validate Fibre Routes, Bill of Materials, Cabinet Cost Calculator, Single Line
+Diagram, Splice Plan Export, Route Splice Export (`onDownloadRouteSplice`,
+inside the Fibre Trace panel), Design Health (`✓ Health` button, verdict banner).
+
+**"Wants" from the old deferred list — also confirmed present:** basemap
+switcher (Dark/Light/Streets/Satellite), building geometry toggle.
+
+**`App.svelte` internal structure:** 15 of the 17 asset-placement handler
+triads (`onPlaceX`/`onXSaved`/`onXCancelled`) were collapsed into a generic
+`ASSET_CONFIG` registry + `onPlaceAsset`/`onAssetSaved`/`onAssetCancelled`
+(commit `fb9e495`, 1 Jul). `BuildArea` and `Cabinet` remain hand-written
+(singletons, genuinely different behaviour — same call as declining the
+plugin's `LayerManager` extraction). Live-verified in the running app, no
+issues found.
 
 ---
 
-### 🔶 Stubbed — button in wheel, no handler yet (10)
+### ❌ Genuinely not built yet (confirmed absent by grep, not assumption)
 
-Wire these in `App.svelte` `onToolSelected()` + implement handler. These are the **immediate priority** for "get all design tools functional."
-
-**Tier 1 — digitising stubs (pattern-replication of existing tools, do these first):**
-
-| Web tool id | Tool name | Notes |
-|---|---|---|
-| `civil-edit-cabinet` | Edit Cabinet/POP | Click cabinet → edit attributes (name, type, equipment, optics, notes) |
-| `civil-road` | Road Crossing | Duct segment variant; crossing type attribute; same pattern as Digitise Duct |
-| `civil-stream` | Stream Crossing | Duct segment variant; crossing type + wayleave ref; same pattern |
-| `aerial-cbt-tail` | Draw CBT Tail | Fibre tail from CBT back to parent underground joint; **hard-stop at 350m** (plugin enforces this; store true length for BoM) |
-| `pia-chamber` | Place PIA UG Chamber | PIA variant of Place Chamber |
-| `pia-duct` | Digitise PIA UG Duct | PIA variant of Digitise Duct; sets `duct_type = PIA_SUBDUCT` |
-| `pia-drop` | Digitise PIA UG Drop | PIA variant of Drop Duct; `installation_method = PIA_UG` |
-
-**Tier 2 — fibre logic stubs (more complex, do after Tier 1):**
-
-| Web tool id | Tool name | Notes |
-|---|---|---|
-| `fibre-assign` | Assign Fibre Roles | BFS 1:4×1:8 cascade engine; port from `fibre_assign.py` in plugin |
-| `fibre-trace` | Fibre Trace | Click premise → trace route back to cabinet, highlight each hop |
-| `fibre-count` | Fibre Count | Show fibre utilisation (used / spare / total) per cable segment |
+| Item | Status |
+|---|---|
+| Optical Power Budget | `optical.js` exists as a pure calculator (ported from `optical_budget.py`), **no UI panel wires it in** — zero references to "optical" anywhere in `App.svelte` |
+| Re-import addresses button | No match for `reimport`/`re-import` in `App.svelte` |
+| Premise heights for aerial drops | No match for `premiseHeight`/`premise_height` anywhere |
+| Fibre Count Calculator as a standalone report | `fibre-count` exists as a wheel tool only, not a separate report panel |
+| Survey / wayleave / build_tasks / customers lifecycle layers | Explicitly out of scope until robust V1 (settled decision, don't re-open) |
 
 ---
 
-### ❌ Not in webapp yet — no button (14)
+## Changelog (append here, don't let it go stale — this section is the whole point of this doc)
 
-Analysis, reporting, and asset-editing tools. Implement after the design suite is complete.
-
-**Asset editing (needed early — every working tool produces assets users will want to edit):**
-
-| Plugin tool | Notes |
-|---|---|
-| Edit Asset | Click any asset → open edit dialog; update attributes; changes committed |
-| Move Asset | Click asset → click new location; connected ducts/cables update |
-| Delete Asset | Picker shows all assets near click; select which to delete |
-
-**Analysis & reporting:**
-
-| Plugin tool | Notes |
-|---|---|
-| Validate Fibre Routes | BFS trace from every premise to cabinet; ROUTED / PARTIAL / UNSERVED |
-| Bill of Materials | Full BoM from design — chambers, ducts, cables, joints, splitters, CBTs, poles; Excel export |
-| Cabinet Cost Calculator | Equipment cost from GPON port count, splitter config, chassis type |
-| Single Line Diagram | Schematic view: cabinet → joints → splitters → customers |
-| Route Splice Export | Full splice schedule as HTML; every joint from premise to cabinet |
-| Splice Plan Export | All fibre assignments across network |
-| Fibre Count Calculator | (Same as `fibre-count` stub above — already has a button) |
-
-**Not yet in scope for V1 web:**
-- Optical Power Budget (exists in `optical.js` as a calculator, not a map tool)
-- Design Health tool (v2 plugin only)
-- Survey / wayleave / build_tasks / customers lifecycle layers (explicitly deferred)
+- **2 Jul 2026** — MapTiler 403 on live deploy fixed: stray leading `=` in
+  Netlify's `VITE_MAPTILER_KEY` env var (not a code, account, or billing
+  issue). See `docs/conductor-maptiler-403-RESOLVED.md`.
+- **2 Jul 2026** — Validation panel (right sidebar) contrast fixed: labels
+  were 7.5–8px at `#3a5a70` (≈2.3:1 contrast, under WCAG AA). Bumped to 11px,
+  `#6ba3c7`, glow added to section headers matching the existing `.asset-id`
+  convention. Commit `b067746`.
+- **1 Jul 2026** — App.svelte registry refactor done and live-verified
+  (see above). Commit `fb9e495`.
+- **1 Jul 2026** — Independent audit (5 items) closed: `.gitignore`/
+  `package.json` hygiene, `cabinetCost.test.js`, HTML-escaping helper (2
+  real injection bugs fixed), `SECURITY_AND_KEYS.md`, `shpjs` dynamic
+  import. Commit `2842bd6`.
+- **1 Jul 2026** — Clerk OAuth removed entirely; Netlify Basic Auth via
+  `_headers` is now the access gate. Commit `cc82370`.
 
 ---
 
 ## Current priority order (agreed)
 
-1. **Wire Tier 1 stubs** — 7 digitising tools (pattern-replication, low risk)
-2. **Wire Tier 2 stubs** — 3 fibre-logic tools (BFS port, more complex)
-3. **Asset editing** — Edit / Move / Delete (needed for a usable design suite)
-4. **Reporting tools** — BoM, SLD, validators, exports
-5. **Wants (deferred until suite is robust):** basemap switcher, building geometry toggle, re-import addresses button, premise heights for aerial drops
+1. **Optical Power Budget UI panel** — the calculator exists, just needs wiring
+   into a panel (same pattern as Cabinet Cost Calculator).
+2. **Re-import addresses button.**
+3. **Premise heights for aerial drops.**
+4. Everything else in the old "priority order" (Tier 1/2 stubs, asset editing,
+   reporting tools) is **done** — see Tool Parity Matrix above.
 
 ---
 
@@ -206,3 +216,11 @@ Analysis, reporting, and asset-editing tools. Implement after the design suite i
 2. State the one tool/task for that chat.
 3. Attach only the current files that task touches — typically the relevant tool handler + `App.svelte` dispatch section + `mapTools.js`.
 4. Don't paste the whole repo — the shape is already here.
+
+**Maintenance:** at the end of any session that finishes real work, add one
+line to the Changelog above and update the Tool Parity Matrix / priority list
+if it changed. If Claude isn't sure whether something's actually done, it
+should grep the repo (function name, dispatch table entry) rather than trust
+a commit message or its own memory of prior chats — both have gone stale
+before. This doc existing at all only helps if it's kept current; a wrong
+status doc is worse than no status doc.
