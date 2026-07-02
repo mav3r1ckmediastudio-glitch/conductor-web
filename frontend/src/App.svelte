@@ -1753,7 +1753,7 @@
               <div class="asset-type">—</div>
               <div class="asset-id">—</div>
             </div>
-            <div class="asset-body" style="padding:12px 14px;font-size:8px;color:#3a5a70;letter-spacing:0.04em;line-height:1.8;">
+            <div class="asset-body" style="padding:12px 14px;font-size:11px;color:#6ba3c7;letter-spacing:0.03em;line-height:1.8;">
               Use Edit Asset to select and inspect an asset.
             </div>
           </div>
@@ -1964,19 +1964,19 @@
   .vc-val.bad { color: #ff5555; }
   .vc-val.wrn { color: #ffaa44; }
   .vc-val.neu { color: #7ab8d4; }
-  .vc-lbl { font-size: 7.5px; color: #3a5a70; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 2px; }
+  .vc-lbl { font-size: 11px; color: #6ba3c7; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 4px; text-shadow: 0 0 6px #00aaff44; }
   .int-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
-  .int-k { font-size: 8px; color: #6a8fa8; text-transform: uppercase; letter-spacing: 0.06em; }
-  .int-v { font-size: 8px; color: #7ab8d4; }
+  .int-k { font-size: 11px; color: #7ab8d4; text-transform: uppercase; letter-spacing: 0.06em; text-shadow: 0 0 6px #00aaff44; }
+  .int-v { font-size: 11px; color: #7ab8d4; }
   .int-bar { height: 2px; background: #080e14; border-radius: 2px; margin-bottom: 8px; }
   .int-fill { height: 2px; background: #4dc8ff; border-radius: 2px; width: 3%; }
-  .checks-note { font-size: 7.5px; color: #3a5a70; letter-spacing: 0.05em; }
+  .checks-note { font-size: 11px; color: #6ba3c7; letter-spacing: 0.03em; line-height: 1.5; }
 
   .health-banner { margin: 10px 14px; padding: 8px 10px; border-radius: 5px; font-size: 8.5px; letter-spacing: 0.04em; line-height: 1.5; }
   .health-banner.caution { background: #ffaa4414; border: 1px solid #ffaa4433; color: #ffaa44; }
 
   .outputs-section { padding: 10px 14px; border-bottom: 1px solid #1a2d40; }
-  .outputs-lbl { font-size: 7.5px; color: #3a5a70; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 7px; }
+  .outputs-lbl { font-size: 11px; color: #6ba3c7; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 8px; text-shadow: 0 0 6px #00aaff44; }
   .out-btn { display: block; width: 100%; background: #0a1018; border: 1px solid #1a2d40; color: #6a8fa8; font-family: 'Courier New', monospace; font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase; padding: 7px 10px; text-align: left; cursor: pointer; margin-bottom: 4px; border-radius: 4px; transition: all 0.12s; }
   .out-btn:hover { border-color: #00aaff33; color: #4dc8ff; background: #0d1a28; }
 
@@ -1986,8 +1986,8 @@
 
   .asset-section { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
   .asset-hdr { padding: 12px 14px 8px; border-bottom: 1px solid #1a2d40; flex-shrink: 0; }
-  .asset-hdr-lbl { font-size: 7.5px; color: #3a5a70; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 4px; }
-  .asset-type { font-size: 8px; color: #3a5a70; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 3px; }
+  .asset-hdr-lbl { font-size: 11px; color: #6ba3c7; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 5px; text-shadow: 0 0 6px #00aaff44; }
+  .asset-type { font-size: 11px; color: #6ba3c7; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 3px; }
   .asset-id { font-size: 14px; font-weight: 700; letter-spacing: 0.08em; color: #4dc8ff; text-shadow: 0 0 8px #00aaff44; }
   .asset-body { padding: 0 14px; flex: 1; }
   .arow { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid #080e14; }
