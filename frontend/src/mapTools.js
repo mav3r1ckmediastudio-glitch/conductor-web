@@ -195,7 +195,7 @@ export function ensureSources(map) {
         'text-anchor': 'top',
         'text-allow-overlap': true,
       },
-      paint: { 'text-color': '#4dc8ff', 'text-halo-color': '#0a0f14', 'text-halo-width': 1.5 }
+      paint: { 'text-color': '#4dc8ff', 'text-halo-color': '#0a0f14', 'text-halo-width': 0.8 }
     });
   }
 
@@ -220,7 +220,7 @@ export function ensureSources(map) {
         'text-anchor': 'top',
         'text-allow-overlap': true,
       },
-      paint: { 'text-color': '#a0c4d8', 'text-halo-color': '#0a0f14', 'text-halo-width': 1.5 }
+      paint: { 'text-color': '#a0c4d8', 'text-halo-color': '#0a0f14', 'text-halo-width': 0.8 }
     });
   }
 
@@ -245,7 +245,7 @@ export function ensureSources(map) {
         'text-anchor': 'top',
         'text-allow-overlap': true,
       },
-      paint: { 'text-color': '#7ab8d4', 'text-halo-color': '#0a0f14', 'text-halo-width': 1.5 }
+      paint: { 'text-color': '#7ab8d4', 'text-halo-color': '#0a0f14', 'text-halo-width': 0.8 }
     });
   }
 
@@ -277,7 +277,7 @@ export function ensureSources(map) {
         'text-anchor': 'top',
         'text-allow-overlap': true,
       },
-      paint: { 'text-color': '#4dc8ff', 'text-halo-color': '#0a0f14', 'text-halo-width': 1.5 }
+      paint: { 'text-color': '#4dc8ff', 'text-halo-color': '#0a0f14', 'text-halo-width': 0.8 }
     });
   }
 
@@ -309,7 +309,7 @@ export function ensureSources(map) {
         'text-anchor': 'top',
         'text-allow-overlap': true,
       },
-      paint: { 'text-color': '#a0c4d8', 'text-halo-color': '#0a0f14', 'text-halo-width': 1.5 }
+      paint: { 'text-color': '#a0c4d8', 'text-halo-color': '#0a0f14', 'text-halo-width': 0.8 }
     });
   }
 
