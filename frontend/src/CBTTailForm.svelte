@@ -6,12 +6,19 @@
   //            from_cbt, to_joint, via_poles[], node_chain[], node_types[], length_m }
   export let pending = null;
 
-  let fibreCount = '12';
+  // A CBT tail is normally the single feeder fibre into the CBT's splitter —
+  // 1 is the normal case, not an edge case (confirmed 2 Jul 2026). Kept
+  // editable rather than hardcoded, in case a tail legitimately needs more
+  // some day, but '1' needs to actually exist as an option and be the
+  // default it starts on, not something you have to know to change away
+  // from '12' every single time.
+  let fibreCount = '1';
   let fibreType  = 'G.657A2';
   let status     = 'PROPOSED';
   let notes      = '';
 
-  // A tail of 12f uses one loose tube; keep parity with CableForm's display.
+  // Same formula as CableForm's display — a single loose tube covers up to
+  // 12 fibres. For a tail's normal 1-fibre case this is just 1 tube.
   $: tubeCount = Math.max(1, Math.floor(parseInt(fibreCount) / 12));
 
   function save() {
@@ -39,7 +46,7 @@
   function cancel() { dispatch('cancel'); reset(); }
 
   function reset() {
-    fibreCount = '12'; fibreType = 'G.657A2'; status = 'PROPOSED'; notes = '';
+    fibreCount = '1'; fibreType = 'G.657A2'; status = 'PROPOSED'; notes = '';
   }
 </script>
 
@@ -87,6 +94,7 @@
     <div class="field">
       <label>Fibre Count *</label>
       <select bind:value={fibreCount}>
+        <option>1</option>
         <option>2</option>
         <option>4</option>
         <option>8</option>

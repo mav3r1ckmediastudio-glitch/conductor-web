@@ -54,8 +54,8 @@
                 edit: ['cable_type','fibre_count','span_type','notes'] },
     adrop:    { show: ['adrop_id','cable_type','fibre_count','splitter_port','length_m','from_node','to_node','notes'],
                 edit: ['cable_type','fibre_count','notes'] },
-    cbttail:  { show: ['tail_id','cable_type','from_cbt','to_joint','length_m','notes'],
-                edit: ['notes'] },
+    cbttail:  { show: ['tail_id','cable_type','fibre_count','from_cbt','to_joint','length_m','notes'],
+                edit: ['fibre_count','notes'] },
   };
 
   // Enum options for select fields
@@ -78,8 +78,12 @@
   // an aerial span is AERIAL_SPAN, an aerial drop is AERIAL_DROP. Keyed by
   // assetType → field → options. Falls back to ENUMS when no override exists.
   const ENUMS_BY_TYPE = {
-    span:  { cable_type: ['AERIAL_SPAN','AERIAL_TAIL'] },
-    adrop: { cable_type: ['AERIAL_DROP'] },
+    span:    { cable_type: ['AERIAL_SPAN','AERIAL_TAIL'] },
+    adrop:   { cable_type: ['AERIAL_DROP'] },
+    // A tail is the single feeder fibre into a CBT's splitter — 1 is the
+    // normal case, not an edge case, unlike the shared fibre_count list
+    // (cable/span/adrop/cbt) which is genuinely never 1 in practice.
+    cbttail: { fibre_count: [1, 2, 4, 8, 12, 24] },
   };
 
   function enumFor(key) {
