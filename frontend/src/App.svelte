@@ -934,7 +934,11 @@
 
   function selectAsset(hit) {
     selectedAsset = hit;
-    rpMode = 'asset-selected';
+    // rpMode deliberately NOT changed here any more (was 'asset-selected').
+    // AssetEditPanel now renders in-place inside the default view's
+    // asset-section instead of replacing the whole panel — see the rpMode
+    // fallback branch below. Selecting an asset no longer hides Validation
+    // Summary / Engineer Outputs.
   }
 
   function onAssetPickerChoose(e) {
@@ -962,6 +966,11 @@
   // (agreed 2 Jul 2026).
   function startAssetSelectSession(hint) {
     clearTool(map); // implicitly ends any dangling session as 'save' — see clearTool() in mapTools.js
+    // Explicit reset needed here now: selecting an asset no longer forces
+    // rpMode to a dedicated mode (see selectAsset() above), so if some other
+    // report panel was showing (BoM, SLD, ...) it would otherwise stay shown
+    // instead of the asset-section where AssetEditPanel actually lives.
+    rpMode = 'default';
     sessionHint = hint;
     const session = startToolSession(map, {
       onEnd: endSession,
@@ -1025,7 +1034,6 @@
       const arr = projectStore.state[collection];
       if (arr && arr[index]) {
         selectedAsset = { ...selectedAsset, feature: arr[index] };
-        rpMode = 'asset-selected';
       }
       activeToolLabel = '';
       // Continuous mode: re-arm select so the next click can pick a
@@ -1734,15 +1742,6 @@
       {:else if rpMode === 'pia-drop-form'}
         <PIADropForm pending={pendingPIADrop} on:save={onPIADropSaved} on:cancel={onPIADropCancelled} />
 
-      {:else if rpMode === 'asset-selected'}
-        <AssetEditPanel
-          selected={selectedAsset}
-          on:saved={onAssetPanelSaved}
-          on:deleted={onAssetPanelDeleted}
-          on:move={onAssetPanelMove}
-          on:close={onAssetPanelClose}
-        />
-
       {:else if rpMode === 'fibre-trace'}
         <FibreTracePanel result={fibreTraceResult} on:close={onFibreTraceClose} on:downloadRouteSplice={onDownloadRouteSplice} />
 
@@ -1871,14 +1870,24 @@
           <div class="rp-splitter"></div>
 
           <div class="asset-section">
-            <div class="asset-hdr">
-              <div class="asset-hdr-lbl">Selected Asset</div>
-              <div class="asset-type">—</div>
-              <div class="asset-id">—</div>
-            </div>
-            <div class="asset-body" style="padding:12px 14px;font-size:11px;color:#6ba3c7;letter-spacing:0.03em;line-height:1.8;">
-              Use Edit Asset to select and inspect an asset.
-            </div>
+            {#if selectedAsset}
+              <AssetEditPanel
+                selected={selectedAsset}
+                on:saved={onAssetPanelSaved}
+                on:deleted={onAssetPanelDeleted}
+                on:move={onAssetPanelMove}
+                on:close={onAssetPanelClose}
+              />
+            {:else}
+              <div class="asset-hdr">
+                <div class="asset-hdr-lbl">Selected Asset</div>
+                <div class="asset-type">—</div>
+                <div class="asset-id">—</div>
+              </div>
+              <div class="asset-body" style="padding:12px 14px;font-size:11px;color:#6ba3c7;letter-spacing:0.03em;line-height:1.8;">
+                Use Edit Asset to select and inspect an asset.
+              </div>
+            {/if}
           </div>
       {/if}
     </div>
