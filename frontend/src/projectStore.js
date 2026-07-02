@@ -4,6 +4,7 @@
 
 import proj4 from 'proj4';
 import { showError } from './toast.js';
+import { computeCascadeDelete } from './cascadeDelete.js';
 
 // EPSG:27700 (OSGB36 / British National Grid) → EPSG:4326 (WGS84).
 // Includes the +towgs84 7-parameter datum shift, so output matches QGIS's
@@ -417,12 +418,22 @@ class ProjectStore {
     this._update({ [collection]: updated });
   }
 
+  // Deletes the asset AND cascades cleanup to every dependent record that
+  // referenced it — see cascadeDelete.js for the full rules. Previously this
+  // just spliced the target out and left every dependent (cables/spans with
+  // it as an endpoint, bundles/aerial drops hung off it, fibre assignments
+  // naming it) pointing at a dead ID forever; those dangling references only
+  // ever surfaced later as "Broken connectivity" errors in Design Health,
+  // with no way to clear them short of hand-editing the saved project file.
+  //
+  // Returns a summary of what else was touched — { removed, nulled }, each
+  // keyed by collection — so the caller can tell the user what happened
+  // instead of the deletion silently rippling elsewhere unannounced.
   deleteAsset(collection, index) {
-    const arr = this._state[collection];
-    if (!arr || index < 0 || index >= arr.length) return;
-    const updated = arr.slice();
-    updated.splice(index, 1);
-    this._update({ [collection]: updated });
+    const result = computeCascadeDelete(this._state, collection, index);
+    if (!result) return null;
+    this._update(result.patch);
+    return result.summary;
   }
 
   // ── Session snapshot / restore ─────────────────────────────────────────────

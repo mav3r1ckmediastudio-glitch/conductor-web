@@ -1008,12 +1008,36 @@
     // it's still listening for the next asset without anything further.
   }
 
+  // Friendly labels for the cascade-delete summary toast (see
+  // cascadeDelete.js). Falls back to the raw collection key for anything
+  // not listed, so a new collection added later still shows *something*
+  // rather than being silently dropped from the message.
+  const CASCADE_LABELS = {
+    cables: 'cable', spans: 'aerial span', bundles: 'bundle',
+    aerialDrops: 'aerial drop', cbtTails: 'CBT tail',
+    fibreAssignments: 'fibre assignment', joints: 'joint',
+  };
+  function describeCascadeSummary(summary) {
+    if (!summary) return '';
+    const parts = [];
+    for (const [coll, n] of Object.entries(summary.removed || {})) {
+      if (n > 0) parts.push(`${n} ${CASCADE_LABELS[coll] || coll}${n === 1 ? '' : 's'} removed`);
+    }
+    for (const [coll, n] of Object.entries(summary.nulled || {})) {
+      if (n > 0) parts.push(`${n} ${CASCADE_LABELS[coll] || coll}${n === 1 ? '' : 's'} unlinked`);
+    }
+    if (!parts.length) return '';
+    return `Also cleaned up: ${parts.join(', ')}.`;
+  }
+
   function onAssetPanelDeleted(e) {
     const { collection, index } = e.detail;
-    projectStore.deleteAsset(collection, index);
+    const summary = projectStore.deleteAsset(collection, index);
     syncToMap(map);
     selectedAsset = null;
     rpMode = 'default';
+    const note = describeCascadeSummary(summary);
+    if (note) showToast(note);
     if (activeSession) {
       // Continuous mode: stay live for the next asset to delete instead of
       // going inert and requiring the toolbar button again.
