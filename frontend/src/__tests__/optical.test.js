@@ -81,19 +81,19 @@ describe('calculateRouteBudget — straightforward passing route', () => {
   //   splitter_db  = 0
   //   connector_db = 1.5 (fixed default)
   //   loss_db      = 0.02 + 0 + 0 + 1.5 = 1.52
-  //   budget_db    = 25.0
-  //   margin_db    = 25.0 - 1.52 = 23.48
+  //   budget_db    = 29.0 (C+ default, Gigaloch's standard — 32.0 - 3.0 safety margin)
+  //   margin_db    = 29.0 - 1.52 = 27.48
   it('produces the exact hand-calculated figures for a short, splitter-free run', () => {
     const result = calculateRouteBudget(80, 0, [], defaultOptical());
     expect(result.loss_db).toBe(1.52);
-    expect(result.budget_db).toBe(25.0);
-    expect(result.margin_db).toBe(23.48);
+    expect(result.budget_db).toBe(29.0);
+    expect(result.margin_db).toBe(27.48);
     expect(result.link_pass).toBe(true);
   });
 
   it('defaults to defaultOptical() settings when optical is null', () => {
     const result = calculateRouteBudget(80, 0, [], null);
-    expect(result.budget_db).toBe(25.0);
+    expect(result.budget_db).toBe(29.0);
   });
 });
 
@@ -104,11 +104,11 @@ describe('calculateRouteBudget — multiple splitters in cascade', () => {
   //   splitter_db  = 7.0 (1:4) + 10.5 (1:8) = 17.5
   //   connector_db = 1.5
   //   loss_db      = 0.25 + 0.20 + 17.5 + 1.5 = 19.45
-  //   margin_db    = 25.0 - 19.45 = 5.55
+  //   margin_db    = 29.0 (C+ default) - 19.45 = 9.55
   it('sums splitter losses across a 1:4 → 1:8 cascade correctly', () => {
     const result = calculateRouteBudget(1000, 2, ['1:4', '1:8'], defaultOptical());
     expect(result.loss_db).toBe(19.45);
-    expect(result.margin_db).toBe(5.55);
+    expect(result.margin_db).toBe(9.55);
     expect(result.link_pass).toBe(true);
     expect(result.breakdown.splitter_db).toBe(17.5);
     expect(result.breakdown.splitters).toEqual(['1:4', '1:8']);
@@ -116,17 +116,20 @@ describe('calculateRouteBudget — multiple splitters in cascade', () => {
 });
 
 describe('calculateRouteBudget — a route that genuinely fails the budget', () => {
-  // fibreLengthM=25000 (25km), spliceCount=5, splitters=['1:32'], default optical.
-  //   fibre_db     = (25000/1000) * 0.25 = 6.25
+  // fibreLengthM=40000 (40km), spliceCount=5, splitters=['1:32'], default optical.
+  // (25km was the original scenario under the old B+ default's 25.0dB budget;
+  // lengthened to 40km so this still genuinely fails now that the default is
+  // C+'s wider 29.0dB — a shorter route wasn't over budget any more.)
+  //   fibre_db     = (40000/1000) * 0.25 = 10.0
   //   splice_db    = 5 * 0.10 = 0.50
   //   splitter_db  = 17.5
   //   connector_db = 1.5
-  //   loss_db      = 6.25 + 0.50 + 17.5 + 1.5 = 25.75
-  //   margin_db    = 25.0 - 25.75 = -0.75  →  NEGATIVE, link_pass must be false
+  //   loss_db      = 10.0 + 0.50 + 17.5 + 1.5 = 29.5
+  //   margin_db    = 29.0 - 29.5 = -0.5  →  NEGATIVE, link_pass must be false
   it('correctly fails an over-budget long-haul route with a 1:32 splitter', () => {
-    const result = calculateRouteBudget(25000, 5, ['1:32'], defaultOptical());
-    expect(result.loss_db).toBe(25.75);
-    expect(result.margin_db).toBe(-0.75);
+    const result = calculateRouteBudget(40000, 5, ['1:32'], defaultOptical());
+    expect(result.loss_db).toBe(29.5);
+    expect(result.margin_db).toBe(-0.5);
     expect(result.link_pass).toBe(false);
   });
 });
@@ -143,10 +146,10 @@ describe('calculateRouteBudget — respects custom optical settings, not just de
   it('a tighter safety margin reduces the usable budget and can flip the verdict', () => {
     const tightMargin = { ...defaultOptical(), safety_margin_db: 10.0 };
     // Same route as the "straightforward passing" case above, but budget_db
-    // drops from 25.0 to 18.0 (28.0 - 10.0). loss_db is still 1.52, so it
+    // drops from 29.0 to 22.0 (32.0 - 10.0). loss_db is still 1.52, so it
     // still passes here — proving the override is applied, not ignored.
     const result = calculateRouteBudget(80, 0, [], tightMargin);
-    expect(result.budget_db).toBe(18.0);
-    expect(result.margin_db).toBe(16.48);
+    expect(result.budget_db).toBe(22.0);
+    expect(result.margin_db).toBe(20.48);
   });
 });

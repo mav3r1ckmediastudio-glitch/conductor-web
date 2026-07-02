@@ -11,7 +11,10 @@ export const DEFAULT_OPTICAL = {
   fibre_atten_db_km: 0.25,   // G.652D @ 1310/1550nm
   splice_loss_db:    0.10,   // per fusion splice (through joint)
   connector_loss_db: 1.50,   // flat termination allowance — POP + CBT + ONT (3 × 0.5dB)
-  link_class:        'B+',
+  link_class:        'C+',   // Gigaloch's standard (confirmed 2 Jul 2026) — was B+, no UI
+                              // anywhere overrides this, so every optical check in the app had
+                              // been running 4dB stricter than Gigaloch's actual budget class
+                              // since this file was ported from v2's own B+ default.
   safety_margin_db:  3.0,
 };
 

@@ -26,8 +26,8 @@ import { traceFibre, STATUS_OK, STATUS_PARTIAL, STATUS_UNSERVED } from '../fibre
 //     splitter_db  = DEFAULT_SPLITTER_LOSS_DB['1:8'] = 10.5
 //     connector_db = 1.50 (fixed default)
 //     loss_db      = 0.05375 + 0.10 + 10.5 + 1.50  = 12.15375 → rounds to 12.15
-//     budget_db    = LINK_CLASS_BUDGET_DB['B+'] (28.0) - safety_margin_db (3.0) = 25.0
-//     margin_db    = 25.0 - 12.15375               = 12.84625 → rounds to 12.85
+//     budget_db    = LINK_CLASS_BUDGET_DB['C+'] (32.0) - safety_margin_db (3.0) = 29.0
+//     margin_db    = 29.0 - 12.15375               = 16.84625 → rounds to 16.85
 //     link_pass    = margin_db >= 0                = true
 function routedFixture() {
   return {
@@ -111,8 +111,8 @@ describe('traceFibre — ROUTED path', () => {
   it('produces the hand-calculated optical budget', () => {
     expect(result.optical).not.toBeNull();
     expect(result.optical.loss_db).toBeCloseTo(12.15, 2);
-    expect(result.optical.budget_db).toBeCloseTo(25.0, 2);
-    expect(result.optical.margin_db).toBeCloseTo(12.85, 2);
+    expect(result.optical.budget_db).toBeCloseTo(29.0, 2);
+    expect(result.optical.margin_db).toBeCloseTo(16.85, 2);
     expect(result.optical.link_pass).toBe(true);
   });
 
