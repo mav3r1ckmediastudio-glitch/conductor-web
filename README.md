@@ -230,8 +230,11 @@ Current web interface highlights include:
 - cabinet / POP placement form
 - radial tool wheel for design tools
 - route drawer and asset inspection panels
-- project state saved in the browser during prototype use
+- file-backed project persistence, with autosave and a browser-storage fallback for unsaved work
+- multi-project support within a single browser profile
+- cartographic map export to print-style SVG/PNG technical sheets
 - optical budget calculation module ready for validation and trace workflows
+- automated test suite (132 tests) run via CI on every push
 
 The intent is for Conductor Web to become the main product-facing version of Conductor, without requiring users to work inside QGIS.
 
@@ -306,6 +309,12 @@ The frontend will usually run at:
 
 ```text
 http://localhost:5173
+```
+
+Run the test suite from the same directory:
+
+```bash
+npm test
 ```
 
 ### Backend
@@ -407,16 +416,9 @@ The original Conductor plugin was developed as a QGIS-based FTTP design tool. Th
 
 ## Licence
 
-No open-source licence is currently included.
+Conductor Web is proprietary, closed-source software — see [`LICENSE`](LICENSE) for the full terms and [`NOTICE`](NOTICE) for the short-form notice.
 
-```text
-Copyright © Mav3r1ck Media Studio.
-All rights reserved.
-
-This software is proprietary and confidential. No permission is granted to copy,
-modify, distribute, sublicense or use this software except under a written
-agreement with the owner.
-```
+Third-party components and required map attribution are documented separately in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`ATTRIBUTION.md`](ATTRIBUTION.md). For an overview of the full licensing pack (commercial EULA template, security notes, release checklist), see [`README_LICENSING.md`](README_LICENSING.md).
 
 ---
 

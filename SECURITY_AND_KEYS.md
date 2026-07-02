@@ -37,38 +37,24 @@ Before pushing or sharing the repo, confirm that these are not included:
 
 For commercial deployments, prefer environment variables managed by the host/platform rather than committed config files.
 
-## npm audit findings — Clerk Web3 wallet dependency tree (reviewed 1 Jul 2026)
+## npm audit findings — Clerk Web3 wallet dependency tree (resolved 1 Jul 2026, by removal)
 
-`npm audit` on a clean install reports 16 vulnerabilities (11 moderate, 5
-high). All of them trace through `@clerk/clerk-js`'s bundled Web3 wallet
-login support (Solana, Coinbase Wallet, MetaMask) — specifically its
-transitive `viem`/`ws`/`uuid`/`jayson` dependency chain. Conductor Web does
-not use, enable, or expose Web3/wallet authentication anywhere; this is
-Clerk shipping a feature surface the app never calls.
+`npm audit` on a clean install used to report 16 vulnerabilities (11
+moderate, 5 high), all tracing through `@clerk/clerk-js`'s bundled Web3
+wallet login support (Solana, Coinbase Wallet, MetaMask) — specifically its
+transitive `viem`/`ws`/`uuid`/`jayson` dependency chain. Conductor Web never
+used, enabled, or exposed Web3/wallet authentication anywhere; this was
+Clerk shipping a feature surface the app never called.
 
-**Decision: leave as-is.** Reasoning:
+At the time this was reviewed, the decision was to leave the dependency
+as-is rather than force an unvalidated fix — see repo history
+(`ab4bd5a`) for the original reasoning. Clerk was subsequently removed
+from the project entirely on 1 Jul 2026 in favour of Netlify Basic Auth
+as the access gate (see `docs/conductor-web-context.md`), which resolves
+this finding by elimination rather than deferral. `@clerk/clerk-js` is no
+longer a dependency anywhere in this repo.
 
-- The vulnerable code paths are not reachable through anything Conductor
-  Web's own code does — this is dead weight, not a live attack surface.
-- Web3 wallet login is not togglable out of `@clerk/clerk-js` at a config
-  level (confirmed via Clerk's own docs) — the dependency tree is bundled
-  unconditionally regardless of whether the Web3 provider is enabled in
-  the Clerk Dashboard.
-- `npm audit fix --force`'s own suggested resolution (`@clerk/clerk-js@5.89.0`)
-  is actually a *downgrade* from the currently-installed, stable `6.23.0`
-  — checked directly against the published version list before writing
-  this note. Running the automated fix would not be a safe fix; it would
-  swap a known, inert finding for an unvalidated dependency combination
-  Clerk itself never tested.
-- `npm overrides` could force patched versions of the specific vulnerable
-  sub-packages without touching Clerk's own version, but this was also
-  rejected for the same reason — it produces a dependency graph the
-  upstream package never validated, trading a known-inert issue for an
-  unknown one.
-
-**Revisit this if:** Web3/wallet login is ever actually enabled for this
-app (it shouldn't be — there's no product reason to), or as part of a
-routine, deliberate Clerk version bump done as its own dedicated piece of
-work with a full auth regression pass — not squeezed into an unrelated
-cleanup session, since auth is exactly the kind of thing that shouldn't be
-silently affected by a rushed dependency change.
+**Revisit this if:** Clerk, or any other auth provider with a similar
+optional-feature dependency bundling pattern, is reintroduced in future —
+run a fresh `npm audit` as part of that work rather than assuming this
+note still applies.

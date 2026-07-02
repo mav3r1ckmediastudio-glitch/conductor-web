@@ -10,6 +10,8 @@ This notice is intended to preserve acknowledgement of important third-party com
 |---|---:|---|---|
 | MapLibre GL JS | 5.24.0 | BSD-3-Clause | Interactive map rendering. |
 | shpjs | 6.2.0 | MIT | Reading/importing shapefile data in the browser. |
+| proj4 | 2.20.9 | MIT | Coordinate transformation (British National Grid ↔ WGS84, with datum shift). |
+| three | 0.185.0 | MIT | 3D rendering support. |
 | Svelte | 5.56.x | MIT | Frontend framework/compiler. |
 | Vite | 8.1.0 | MIT | Frontend build tooling. |
 | @sveltejs/vite-plugin-svelte | 7.1.2 | MIT | Svelte integration for Vite. |
@@ -41,7 +43,7 @@ The frontend lockfile also includes dependencies under MIT, ISC, BSD-2-Clause, B
 - `@maplibre/*` packages used by MapLibre GL JS.
 - `lightningcss` and platform packages under MPL-2.0.
 - Rollup/Rolldown/Vite-related build tooling under permissive licences.
-- `proj4`, `pbf`, `geojson` and vector-tile-related tooling used for geospatial processing/rendering.
+- `pbf`, `geojson` and vector-tile-related tooling used for geospatial processing/rendering.
 
 Do not remove third-party licence files from bundled dependencies. If you distribute compiled builds, keep a copy of this notice with the distributed product.
 
