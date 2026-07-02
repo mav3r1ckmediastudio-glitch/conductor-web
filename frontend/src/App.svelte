@@ -1844,7 +1844,7 @@
         />
 
       {:else if rpMode === 'design-health'}
-        <DesignHealthPanel autoRun={true} on:close={onDesignHealthClose} />
+        <DesignHealthPanel autoRun={true} on:close={onDesignHealthClose} on:repaired={() => syncToMap(map)} />
 
       {:else if rpMode === 'cabinet-cost'}
         <CabinetCostPanel on:close={onCabinetCostClose} />

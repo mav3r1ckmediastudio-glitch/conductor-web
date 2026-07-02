@@ -48,6 +48,60 @@
 
   function close() { dispatch('close'); }
 
+  // ── Project repair (fix pre-existing dangling references) ──────────────────
+  // Two-step: analyse (dry run — preview what would change) then apply. Only
+  // offered when the last run actually found "Broken connectivity" errors,
+  // since that's the specific class repairProject.js addresses; there's no
+  // point offering a repair when there's nothing dangling to repair.
+  let repairPreview = null;   // dry-run summary, or null
+  let repairing     = false;
+  let repairDone    = null;   // applied summary, or null
+
+  $: hasDanglingRefs = result
+    ? result.issues.some(i => i.category === 'Broken connectivity')
+    : false;
+
+  async function analyseRepair() {
+    repairing = true;
+    repairDone = null;
+    await new Promise(r => setTimeout(r, 30));
+    try {
+      repairPreview = projectStore.analyseRepair();
+    } finally {
+      repairing = false;
+    }
+  }
+
+  function cancelRepair() { repairPreview = null; }
+
+  async function applyRepair() {
+    repairing = true;
+    await new Promise(r => setTimeout(r, 30));
+    try {
+      repairDone = projectStore.applyRepair();
+      repairPreview = null;
+      dispatch('repaired', repairDone);  // let App re-sync the map
+      run();                              // re-run health so the panel updates
+    } finally {
+      repairing = false;
+    }
+  }
+
+  // Turn a { removed, nulled } summary into a short human line.
+  const REPAIR_LABELS = {
+    cables: 'cable', spans: 'aerial span', bundles: 'bundle',
+    aerialDrops: 'aerial drop', cbtTails: 'CBT tail',
+    fibreAssignments: 'fibre assignment', joints: 'joint',
+  };
+  function summariseRepair(s) {
+    if (!s) return '';
+    const label = (coll, n) => `${n} ${REPAIR_LABELS[coll] || coll}${n === 1 ? '' : 's'}`;
+    const parts = [];
+    for (const [c, n] of Object.entries(s.removed || {})) if (n > 0) parts.push(label(c, n) + ' removed');
+    for (const [c, n] of Object.entries(s.nulled  || {})) if (n > 0) parts.push(label(c, n) + ' unlinked');
+    return parts.join(', ');
+  }
+
   // Sort issues: errors first, then warnings, then info (within each tier keep
   // insertion order, which follows the analysis phase order from the engine).
   const TIER_ORDER = { error: 0, warning: 1, info: 2 };
@@ -142,6 +196,42 @@
       </div>
     </div>
 
+    <!-- Repair banner — only when there are dangling references to fix -->
+    {#if hasDanglingRefs || repairDone}
+      <div class="dh-repair">
+        {#if repairDone}
+          <div class="dh-repair-done">
+            ✓ Repaired: {summariseRepair(repairDone) || 'nothing to change'}.
+          </div>
+        {:else if repairPreview}
+          {#if repairPreview.clean}
+            <div class="dh-repair-note">No dangling references found to repair.</div>
+            <button class="dh-repair-cancel" on:click={cancelRepair} disabled={repairing}>Dismiss</button>
+          {:else}
+            <div class="dh-repair-note">
+              This will fix {repairPreview.total} dangling reference{repairPreview.total === 1 ? '' : 's'}:
+              <span class="dh-repair-detail">{summariseRepair(repairPreview)}.</span>
+              Records left over from earlier deletions. This can't be undone once applied — save a file first if unsure.
+            </div>
+            <div class="dh-repair-actions">
+              <button class="dh-repair-apply" on:click={applyRepair} disabled={repairing}>
+                {repairing ? 'Repairing…' : `Repair ${repairPreview.total}`}
+              </button>
+              <button class="dh-repair-cancel" on:click={cancelRepair} disabled={repairing}>Cancel</button>
+            </div>
+          {/if}
+        {:else}
+          <div class="dh-repair-note">
+            Some issues above are dangling references left by earlier deletions.
+            A repair sweep can clean these up.
+          </div>
+          <button class="dh-repair-btn" on:click={analyseRepair} disabled={repairing}>
+            {repairing ? 'Scanning…' : '⚕ Scan & Repair'}
+          </button>
+        {/if}
+      </div>
+    {/if}
+
     <!-- Issues list -->
     <div class="dh-issues">
       {#if sortedIssues.length === 0}
@@ -213,4 +303,16 @@
   .dh-cat { font-size: 8px; color: #a0c4d8; letter-spacing: 0.05em; font-weight: 600; flex: 1; }
   .dh-aid { font-size: 7px; color: #3a5a70; font-family: 'Courier New', monospace; flex-shrink: 0; }
   .dh-msg { font-size: 8px; color: #6a8fa8; line-height: 1.65; letter-spacing: 0.02em; }
+
+  /* Repair banner */
+  .dh-repair { margin: 2px 12px 0; padding: 9px 11px; background: #00aaff08; border: 1px solid #00aaff22; border-radius: 5px; flex-shrink: 0; }
+  .dh-repair-note { font-size: 8px; color: #6a8fa8; line-height: 1.6; letter-spacing: 0.02em; margin-bottom: 7px; }
+  .dh-repair-detail { color: #a0c4d8; }
+  .dh-repair-actions { display: flex; gap: 6px; }
+  .dh-repair-btn, .dh-repair-apply { background: #00aaff14; border: 1px solid #00aaff44; color: #4dc8ff; font-family: 'Courier New', monospace; font-size: 8.5px; letter-spacing: 0.06em; text-transform: uppercase; padding: 6px 14px; border-radius: 4px; cursor: pointer; transition: background 0.12s; }
+  .dh-repair-btn:hover:not(:disabled), .dh-repair-apply:hover:not(:disabled) { background: #00aaff22; }
+  .dh-repair-cancel { background: #0f1c28; border: 1px solid #1a2d40; color: #6a8fa8; font-family: 'Courier New', monospace; font-size: 8.5px; letter-spacing: 0.06em; text-transform: uppercase; padding: 6px 14px; border-radius: 4px; cursor: pointer; transition: all 0.12s; }
+  .dh-repair-cancel:hover:not(:disabled) { border-color: #2a4055; color: #a0c4d8; }
+  .dh-repair-btn:disabled, .dh-repair-apply:disabled, .dh-repair-cancel:disabled { opacity: 0.4; cursor: not-allowed; }
+  .dh-repair-done { font-size: 8.5px; color: #4dc8ff; letter-spacing: 0.03em; line-height: 1.6; }
 </style>

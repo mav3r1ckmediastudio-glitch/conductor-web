@@ -5,6 +5,7 @@
 import proj4 from 'proj4';
 import { showError } from './toast.js';
 import { computeCascadeDelete } from './cascadeDelete.js';
+import { analyseProject, repairProject } from './repairProject.js';
 
 // EPSG:27700 (OSGB36 / British National Grid) → EPSG:4326 (WGS84).
 // Includes the +towgs84 7-parameter datum shift, so output matches QGIS's
@@ -434,6 +435,27 @@ class ProjectStore {
     if (!result) return null;
     this._update(result.patch);
     return result.summary;
+  }
+
+  // ── Project repair (one-time cleanup of pre-existing dangling refs) ─────────
+  // See repairProject.js. Two-step by design: analyseRepair() is a DRY RUN
+  // (computes what would change, mutates nothing) so the UI can show the user
+  // a preview before anything destructive happens; applyRepair() then commits
+  // it. Needed because cascadeDelete only prevents NEW dangling refs — projects
+  // saved before that fix can still carry old ones (e.g. the 402 fibre
+  // assignments found on SCOT-PH1 from a long-since-deleted pole).
+
+  // Dry run — returns { clean, passes, removed, nulled, total }. No mutation.
+  analyseRepair() {
+    return analyseProject(this._state);
+  }
+
+  // Applies the repair and returns the same summary shape. A clean project
+  // produces an empty patch and is left untouched.
+  applyRepair() {
+    const { patch, summary } = repairProject(this._state);
+    if (summary.total > 0) this._update(patch);
+    return summary;
   }
 
   // ── Session snapshot / restore ─────────────────────────────────────────────
