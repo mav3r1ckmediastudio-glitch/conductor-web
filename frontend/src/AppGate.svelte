@@ -2,6 +2,7 @@
   import App from './App.svelte';
   import SplashLogin from './SplashLogin.svelte';
   import Toast from './Toast.svelte';
+  import SessionConfirm from './SessionConfirm.svelte';
 
   // No real auth here — see main.js's comment. Basic Auth (frontend/public/
   // _headers) is the actual gate, enforced before this code ever loads.
@@ -11,6 +12,7 @@
 </script>
 
 <Toast />
+<SessionConfirm />
 
 {#if !entered}
   <SplashLogin onContinue={() => entered = true} />

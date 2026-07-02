@@ -181,6 +181,20 @@ issues found.
 
 ## Changelog (append here, don't let it go stale — this section is the whole point of this doc)
 
+- **2 Jul 2026** — Continuous digitising mode implemented: point-placement
+  tools (chamber, joint, pole, CBT, PIA chamber) and the shared Edit/Delete/
+  Move select flow now stay live across repeated actions instead of
+  auto-deactivating after one. RMB opens a Save/Cancel popup
+  (`SessionConfirm.svelte`) rather than ending silently; Cancel does a full
+  session rollback via new `projectStore.snapshotState()`/`restoreState()`
+  (deep-clone/restore rather than an action-by-action undo log). Session
+  machinery lives in `mapTools.js` (`startToolSession`/`clearTool`), wired
+  through App.svelte's `ASSET_CONFIG` registry and the select/edit/delete/
+  move handlers. Line tools (duct/cable/aerial span) deliberately untouched
+  — out of scope per the 2 Jul decision. 7 new tests
+  (`projectStoreSession.test.js`) cover snapshot/restore against adds,
+  deletes, geometry moves and property edits. Not yet live-verified in the
+  browser. Commit `e20a7dc`.
 - **2 Jul 2026** — MapTiler 403 on live deploy fixed: stray leading `=` in
   Netlify's `VITE_MAPTILER_KEY` env var (not a code, account, or billing
   issue). See `docs/conductor-maptiler-403-RESOLVED.md`.
@@ -201,43 +215,13 @@ issues found.
 
 ## Current priority order (agreed)
 
-1. **Continuous digitising / tool-stays-live mode (biggest QoL fix, agreed
-   2 Jul 2026).** Every placement/edit/delete tool currently auto-deactivates
-   after one action — place an asset, tool goes inert, user has to re-click
-   the tool button to place the next one. This makes building a network in
-   Conductor Web slower than the same workflow in QGIS, purely from extra
-   button clicks, not from any missing capability.
-
-   Wanted behaviour (matches QGIS's continuous digitising pattern):
-   - Activating a tool (place/edit/delete, any asset type) keeps it live
-     across repeated actions — place asset after asset without re-clicking
-     the tool.
-   - RMB (right mouse button) ends the tool session — but NOT silently.
-     It must open a confirmation popup with two buttons, e.g. **Save** /
-     **Cancel** (naming TBD), matching QGIS's own "save edits or discard"
-     prompt on ending a digitising session. Save commits progress and
-     returns the cursor to the inert/select state; Cancel presumably
-     discards the in-progress session (exact semantics — e.g. does Cancel
-     discard just the current unfinished feature, or everything placed
-     since the tool was activated — need to be pinned down before
-     implementation, not assumed).
-   - Applies across all placement/edit/delete tools uniformly, not just one
-     asset type.
-
-   Not yet scoped: which existing tool-activation code path this hooks
-   into (likely `mapTools.js` + the `App.svelte` `ASSET_CONFIG` registry
-   dispatch, given the registry refactor already unified 15/17 asset
-   triads — worth checking whether continuous mode can be a registry-level
-   behaviour rather than per-tool), and how it interacts with tools that
-   don't have a natural "next one" (e.g. Cabinet/BuildArea, which are
-   singletons and hand-written outside the registry).
-
-2. **Optical Power Budget UI panel** — the calculator exists, just needs wiring
+1. **Optical Power Budget UI panel** — the calculator exists, just needs wiring
    into a panel (same pattern as Cabinet Cost Calculator).
-3. **Re-import addresses button.**
-4. **Premise heights for aerial drops.**
-5. Everything else in the old "priority order" (Tier 1/2 stubs, asset editing,
-   reporting tools) is **done** — see Tool Parity Matrix above.
+2. **Re-import addresses button.**
+3. **Premise heights for aerial drops.**
+4. Everything else in the old "priority order" (Tier 1/2 stubs, asset editing,
+   reporting tools, continuous digitising mode) is **done** — see Tool Parity
+   Matrix above.
 
 ---
 

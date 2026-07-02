@@ -56,6 +56,7 @@
     activateCBTTool, activateAerialSpanTool, activateAerialDropTool,
     activateCBTTailTool,
     activateSelectTool, activateMovePointTool,
+    startToolSession,
     activateFibreTraceTool, clearTraceHighlight,
     activateFibreCountTool, clearCountHighlight,
     applyCookieCutter, clearTool, getPoleLayer, setSearchMarker
@@ -202,6 +203,14 @@
   let activeToolLabel = '';
   let activeToolId    = '';   // tracks toolId of the active tool for the ⓘ help link
   let activeCat = 'civil';
+
+  // Continuous tool session (place/edit/delete/move) — see startToolSession()
+  // in mapTools.js and docs/conductor-web-context.md (agreed 2 Jul 2026).
+  // Non-null while a session is live; used to re-arm the underlying tool
+  // after each single action instead of requiring the toolbar button to be
+  // clicked again for every asset.
+  let activeSession = null;
+  let sessionHint = ''; // the "Click an asset to..." hint for the current select-based session — activeToolLabel gets blanked on each pick, so this is what re-arms restore it from
 
   // validateResults: populated by ValidateRoutesPanel on:results event.
   // Used by the routes drawer at the bottom of the map.
@@ -755,9 +764,42 @@
       : { type: 'LineString', coordinates: attrs.coordinates };
   }
 
+  // Re-arms a Point-geometry tool for the next placement. Shared by
+  // onPlaceAsset's first activation and onAssetSaved's post-save re-arm so
+  // both go through the exact same path.
+  function armPointTool(cfg) {
+    const err = cfg.activate(map, (pending) => {
+      cfg.setPending(cfg.transform ? cfg.transform(pending) : pending);
+      rpMode = cfg.rpMode;
+      activeToolLabel = '';
+    });
+    if (err) {
+      showToast(err.error);
+      activeToolLabel = '';
+      // Ran out of room to place another (e.g. no chamber numbers left in
+      // this direction) — end the session gracefully rather than leaving a
+      // dead RMB listener with nothing left to arm.
+      if (activeSession) activeSession.end('save');
+    }
+  }
+
+  // Called by mapTools.js once a continuous session has fully ended (RMB ->
+  // Save/Cancel resolved, or an external tool switch implicitly ended it via
+  // clearTool()'s own fallback). projectStore is already restored/kept and
+  // the map tool already cleared by this point — just reset the UI side.
+  function endSession(result) {
+    activeSession = null;
+    sessionHint = '';
+    activeToolLabel = '';
+    rpMode = 'default';
+    Object.values(ASSET_CONFIG).forEach((cfg) => { if (cfg.geometryType === 'Point') cfg.setPending(null); });
+    selectedAsset = null;
+    syncToMap(map); // no-op unless Cancel just restored projectStore
+  }
+
   function onPlaceAsset(key) {
     const cfg = ASSET_CONFIG[key];
-    clearTool(map);
+    clearTool(map); // implicitly ends any dangling session as 'save' — see clearTool() in mapTools.js
     activeToolLabel = cfg.toolLabel;
 
     if (cfg.skipForm) {
@@ -766,6 +808,21 @@
         syncToMap(map);
       });
       if (err) { showToast(err.error); activeToolLabel = ''; }
+      return;
+    }
+
+    if (cfg.geometryType === 'Point') {
+      // Continuous mode (agreed 2 Jul 2026): tool stays live across repeated
+      // placements instead of auto-deactivating after one. RMB opens a
+      // Save/Cancel confirmation rather than silently ending — see
+      // startToolSession() in mapTools.js.
+      const label = cfg.toolLabel.replace(/^Place /, '');
+      const session = startToolSession(map, {
+        onEnd: endSession,
+        message: `End this ${label} session? Save keeps everything placed since you started; Cancel undoes it all.`,
+      });
+      activeSession = session;
+      session.rearm(() => armPointTool(cfg));
       return;
     }
 
@@ -790,13 +847,32 @@
     if (cfg.cleanupOnSave) clearTool(map);
     rpMode = 'default';
     cfg.setPending(null);
+
+    // Continuous mode: re-arm the same tool for the next placement instead
+    // of going inert. cleanupOnSave tools (e.g. cbtTail) explicitly end on
+    // save and are never wrapped in a session to begin with.
+    if (activeSession && cfg.geometryType === 'Point' && !cfg.cleanupOnSave) {
+      activeToolLabel = cfg.toolLabel;
+      activeSession.rearm(() => armPointTool(cfg));
+    }
   }
 
   function onAssetCancelled(key) {
     const cfg = ASSET_CONFIG[key];
     rpMode = 'default';
     cfg.setPending(null);
-    clearTool(map);
+    if (activeSession && cfg.geometryType === 'Point') {
+      // Cancelling the in-progress form (this one asset was never saved)
+      // stays inside the session — re-arm for the next placement rather
+      // than ending the whole run. clearTool() isn't called here, since
+      // that would trip clearTool()'s own "external switch ends session"
+      // fallback; armPointTool() calls cfg.activate(), which calls
+      // clearTool() at its own top, so the current one-shot listener still
+      // gets cleaned up correctly on the way back in.
+      activeSession.rearm(() => armPointTool(cfg));
+    } else {
+      clearTool(map);
+    }
     if (cfg.hasRubberband && map.getSource('rubberband-src')) {
       map.getSource('rubberband-src').setData({ type: 'FeatureCollection', features: [] });
     }
@@ -841,9 +917,14 @@
 
   // ── Asset Edit / Delete / Move ────────────────────────────────────────────
 
+  function armSelectTool(hint) {
+    if (hint) activeToolLabel = hint;
+    activateSelectTool(map, handleSelectHits);
+  }
+
   function handleSelectHits(hits) {
-    activeToolLabel = '';
     if (!hits || !hits.length) return;
+    activeToolLabel = ''; // clear the "click an asset..." hint once something is picked
     if (hits.length === 1) {
       selectAsset(hits[0]);
     } else {
@@ -863,30 +944,46 @@
 
   function onAssetPickerCancel() {
     assetPickerHits = null;
-    clearTool(map);
     rpMode = 'default';
-    activeToolLabel = '';
+    if (activeSession) {
+      // Stay in the session — the user just didn't want any of the
+      // overlapping hits, not "stop editing/deleting/moving altogether".
+      activeSession.rearm(() => armSelectTool(sessionHint));
+    } else {
+      clearTool(map);
+      activeToolLabel = '';
+    }
+  }
+
+  // Shared by Edit/Delete/Move: all three start from the exact same
+  // click-an-asset flow (see handleSelectHits above) and only diverge once
+  // something is selected and the asset panel is open. One continuous
+  // session covers all three uniformly — see docs/conductor-web-context.md
+  // (agreed 2 Jul 2026).
+  function startAssetSelectSession(hint) {
+    clearTool(map); // implicitly ends any dangling session as 'save' — see clearTool() in mapTools.js
+    sessionHint = hint;
+    const session = startToolSession(map, {
+      onEnd: endSession,
+      message: 'End this session? Save keeps everything edited, deleted or moved since you started; Cancel undoes it all.',
+    });
+    activeSession = session;
+    session.rearm(() => armSelectTool(hint));
   }
 
   function onEditAsset() {
     if (stage !== 'design') return;
-    clearTool(map);
-    activeToolLabel = 'Click an asset to select it';
-    activateSelectTool(map, handleSelectHits);
+    startAssetSelectSession('Click an asset to select it');
   }
 
   function onDeleteAsset() {
     if (stage !== 'design') return;
-    clearTool(map);
-    activeToolLabel = 'Click an asset to delete it';
-    activateSelectTool(map, handleSelectHits);
+    startAssetSelectSession('Click an asset to delete it');
   }
 
   function onMoveAsset() {
     if (stage !== 'design') return;
-    clearTool(map);
-    activeToolLabel = 'Click an asset to move it';
-    activateSelectTool(map, handleSelectHits);
+    startAssetSelectSession('Click an asset to move it');
   }
 
   function onAssetPanelSaved(e) {
@@ -897,6 +994,9 @@
     if (arr && arr[index]) {
       selectedAsset = { ...selectedAsset, feature: arr[index] };
     }
+    // No re-arm needed here: activateSelectTool()'s click listener already
+    // stays live across clicks on its own (unlike the placement tools), so
+    // it's still listening for the next asset without anything further.
   }
 
   function onAssetPanelDeleted(e) {
@@ -905,15 +1005,21 @@
     syncToMap(map);
     selectedAsset = null;
     rpMode = 'default';
-    clearTool(map);
-    activeToolLabel = '';
+    if (activeSession) {
+      // Continuous mode: stay live for the next asset to delete instead of
+      // going inert and requiring the toolbar button again.
+      activeSession.rearm(() => armSelectTool(sessionHint));
+    } else {
+      clearTool(map);
+      activeToolLabel = '';
+    }
   }
 
   function onAssetPanelMove(e) {
     const { collection, index, feature } = e.detail;
     activeToolLabel = `Move ${selectedAsset.assetId} — click new location (Esc to cancel)`;
     rpMode = 'default';
-    activateMovePointTool(map, { collection, index }, ({ lng, lat }) => {
+    const doMove = () => activateMovePointTool(map, { collection, index }, ({ lng, lat }) => {
       projectStore.updateAssetGeometry(collection, index, [lng, lat]);
       syncToMap(map);
       const arr = projectStore.state[collection];
@@ -922,14 +1028,31 @@
         rpMode = 'asset-selected';
       }
       activeToolLabel = '';
+      // Continuous mode: re-arm select so the next click can pick a
+      // different asset to move — activateMovePointTool() is a one-shot
+      // tool in its own right, so without this the map would otherwise go
+      // inert after this single move.
+      if (activeSession) activeSession.rearm(() => armSelectTool(sessionHint));
     });
+    // activateMovePointTool() calls clearTool() at its own top like every
+    // other activate*Tool(), so starting it needs the same rearm() guard as
+    // re-arming after a save/delete, or it would trip clearTool()'s
+    // "external switch ends the session" fallback and end the session
+    // right as Move begins.
+    if (activeSession) activeSession.rearm(doMove); else doMove();
   }
 
   function onAssetPanelClose() {
     selectedAsset = null;
     rpMode = 'default';
-    clearTool(map);
-    activeToolLabel = '';
+    if (activeSession) {
+      // Closing the panel just deselects — it's not "stop editing/deleting/
+      // moving altogether", so stay in the session.
+      activeSession.rearm(() => armSelectTool(sessionHint));
+    } else {
+      clearTool(map);
+      activeToolLabel = '';
+    }
   }
 
   // ── civil-edit-cabinet ───────────────────────────────────────────────────────

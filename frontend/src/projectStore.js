@@ -425,6 +425,25 @@ class ProjectStore {
     this._update({ [collection]: updated });
   }
 
+  // ── Session snapshot / restore ─────────────────────────────────────────────
+  // Used by continuous tool sessions (see startToolSession() in mapTools.js).
+  // Full-state deep clone/restore rather than tracking and inverting each
+  // individual add/update/delete — simpler and safer than reconstructing a
+  // precise undo log, at the minor cost of also rolling back anything
+  // unrelated that happened to change mid-session. Acceptable given a
+  // session is a short, single-purpose interaction (place/edit/delete/move
+  // a run of assets, then Save or Cancel).
+
+  snapshotState() {
+    return JSON.parse(JSON.stringify(this._state));
+  }
+
+  restoreState(snapshot) {
+    this._state = snapshot;
+    save(this._state);
+    this._emit('change');
+  }
+
   // ── Fibre assignment ───────────────────────────────────────────────────────
   // Apply the result of fibreAssign.assignFibres():
   //   • write splitter_port onto each consumer (aerial drops + bundles)
