@@ -2,7 +2,8 @@
 // Works with projectStore.js for state. All geometry WGS84.
 
 import { projectStore } from './projectStore.js';
-import { createPoleLayer } from './PoleLayers.js';
+// PoleLayers (and its three.js dependency, ~700KB minified) is lazy-loaded in
+// ensureTerrainLayers() so the map renders before the 3D chunk downloads.
 import { traceFibre, resolveNode } from './fibreTrace.js';
 import { showToast } from './toast.js';
 import { requestSessionConfirm } from './sessionConfirm.js';
@@ -514,13 +515,21 @@ export function ensureTerrainLayers(map) {
   }
 
   // ── 3D POLE LAYER — CustomLayerInterface ───────────────────────────────
-  console.log('[mapTools] ensureTerrainLayers: adding pole layer, exists?', map.getLayer('poles-3d-layer'));
-  if (!map.getLayer('poles-3d-layer')) {
-    const poleLayer = createPoleLayer(projectStore);
-    console.log('[mapTools] poleLayer object:', poleLayer);
-    map.addLayer(poleLayer);
-   _poleLayerInstance = poleLayer; 
-    console.log('[mapTools] pole layer added, check:', map.getLayer('poles-3d-layer'));
+  // Lazy-load: PoleLayers pulls in three.js, so it lives in its own async
+  // chunk. _poleLayerLoading guards against a double addLayer if
+  // ensureTerrainLayers fires again before the first import resolves.
+  if (!map.getLayer('poles-3d-layer') && !_poleLayerLoading) {
+    _poleLayerLoading = true;
+    import('./PoleLayers.js')
+      .then(({ createPoleLayer }) => {
+        if (!map.getLayer('poles-3d-layer')) {
+          const poleLayer = createPoleLayer(projectStore);
+          map.addLayer(poleLayer);
+          _poleLayerInstance = poleLayer;
+        }
+      })
+      .catch((err) => console.error('[mapTools] failed to load 3D pole layer:', err))
+      .finally(() => { _poleLayerLoading = false; });
   }
 
   // Start the cable pulse animation loop
@@ -536,6 +545,7 @@ export function ensureTerrainLayers(map) {
 
 let _pulseAnimFrame = null;
 let _poleLayerInstance = null;
+let _poleLayerLoading = false;
 
 function startCablePulse(map) {
   if (_pulseAnimFrame) cancelAnimationFrame(_pulseAnimFrame);
