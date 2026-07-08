@@ -37,6 +37,7 @@
   import { docsUrl, toolTip } from './toolDocs.js';
   import { countFibres } from './fibreCount.js';
   import { downloadSplicePlan, generateSplicePlan, downloadAllSplicePlans, generateRouteSplicePlan } from './splicePlan.js';
+  import { downloadPlant } from './plantGenerator.js'; // DEV-ONLY: fake-plant generator for marketing hero. Remove before shipping.
   import AssetEditPanel from './AssetEditPanel.svelte';
   import AssetPickerDialog from './AssetPickerDialog.svelte';
   import FibreTracePanel from './FibreTracePanel.svelte';
@@ -1610,6 +1611,8 @@
         <button class="asset-btn" on:click={onDeleteAsset}>✕ Delete Asset</button>
         <button class="asset-btn" on:click={onMoveAsset}>⇄ Move Asset</button>
         <button class="asset-btn" class:on={showBuildings} on:click={toggleBuildings}>⌂ Buildings</button>
+        <!-- DEV-ONLY: fabricates a decorative plant network from the buildings/roads in view and downloads it as GeoJSON for the marketing hero. Remove this button (and the plantGenerator import) before shipping. -->
+        <button class="asset-btn" on:click={() => downloadPlant(map, { seed: 1337 })}>⬇ Gen Plant</button>
         <div class="sid-basemap-dock">
           <div class="sid-div"></div>
           <div class="sid-lbl">Basemap</div>
