@@ -48,7 +48,7 @@ const DEFAULTS = {
   sparseUgProb:    0.30,  // sparse local road: P(underground)
 
   dropSampleRate:  1.0,   // fraction of buildings that get a drop (1 = all)
-  maxDropDist:     60,    // metres — skip buildings with no plant within this
+  maxDropDist:     180,   // metres — skip buildings with no plant within this (was 60 — too tight, left most buildings unconnected)
   cbtEveryNDrops:  12,    // place a CBT on a pole roughly every N aerial drops (0 = off)
 
   nodeSnapTol:     4,     // metres — merge coincident junction nodes within this

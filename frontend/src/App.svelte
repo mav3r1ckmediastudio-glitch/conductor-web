@@ -37,7 +37,6 @@
   import { docsUrl, toolTip } from './toolDocs.js';
   import { countFibres } from './fibreCount.js';
   import { downloadSplicePlan, generateSplicePlan, downloadAllSplicePlans, generateRouteSplicePlan } from './splicePlan.js';
-  import { downloadPlant } from './plantGenerator.js'; // DEV-ONLY: fake-plant generator for marketing hero. Remove before shipping.
   import AssetEditPanel from './AssetEditPanel.svelte';
   import AssetPickerDialog from './AssetPickerDialog.svelte';
   import FibreTracePanel from './FibreTracePanel.svelte';
@@ -49,6 +48,8 @@
   import ValidateRoutesPanel from './ValidateRoutesPanel.svelte';
   import DesignHealthPanel from './DesignHealthPanel.svelte';
   import CabinetCostPanel from './CabinetCostPanel.svelte';
+  import { downloadPlant } from './plantGenerator.js'; // DEV-ONLY: fake-plant generator for marketing hero. Already live — keep.
+  import { attachNetworkSpotlight } from './networkSpotlight.js'; // DEV/PREVIEW: cursor spotlight — buildings rise + road glow.
   import {
     ensureSources, ensureTerrainLayers, syncToMap,
     activateCabinetTool, activateBuildAreaTool, activateChamberTool,
@@ -467,9 +468,17 @@
       bearing: -30,
       preserveDrawingBuffer: true,   // required so the map canvas can be captured for export
     });
+    // TEMP DIAGNOSTIC — exposes map to the console so we can inspect querySourceFeatures
+    // directly without a re-deploy each time. Unconditional (not gated on DEV) so it
+    // also works on the live Netlify build. REMOVE once the plant-gen issue is solved.
+    window.map = map;
 
     map.on('load', () => {
       setupMapLayers(map);
+      // DEV/PREVIEW: cursor spotlight — buildings rise + road glow along the real
+      // road network, clipped at the beam edge. Test here; port to the marketing
+      // hero once tuned. Remove this call (and the import above) when done.
+      attachNetworkSpotlight(map);
       if (projectStore.stage === 'import') rpMode = 'address-import';
       // FSAA: silently resume the last .conductor file if still permitted,
       // else surface a one-click Resume button (re-grant needs a user gesture).
@@ -1459,6 +1468,15 @@
 
 <div class="screen">
 
+  <!-- DEV-ONLY: always-visible, no project/stage required. Pan/zoom the basemap
+       until the target town fills the screen with Buildings on, then click.
+       Downloads a decorative plant GeoJSON for the marketing hero. Remove this
+       whole block (and the plantGenerator import) before shipping. -->
+  <button
+    on:click={() => downloadPlant(map, { seed: 1337 })}
+    style="position:fixed; top:12px; right:12px; z-index:9999; background:#00aaff; color:#04121c; border:none; padding:10px 16px; font-family:'Courier New',monospace; font-size:12px; font-weight:bold; letter-spacing:0.05em; text-transform:uppercase; border-radius:4px; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,0.4);"
+  >⬇ Gen Plant</button>
+
   {#if showSaveNudge}
     <div class="save-nudge" role="alert">
       <span>Save this project to a file? Keeps your work safe on disk with autosave.</span>
@@ -1611,8 +1629,6 @@
         <button class="asset-btn" on:click={onDeleteAsset}>✕ Delete Asset</button>
         <button class="asset-btn" on:click={onMoveAsset}>⇄ Move Asset</button>
         <button class="asset-btn" class:on={showBuildings} on:click={toggleBuildings}>⌂ Buildings</button>
-        <!-- DEV-ONLY: fabricates a decorative plant network from the buildings/roads in view and downloads it as GeoJSON for the marketing hero. Remove this button (and the plantGenerator import) before shipping. -->
-        <button class="asset-btn" on:click={() => downloadPlant(map, { seed: 1337 })}>⬇ Gen Plant</button>
         <div class="sid-basemap-dock">
           <div class="sid-div"></div>
           <div class="sid-lbl">Basemap</div>
