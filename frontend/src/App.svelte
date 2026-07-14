@@ -75,7 +75,7 @@
   const BASEMAP_STYLE = Object.fromEntries(BASEMAPS.map(b => [b.id, b.style]));
 
   let map;
-  let is3D = true;
+  let is3D = false;   // Conductor opens in 2D by default (agreed 15 Jul 2026)
   let drawerOpen = false;
   let showBuildings = true;
   let showRoads = true;
@@ -83,6 +83,7 @@
   let basemapSwitching = false; // prevents double-clicks during style reload
 
   let stage = projectStore.stage;
+  let autoArmedStage = null;   // last stage we auto-armed a tool for — see reactive block below
   let project = projectStore.project;
   let storeVersion = 0;   // bumped on every store mutation to drive reactive stats
   projectStore.on((event) => {
@@ -467,8 +468,8 @@
       style: BASEMAP_STYLE[currentBasemap],
       center: [-3.77, 56.71],
       zoom: 15,
-      pitch: 60,
-      bearing: -30,
+      pitch: 0,                      // 2D on open — matches is3D default above
+      bearing: 0,
       preserveDrawingBuffer: true,   // required so the map canvas can be captured for export
     });
     // TEMP DIAGNOSTIC — exposes map to the console so we can inspect querySourceFeatures
@@ -629,6 +630,20 @@
     clearTool(map);
   }
 
+  // Auto-arm build area / cabinet placement the instant their stage begins,
+  // instead of making the sidebar button the only way to start — the button
+  // still works (e.g. to re-arm after an Escape bail-out), this just removes
+  // it as a required first click. Guarded on autoArmedStage rather than a
+  // bare `stage === '...'` check: projectStore.on() reassigns `stage` on
+  // EVERY store mutation (not just real transitions), which would otherwise
+  // re-fire this on each mutation and wipe an in-progress polygon via the
+  // clearTool() inside onDrawBuildArea/onPlaceCabinet.
+  $: if (map && stage !== autoArmedStage && (stage === 'build-area' || stage === 'cabinet')) {
+    autoArmedStage = stage;
+    if (stage === 'build-area') onDrawBuildArea();
+    else onPlaceCabinet();
+  }
+
   // ── Asset placement registry ───────────────────────────────────────────
   // Generic replacement for the 17 near-identical onPlaceX/onXSaved/
   // onXCancelled triads. BuildArea and Cabinet are deliberately excluded —
@@ -776,7 +791,9 @@
       : { type: 'LineString', coordinates: attrs.coordinates };
   }
 
-  // Re-arms a Point-geometry tool for the next placement. Shared by
+  // Re-arms a tool for the next placement (Point or, since 15 Jul 2026,
+  // form-based LineString tools too — name kept for minimal diff, but this
+  // is geometry-agnostic: it just calls cfg.activate() again). Shared by
   // onPlaceAsset's first activation and onAssetSaved's post-save re-arm so
   // both go through the exact same path.
   function armPointTool(cfg) {
@@ -804,7 +821,7 @@
     sessionHint = '';
     activeToolLabel = '';
     rpMode = 'default';
-    Object.values(ASSET_CONFIG).forEach((cfg) => { if (cfg.geometryType === 'Point') cfg.setPending(null); });
+    Object.values(ASSET_CONFIG).forEach((cfg) => { if (cfg.geometryType === 'Point' || cfg.geometryType === 'LineString') cfg.setPending(null); });
     selectedAsset = null;
     syncToMap(map); // no-op unless Cancel just restored projectStore
   }
@@ -823,11 +840,15 @@
       return;
     }
 
-    if (cfg.geometryType === 'Point') {
-      // Continuous mode (agreed 2 Jul 2026): tool stays live across repeated
-      // placements instead of auto-deactivating after one. RMB opens a
-      // Save/Cancel confirmation rather than silently ending — see
-      // startToolSession() in mapTools.js.
+    if (cfg.geometryType === 'Point' || (cfg.geometryType === 'LineString' && !cfg.cleanupOnSave)) {
+      // Continuous mode (agreed 2 Jul 2026 for Point tools; extended to
+      // form-based line tools 15 Jul 2026 — duct/cable/crossings used to go
+      // fully inert once their properties form popped, forcing a trip back
+      // to the toolbar for every single line). Tool stays live across
+      // repeated placements instead of auto-deactivating after one. RMB
+      // opens a Save/Cancel confirmation rather than silently ending — see
+      // startToolSession() in mapTools.js. cbtTail stays excluded: one tail
+      // per CBT is deliberate, not a bug.
       const label = cfg.toolLabel.replace(/^Place /, '');
       const session = startToolSession(map, {
         onEnd: endSession,
@@ -863,7 +884,7 @@
     // Continuous mode: re-arm the same tool for the next placement instead
     // of going inert. cleanupOnSave tools (e.g. cbtTail) explicitly end on
     // save and are never wrapped in a session to begin with.
-    if (activeSession && cfg.geometryType === 'Point' && !cfg.cleanupOnSave) {
+    if (activeSession && (cfg.geometryType === 'Point' || cfg.geometryType === 'LineString') && !cfg.cleanupOnSave) {
       activeToolLabel = cfg.toolLabel;
       activeSession.rearm(() => armPointTool(cfg));
     }
@@ -873,7 +894,7 @@
     const cfg = ASSET_CONFIG[key];
     rpMode = 'default';
     cfg.setPending(null);
-    if (activeSession && cfg.geometryType === 'Point') {
+    if (activeSession && (cfg.geometryType === 'Point' || cfg.geometryType === 'LineString')) {
       // Cancelling the in-progress form (this one asset was never saved)
       // stays inside the session — re-arm for the next placement rather
       // than ending the whole run. clearTool() isn't called here, since

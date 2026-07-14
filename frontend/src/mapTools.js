@@ -1102,6 +1102,28 @@ function _snapToNode(map, lngLat, snapPx = 16, types = ['POP','CHAMBER','JOINT',
     }
   }
 
+  // Every vertex of every duct — not just its endpoints — so a cable being
+  // rubberbanded can snap to a bend part-way along a duct's route, not only
+  // to the chamber/joint at either end. id is the duct's own id (a vertex
+  // isn't its own asset); dist competes with every other candidate type on
+  // equal footing, so the nearest snap wins regardless of what it is.
+  if (types.includes('DUCT_VERTEX')) {
+    for (const d of projectStore.ducts) {
+      const ductId = d.properties.duct_id;
+      const geom = d.geometry;
+      const lines = geom?.type === 'MultiLineString' ? geom.coordinates
+                  : geom?.type === 'LineString'      ? [geom.coordinates]
+                  : [];
+      for (const line of lines) {
+        for (const [lng, lat] of line) {
+          const sPt = map.project({ lng, lat });
+          const dist = Math.hypot(pt.x - sPt.x, pt.y - sPt.y);
+          if (dist <= snapPx) candidates.push({ lngLat: { lng, lat }, id: ductId, type: 'DUCT_VERTEX', dist });
+        }
+      }
+    }
+  }
+
   if (!candidates.length) return null;
   candidates.sort((a, b) => a.dist - b.dist);
   return candidates[0];
@@ -1525,8 +1547,12 @@ export function activateAerialDropTool(map, onSaved) {
       pt2 = [lng, lat];
       save(snap ? snap.id : null);
     } else {
-      // RMB with nothing started — exit the tool entirely.
-      cleanup();
+      // RMB with nothing started — harmless no-op, same as bundle/drop-duct.
+      // Used to call cleanup() here and exit the tool entirely, which meant
+      // a stray idle right-click (e.g. after already saving via RMB) forced
+      // a trip back to the radial wheel to reselect Aerial Drop. Escape
+      // still exits the tool if that's what's wanted.
+      map.getSource('rubberband-src').setData(emptyFC());
     }
   }
 
@@ -2270,7 +2296,7 @@ export function activateCableTool(map, onFinish) {
   }
 
   function onMousemove(e) {
-    const snap = _snapToNode(map, e.lngLat, 16, ['POP', 'JOINT']);
+    const snap = _snapToNode(map, e.lngLat, 16, ['POP', 'JOINT', 'DUCT_VERTEX']);
     if (snap) {
       map.getSource('snap-src').setData(pointFC(snap.lngLat.lng, snap.lngLat.lat));
       map.getCanvas().style.cursor = 'pointer';
@@ -2283,7 +2309,7 @@ export function activateCableTool(map, onFinish) {
   }
 
   function onClick(e) {
-    const snap = _snapToNode(map, e.lngLat, 16, ['POP', 'JOINT']);
+    const snap = _snapToNode(map, e.lngLat, 16, ['POP', 'JOINT', 'DUCT_VERTEX']);
     const { lng, lat } = snap ? snap.lngLat : e.lngLat;
     vertices.push([lng, lat]);
     nodeIds.push(snap ? snap.id : null);
