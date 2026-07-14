@@ -19,6 +19,11 @@
 
 import { GIGALOCH_LOGO, GIGALOCH_LOGO_W, GIGALOCH_LOGO_H } from './gigalochLogo.js';
 
+// Bump on every change to the sheet renderer. Stamped into the title block so a
+// printed/exported sheet always says which version of the plotter drew it —
+// otherwise "is that the new code?" costs a debugging round to answer.
+const CAD_VERSION = 'v0.4';
+
 // ── page geometry (A3 landscape) ─────────────────────────────────────────────
 const PAGE_W = 1587, PAGE_H = 1123;      // A3 @ ~96dpi (SVG is resolution-independent)
 const A3_MM_W = 420;                     // used for the 1:N scale-denominator maths
@@ -30,7 +35,7 @@ const INK   = '#1a1a1a';
 const FAINT = '#666666';
 const BASE_BLDG = '#e9e9e9';             // building footprints
 const BASE_BLDG_EDGE = '#d3d3d3';
-const BASE_ROAD = '#6e6e6e';             // road wireframe — mid-grey, must read on white paper
+const BASE_ROAD = '#a8a8a8';             // road wireframe — light grey: visible on paper, quiet behind the network
 const TABLE_EDGE = '#333333';
 
 // ── network styling (print-legible on white; PIA gets colour + dash) ─────────
@@ -66,11 +71,11 @@ const ROAD_MAJOR = new Set(['motorway', 'trunk', 'primary']);
 const ROAD_MID   = new Set(['secondary', 'tertiary', 'minor', 'residential', 'unclassified', 'living_street']);
 const ROAD_TRACK = new Set(['track', 'path', 'footway', 'cycleway', 'bridleway', 'steps', 'pedestrian']);
 function roadStyle(cls) {
-  if (ROAD_MAJOR.has(cls)) return { w: 2.8, dash: null };
-  if (ROAD_MID.has(cls))   return { w: 2.0, dash: null };
-  if (ROAD_TRACK.has(cls)) return { w: 1.2, dash: '5,3' };   // tracks/paths dashed, CAD convention
-  if (cls === 'rail')      return { w: 1.4, dash: '8,4' };
-  return { w: 1.6, dash: null };                             // service + anything unrecognised
+  if (ROAD_MAJOR.has(cls)) return { w: 1.8, dash: null };
+  if (ROAD_MID.has(cls))   return { w: 1.2, dash: null };
+  if (ROAD_TRACK.has(cls)) return { w: 0.8, dash: '5,3' };   // tracks/paths dashed, CAD convention
+  if (cls === 'rail')      return { w: 1.0, dash: '8,4' };
+  return { w: 1.0, dash: null };                             // service + anything unrecognised
 }
 
 // Pull every transport feature actually rendered on screen. We derive the
@@ -303,8 +308,9 @@ function buildCadSVG(map, state, opts) {
     });
     return g.join('');
   };
-  out.push(tbl(MARGIN, stripY + STRIP_H - 4 - 4 * 22, 300, [
+  out.push(tbl(MARGIN, stripY + STRIP_H - 4 - 5 * 22, 300, [
     ['PROJECT REFERENCE', meta.ref], ['HP TOTAL', meta.hp], ['AREA', meta.area], ['STAGE', meta.stage],
+    ['SHEET', 'CAD ' + CAD_VERSION + ' (beta)'],
   ]));
 
   // company table (right) + logo
