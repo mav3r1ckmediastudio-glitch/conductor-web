@@ -56,6 +56,40 @@ const POINT_LAYERS = [
 const isPIA = f => f?.properties?.installation_method === 'PIA_UG' || f?.properties?.owner === 'Openreach';
 const isCrossing = f => !!f?.properties?.crossing_type;
 
+// ── base transport network styling ───────────────────────────────────────────
+// EVERY transport route is plotted regardless of size — carriageways, streets,
+// service roads, tracks, paths. Weight varies by class so the hierarchy still
+// reads, but nothing is filtered out. (The live map's `roads-neon` layer is
+// deliberately NOT used as the source here: it filters to major classes only
+// and is toggle-dependent, so the sheet would silently lose minor roads.)
+const ROAD_MAJOR = new Set(['motorway', 'trunk', 'primary']);
+const ROAD_MID   = new Set(['secondary', 'tertiary', 'minor', 'residential', 'unclassified', 'living_street']);
+const ROAD_TRACK = new Set(['track', 'path', 'footway', 'cycleway', 'bridleway', 'steps', 'pedestrian']);
+function roadStyle(cls) {
+  if (ROAD_MAJOR.has(cls)) return { w: 2.2, dash: null };
+  if (ROAD_MID.has(cls))   return { w: 1.4, dash: null };
+  if (ROAD_TRACK.has(cls)) return { w: 0.8, dash: '4,3' };   // tracks/paths dashed, CAD convention
+  if (cls === 'rail')      return { w: 1.2, dash: '8,4' };
+  return { w: 1.0, dash: null };                             // service + anything unrecognised
+}
+
+// Pull every transport feature from the vector tile source itself. Unlike
+// queryRenderedFeatures, querySourceFeatures ignores layer filters AND layer
+// visibility, so we get the complete network from the loaded tiles.
+function collectRoads(map) {
+  const tries = [
+    ['maptiler_planet', 'transportation'],
+    ['openmaptiles',    'transportation'],
+  ];
+  for (const [src, sourceLayer] of tries) {
+    try {
+      const f = map.querySourceFeatures(src, { sourceLayer });
+      if (f && f.length) return f;
+    } catch (e) { /* source not in this style — try the next */ }
+  }
+  return [];
+}
+
 // ── small helpers (self-contained; not shared with mapExport.js) ─────────────
 function esc(s) {
   return String(s == null ? '' : s)
@@ -121,16 +155,33 @@ function buildCadSVG(map, state, opts) {
   out.push(`<g clip-path="url(#mapclip)">`);
 
   // ── 1. wireframe base (rendered building + road features in view) ──
-  let bldgs = [], roads = [];
+  let bldgs = [];
   try { bldgs = map.queryRenderedFeatures({ layers: ['buildings-3d'] }); } catch (e) {}
-  try { roads = map.queryRenderedFeatures({ layers: ['roads-neon'] }); } catch (e) {}
   const seenB = new Set();
   for (const f of bldgs) {
     const id = f.id ?? JSON.stringify(f.geometry?.coordinates?.[0]?.[0]);
     if (seenB.has(id)) continue; seenB.add(id);
     eachRing(f.geometry, ring => out.push(`<path d="${pathD(ring)} Z" fill="${BASE_BLDG}" stroke="${BASE_BLDG_EDGE}" stroke-width="0.6"/>`));
   }
-  for (const f of roads) eachLineString(f.geometry, ls => out.push(`<path d="${pathD(ls)}" fill="none" stroke="${BASE_ROAD}" stroke-width="1.4"/>`));
+
+  // Roads: full transport network from the tile source. Tiles extend past the
+  // viewport, so cull anything entirely off-page (keeps the file lean); the
+  // clip path handles the rest. Duplicate features across tile seams are
+  // harmless — an identical line drawn twice looks the same.
+  const bnds = map.getBounds();
+  const padX = (bnds.getEast() - bnds.getWest()) * 0.05;
+  const padY = (bnds.getNorth() - bnds.getSouth()) * 0.05;
+  const inView = ls => ls.some(c =>
+    c[0] >= bnds.getWest() - padX && c[0] <= bnds.getEast() + padX &&
+    c[1] >= bnds.getSouth() - padY && c[1] <= bnds.getNorth() + padY);
+  for (const f of collectRoads(map)) {
+    const st = roadStyle(f.properties?.class);
+    eachLineString(f.geometry, ls => {
+      if (ls.length < 2 || !inView(ls)) return;
+      const da = st.dash ? ` stroke-dasharray="${st.dash}"` : '';
+      out.push(`<path d="${pathD(ls)}" fill="none" stroke="${BASE_ROAD}" stroke-width="${st.w}" stroke-linecap="round" stroke-linejoin="round"${da}/>`);
+    });
+  }
 
   // ── 2. build-area boundary ──
   if (s.buildArea?.geometry) eachRing(s.buildArea.geometry, ring => out.push(`<path d="${pathD(ring)} Z" fill="none" stroke="#0050a0" stroke-width="1.4" stroke-dasharray="10,6"/>`));
