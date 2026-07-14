@@ -22,7 +22,7 @@ import { GIGALOCH_LOGO, GIGALOCH_LOGO_W, GIGALOCH_LOGO_H } from './gigalochLogo.
 // Bump on every change to the sheet renderer. Stamped into the title block so a
 // printed/exported sheet always says which version of the plotter drew it —
 // otherwise "is that the new code?" costs a debugging round to answer.
-const CAD_VERSION = 'v0.4';
+const CAD_VERSION = 'v0.5';
 
 // ── page geometry (A3 landscape) ─────────────────────────────────────────────
 const PAGE_W = 1587, PAGE_H = 1123;      // A3 @ ~96dpi (SVG is resolution-independent)
@@ -234,24 +234,116 @@ function buildCadSVG(map, state, opts) {
     if (shape === 'star')         return `<circle cx="${x}" cy="${y}" r="4.5" fill="${color}"/><circle cx="${x}" cy="${y}" r="1.6" fill="#fff"/>`;
     return `<circle cx="${x}" cy="${y}" r="1.8" fill="${color}"/>`;  // dot
   };
-  const labelSvg = [];
+  // Label placement with collision avoidance (v0.5). Two passes over one
+  // ordered point list: (1) draw every symbol and seed its footprint as a
+  // no-go box, so no label — including ones placed later in the pass — ever
+  // lands on top of a symbol it doesn't belong to; (2) place each label,
+  // trying the original default position first (x+6,y+3 / x+8,y+3 — so an
+  // uncontested sheet renders exactly as it did in v0.4) and falling back
+  // through a ring of alternate positions at growing radius when that spot
+  // is occupied. A label displaced far enough from its default spot gets a
+  // thin leader line back to its symbol, so it still reads as "belonging"
+  // to that asset instead of floating free. Deterministic: fixed draw order,
+  // no randomness, so the same project always lays out the same way.
+  const placedBoxes = [];   // { x0, y0, x1, y1 } — symbols + labels placed so far
+
+  const boxesOverlap = (a, b) => a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0;
+  const overlapsAny = box => placedBoxes.some(b => boxesOverlap(box, b));
+
+  // Symbol footprints, matching drawPoint()'s actual half-sizes (plus a
+  // little padding) so labels don't sit on top of a neighbouring symbol.
+  const SYMBOL_HALF = { 'square-open': 4, 'square-fill': 3.5, 'circle-open': 4, 'star': 5, 'dot': 2.5, 'cabinet-square': 6 };
+  const symbolBox = (x, y, shape) => {
+    const r = SYMBOL_HALF[shape] || 3;
+    return { x0: x - r, y0: y - r, x1: x + r, y1: y + r };
+  };
+
+  // Rough Arial upper/digit/dash string width. Technical IDs are all
+  // uppercase + digits + dashes — no lowercase, no wide glyphs — so a flat
+  // per-character estimate holds up well enough for a repel test.
+  const textBox = (x, y, text, fontSize, bold) => {
+    const charW = fontSize * (bold ? 0.66 : 0.6);
+    const w = text.length * charW;
+    const h = fontSize * 1.1;
+    return { x0: x - 1, y0: y - h + 1, x1: x + w + 1, y1: y + 2 };
+  };
+
+  // Candidate offsets, tried in this order: the original default position
+  // first, then an 8-way compass ring at increasing radius.
+  const LABEL_CANDIDATES = (() => {
+    const c = [{ dx: 6, dy: 3 }];
+    for (const r of [11, 15, 20, 27, 36, 46]) {
+      for (const deg of [0, 45, 90, 135, 180, 225, 270, 315]) {
+        const rad = deg * Math.PI / 180;
+        c.push({ dx: Math.cos(rad) * r, dy: Math.sin(rad) * r });
+      }
+    }
+    return c;
+  })();
+
+  // Places one label near (x,y), avoiding every box placed so far. Returns
+  // { lx, ly, leader } — leader is true once the label has moved far enough
+  // from the default spot that a leader line back to the symbol helps.
+  function placeLabel(x, y, text, fontSize, bold) {
+    for (const c of LABEL_CANDIDATES) {
+      const lx = x + c.dx, ly = y + c.dy;
+      const box = textBox(lx, ly, text, fontSize, bold);
+      if (!overlapsAny(box)) {
+        placedBoxes.push(box);
+        const leader = Math.hypot(c.dx - 6, c.dy - 3) > 6;
+        return { lx, ly, leader };
+      }
+    }
+    // Every candidate is contested (dense cluster) — place at the furthest
+    // ring anyway rather than silently dropping the label.
+    const c = LABEL_CANDIDATES[LABEL_CANDIDATES.length - 1];
+    const lx = x + c.dx, ly = y + c.dy;
+    placedBoxes.push(textBox(lx, ly, text, fontSize, bold));
+    return { lx, ly, leader: true };
+  }
+
+  // Flatten points + cabinet into one ordered list so both passes share the
+  // same iteration order (determinism).
+  const allPoints = [];
   for (const PL of POINT_LAYERS) {
     for (const f of (s[PL.key] || [])) {
       if (!f.geometry?.coordinates) continue;
       const [x, y] = P(f.geometry.coordinates);
       const color = (PL.key === 'chambers' && isPIA(f)) ? PIA_COLOR : PL.color;
-      out.push(drawPoint(PL.shape, x, y, color));
-      if (PL.idProp && f.properties?.[PL.idProp]) {
-        const shortId = String(f.properties[PL.idProp]).split('-').slice(-2).join('-');
-        labelSvg.push(`<text x="${(x + 6).toFixed(1)}" y="${(y + 3).toFixed(1)}" fill="${INK}" font-size="8">${esc(shortId)}</text>`);
-      }
+      const label = (PL.idProp && f.properties?.[PL.idProp])
+        ? String(f.properties[PL.idProp]).split('-').slice(-2).join('-') : null;
+      allPoints.push({ x, y, shape: PL.shape, color, label, fontSize: 8, bold: false, isCabinet: false });
     }
   }
-  // cabinet / POP
   if (s.cabinet?.geometry) {
     const [x, y] = P(s.cabinet.geometry.coordinates);
-    out.push(`<rect x="${(x - 5).toFixed(1)}" y="${(y - 5).toFixed(1)}" width="10" height="10" fill="#d00000" stroke="#000" stroke-width="1"/>`);
-    if (s.cabinet.properties?.pop_id) labelSvg.push(`<text x="${(x + 8).toFixed(1)}" y="${(y + 3).toFixed(1)}" fill="${INK}" font-size="9" font-weight="bold">${esc(s.cabinet.properties.pop_id)}</text>`);
+    allPoints.push({
+      x, y, shape: 'cabinet-square', color: '#d00000',
+      label: s.cabinet.properties?.pop_id ? String(s.cabinet.properties.pop_id) : null,
+      fontSize: 9, bold: true, isCabinet: true,
+    });
+  }
+
+  // Pass 1 — draw every symbol, seed its footprint.
+  for (const pt of allPoints) {
+    if (pt.isCabinet) {
+      out.push(`<rect x="${(pt.x - 5).toFixed(1)}" y="${(pt.y - 5).toFixed(1)}" width="10" height="10" fill="#d00000" stroke="#000" stroke-width="1"/>`);
+    } else {
+      out.push(drawPoint(pt.shape, pt.x, pt.y, pt.color));
+    }
+    placedBoxes.push(symbolBox(pt.x, pt.y, pt.shape));
+  }
+
+  // Pass 2 — place labels against the fully-seeded footprint.
+  const labelSvg = [];
+  for (const pt of allPoints) {
+    if (!pt.label) continue;
+    const { lx, ly, leader } = placeLabel(pt.x, pt.y, pt.label, pt.fontSize, pt.bold);
+    if (leader) {
+      labelSvg.push(`<line x1="${pt.x.toFixed(1)}" y1="${pt.y.toFixed(1)}" x2="${(lx - 2).toFixed(1)}" y2="${(ly - 2).toFixed(1)}" stroke="${FAINT}" stroke-width="0.5"/>`);
+    }
+    const weightAttr = pt.bold ? ' font-weight="bold"' : '';
+    labelSvg.push(`<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" fill="${INK}" font-size="${pt.fontSize}"${weightAttr}>${esc(pt.label)}</text>`);
   }
   out.push(labelSvg.join(''));
   out.push(`</g>`);   // end map clip
