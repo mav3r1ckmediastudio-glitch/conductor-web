@@ -48,7 +48,6 @@
   import ValidateRoutesPanel from './ValidateRoutesPanel.svelte';
   import DesignHealthPanel from './DesignHealthPanel.svelte';
   import CabinetCostPanel from './CabinetCostPanel.svelte';
-  import { attachNetworkSpotlight } from './networkSpotlight.js'; // DEV/PREVIEW: cursor spotlight — buildings rise + road glow.
   import {
     ensureSources, ensureTerrainLayers, syncToMap,
     activateCabinetTool, activateBuildAreaTool, activateChamberTool,
@@ -481,10 +480,6 @@
       // Enforce the current view's camera lock from the start (handler enable/disable
       // state lives on the Map instance and persists across basemap style reloads).
       applyCameraLock(is3D);
-      // DEV/PREVIEW: cursor spotlight — buildings rise + road glow along the real
-      // road network, clipped at the beam edge. Test here; port to the marketing
-      // hero once tuned. Remove this call (and the import above) when done.
-      attachNetworkSpotlight(map);
       if (projectStore.stage === 'import') rpMode = 'address-import';
       // FSAA: silently resume the last .conductor file if still permitted,
       // else surface a one-click Resume button (re-grant needs a user gesture).
