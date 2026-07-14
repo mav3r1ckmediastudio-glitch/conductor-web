@@ -30,7 +30,7 @@ const INK   = '#1a1a1a';
 const FAINT = '#666666';
 const BASE_BLDG = '#e9e9e9';             // building footprints
 const BASE_BLDG_EDGE = '#d3d3d3';
-const BASE_ROAD = '#cccccc';             // road wireframe
+const BASE_ROAD = '#6e6e6e';             // road wireframe — mid-grey, must read on white paper
 const TABLE_EDGE = '#333333';
 
 // ── network styling (print-legible on white; PIA gets colour + dash) ─────────
@@ -66,11 +66,11 @@ const ROAD_MAJOR = new Set(['motorway', 'trunk', 'primary']);
 const ROAD_MID   = new Set(['secondary', 'tertiary', 'minor', 'residential', 'unclassified', 'living_street']);
 const ROAD_TRACK = new Set(['track', 'path', 'footway', 'cycleway', 'bridleway', 'steps', 'pedestrian']);
 function roadStyle(cls) {
-  if (ROAD_MAJOR.has(cls)) return { w: 2.2, dash: null };
-  if (ROAD_MID.has(cls))   return { w: 1.4, dash: null };
-  if (ROAD_TRACK.has(cls)) return { w: 0.8, dash: '4,3' };   // tracks/paths dashed, CAD convention
-  if (cls === 'rail')      return { w: 1.2, dash: '8,4' };
-  return { w: 1.0, dash: null };                             // service + anything unrecognised
+  if (ROAD_MAJOR.has(cls)) return { w: 2.8, dash: null };
+  if (ROAD_MID.has(cls))   return { w: 2.0, dash: null };
+  if (ROAD_TRACK.has(cls)) return { w: 1.2, dash: '5,3' };   // tracks/paths dashed, CAD convention
+  if (cls === 'rail')      return { w: 1.4, dash: '8,4' };
+  return { w: 1.6, dash: null };                             // service + anything unrecognised
 }
 
 // Pull every transport feature actually rendered on screen. We derive the
@@ -169,16 +169,9 @@ function buildCadSVG(map, state, opts) {
     eachRing(f.geometry, ring => out.push(`<path d="${pathD(ring)} Z" fill="${BASE_BLDG}" stroke="${BASE_BLDG_EDGE}" stroke-width="0.6"/>`));
   }
 
-  // Roads: full transport network from the tile source. Tiles extend past the
-  // viewport, so cull anything entirely off-page (keeps the file lean); the
-  // clip path handles the rest. Duplicate features across tile seams are
-  // harmless — an identical line drawn twice looks the same.
-  const bnds = map.getBounds();
-  const padX = (bnds.getEast() - bnds.getWest()) * 0.05;
-  const padY = (bnds.getNorth() - bnds.getSouth()) * 0.05;
-  const inView = ls => ls.some(c =>
-    c[0] >= bnds.getWest() - padX && c[0] <= bnds.getEast() + padX &&
-    c[1] >= bnds.getSouth() - padY && c[1] <= bnds.getNorth() + padY);
+  // Roads: full transport network from the basemap's own layers. No viewport
+  // culling — the clip path already bounds the frame, and culling here was one
+  // more way for roads to silently vanish.
   const seenR = new Set();
   for (const f of collectRoads(map)) {
     // The same road comes back from several style layers (casing + fill +
@@ -189,7 +182,7 @@ function buildCadSVG(map, state, opts) {
     seenR.add(rid);
     const st = roadStyle(f.properties?.class);
     eachLineString(f.geometry, ls => {
-      if (ls.length < 2 || !inView(ls)) return;
+      if (ls.length < 2) return;
       const da = st.dash ? ` stroke-dasharray="${st.dash}"` : '';
       out.push(`<path d="${pathD(ls)}" fill="none" stroke="${BASE_ROAD}" stroke-width="${st.w}" stroke-linecap="round" stroke-linejoin="round"${da}/>`);
     });
