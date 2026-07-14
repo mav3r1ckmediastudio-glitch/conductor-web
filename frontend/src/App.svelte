@@ -33,6 +33,7 @@
     resumeProjectFile as fsaaResumeProjectFile,
   } from './fsaa.js';
   import { exportSheet } from './mapExport.js';
+  import { exportCadSheet } from './cadExport.js';
   import { assignFibres } from './fibreAssign.js';
   import { docsUrl, toolTip } from './toolDocs.js';
   import { countFibres } from './fibreCount.js';
@@ -1428,6 +1429,22 @@
     }
   }
 
+  // CAD sheet (beta): vector technical HLD plot. Additive — reuses the same 2D
+  // guard and dropdown as the map export but calls the standalone cadExport.js.
+  async function doCadExport(format) {
+    showExport = false;
+    if (is3D) { showToast('Switch to 2D view before exporting the CAD sheet.'); return; }
+    if (!map) return;
+    exporting = true;
+    try {
+      await exportCadSheet(map, projectStore.state, { format, company: 'GIGALOCH' });
+    } catch (e) {
+      showError('CAD export failed: ' + String(e?.message || e));
+    } finally {
+      exporting = false;
+    }
+  }
+
   // One-time nudge: prompt to save-to-file once real work exists (stage → 'design')
   // and no file is bound yet. Fires once per session; dismissing just hides it.
   let hasNudged = false;
@@ -1603,6 +1620,8 @@
           <div class="tb-open-menu" on:click|stopPropagation>
             <button class="tb-open-item exp-item" on:click={() => doExport('svg')}>SVG — vector, editable</button>
             <button class="tb-open-item exp-item" on:click={() => doExport('png')}>PNG — image</button>
+            <button class="tb-open-item exp-item" on:click={() => doCadExport('svg')}>CAD Sheet (beta) — SVG</button>
+            <button class="tb-open-item exp-item" on:click={() => doCadExport('png')}>CAD Sheet (beta) — PNG</button>
           </div>
         {/if}
       </div>
