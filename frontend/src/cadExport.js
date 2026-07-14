@@ -73,21 +73,26 @@ function roadStyle(cls) {
   return { w: 1.0, dash: null };                             // service + anything unrecognised
 }
 
-// Pull every transport feature from the vector tile source itself. Unlike
-// queryRenderedFeatures, querySourceFeatures ignores layer filters AND layer
-// visibility, so we get the complete network from the loaded tiles.
+// Pull every transport feature actually rendered on screen. We derive the
+// basemap's own road layers from the style — any line layer bound to the
+// 'transportation' source-layer ('Road network', 'Path', 'Railway', bridges,
+// tunnels…) — rather than hard-coding names, so this survives a basemap switch.
+// Our decorative roads-neon/roads-glow are excluded: they're filtered to major
+// classes and would only double-draw what the basemap layers already give us.
+// (queryRenderedFeatures is used deliberately over querySourceFeatures: the
+// latter reads tile caches and under-reports badly at high zoom.)
 function collectRoads(map) {
-  const tries = [
-    ['maptiler_planet', 'transportation'],
-    ['openmaptiles',    'transportation'],
-  ];
-  for (const [src, sourceLayer] of tries) {
-    try {
-      const f = map.querySourceFeatures(src, { sourceLayer });
-      if (f && f.length) return f;
-    } catch (e) { /* source not in this style — try the next */ }
-  }
-  return [];
+  let ids = [];
+  try {
+    ids = (map.getStyle().layers || [])
+      .filter(l => l['source-layer'] === 'transportation'
+                && l.type === 'line'
+                && !/^roads-(neon|glow)$/.test(l.id))
+      .map(l => l.id)
+      .filter(id => { try { return !!map.getLayer(id); } catch (e) { return false; } });
+  } catch (e) { return []; }
+  if (!ids.length) return [];
+  try { return map.queryRenderedFeatures({ layers: ids }) || []; } catch (e) { return []; }
 }
 
 // ── small helpers (self-contained; not shared with mapExport.js) ─────────────
@@ -174,7 +179,14 @@ function buildCadSVG(map, state, opts) {
   const inView = ls => ls.some(c =>
     c[0] >= bnds.getWest() - padX && c[0] <= bnds.getEast() + padX &&
     c[1] >= bnds.getSouth() - padY && c[1] <= bnds.getNorth() + padY);
+  const seenR = new Set();
   for (const f of collectRoads(map)) {
+    // The same road comes back from several style layers (casing + fill +
+    // bridge/tunnel variants) — draw each real feature once.
+    const rid = (f.id != null ? 'i' + f.id : '') + '|' + (f.properties?.class || '') + '|' +
+                (f.properties?.name || '') + '|' + JSON.stringify(f.geometry?.coordinates?.[0] || '');
+    if (seenR.has(rid)) continue;
+    seenR.add(rid);
     const st = roadStyle(f.properties?.class);
     eachLineString(f.geometry, ls => {
       if (ls.length < 2 || !inView(ls)) return;
