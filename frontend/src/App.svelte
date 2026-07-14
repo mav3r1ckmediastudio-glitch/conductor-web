@@ -702,7 +702,7 @@
     },
     cbtTail: {
       activate: activateCBTTailTool, geometryType: 'LineString', addMethod: 'addCBTTail',
-      toolLabel: 'CBT Tail — click CBT, snap through poles to the joint, RMB to finish',
+      toolLabel: 'CBT Tail — click CBT, tap poles to steer, click the joint to finish',
       rpMode: 'cbt-tail-form',
       setPending: (v) => pendingCBTTail = v, hasRubberband: true, cleanupOnSave: true,
     },
@@ -922,7 +922,14 @@
 
   function onPlaceAerialDrop() { onPlaceAsset('aerialDrop'); }
 
-  function onPlaceCBTTail() { onPlaceAsset('cbtTail'); }
+  let cbtTailHintShown = false;
+  function onPlaceCBTTail() {
+    if (!cbtTailHintShown) {
+      cbtTailHintShown = true;
+      showToast('Click the CBT, then the target joint — the poles between are routed automatically. Tap poles first to steer the route where the network branches.');
+    }
+    onPlaceAsset('cbtTail');
+  }
   function onCBTTailSaved(e) { onAssetSaved('cbtTail', e); }
   function onCBTTailCancelled() { onAssetCancelled('cbtTail'); }
 

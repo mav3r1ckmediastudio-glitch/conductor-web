@@ -1640,6 +1640,109 @@ function nextCBTTailId(areaId) {
   return `${prefix}${String(n).padStart(3, '0')}`;
 }
 
+// ── CBT-TAIL AUTO-ROUTER HELPERS ─────────────────────────────────────────────
+// The aerial spans already form a weighted pole graph (each span stores
+// from_node/to_node + length_m). The tail tool routes along that graph so the
+// engineer never has to click every pole — CBT and joint are the endpoints,
+// optional pole waypoints steer the route where the network branches.
+
+// Resolve any span-graph node id (POLE / CBT / JOINT / POP) to [lng, lat].
+function _nodeCoord(id) {
+  if (id == null) return null;
+  for (const pl of projectStore.poles)  if (pl.properties.pole_id  === id) return pl.geometry.coordinates;
+  for (const c of projectStore.cbts)    if (c.properties.cbt_id    === id) return c.geometry.coordinates;
+  for (const jt of projectStore.joints) if (jt.properties.joint_id === id) return jt.geometry.coordinates;
+  const cab = projectStore.cabinet;
+  if (cab && cab.properties.pop_id === id) return cab.geometry.coordinates;
+  return null;
+}
+
+// Undirected adjacency map from the aerial spans. id -> [{ to, weight }].
+// weight = span length in metres (haversine fallback if length_m is missing).
+function _buildSpanGraph() {
+  const adj = new Map();
+  const addEdge = (a, b, w) => {
+    if (a == null || b == null || a === b) return;
+    if (!adj.has(a)) adj.set(a, []);
+    adj.get(a).push({ to: b, weight: w });
+  };
+  for (const sp of projectStore.spans) {
+    const a = sp.properties.from_node;
+    const b = sp.properties.to_node;
+    let w = parseFloat(sp.properties.length_m);
+    if (!(w > 0)) {
+      const ca = _nodeCoord(a), cb = _nodeCoord(b);
+      w = (ca && cb) ? haversineChain([ca, cb]) : 1;
+    }
+    addEdge(a, b, w);
+    addEdge(b, a, w);
+  }
+  return adj;
+}
+
+// Single-source Dijkstra from startId over the span graph. Returns { dist, prev }.
+// Deterministic tie-break: on equal cost the lower-id predecessor wins, so a
+// tied route is stable run-to-run (small graphs → linear node pick is fine).
+function _dijkstra(adj, startId) {
+  const dist = new Map([[startId, 0]]);
+  const prev = new Map();
+  const visited = new Set();
+  while (true) {
+    let u = null, best = Infinity;
+    for (const [node, d] of dist) {
+      if (visited.has(node)) continue;
+      if (d < best || (d === best && u !== null && String(node) < String(u))) { best = d; u = node; }
+    }
+    if (u === null) break;
+    visited.add(u);
+    for (const { to, weight } of (adj.get(u) || [])) {
+      if (visited.has(to)) continue;
+      const nd = best + weight;
+      const cur = dist.has(to) ? dist.get(to) : Infinity;
+      if (nd < cur) {
+        dist.set(to, nd); prev.set(to, u);
+      } else if (nd === cur) {
+        const ep = prev.get(to);
+        if (ep === undefined || String(u) < String(ep)) prev.set(to, u);
+      }
+    }
+  }
+  return { dist, prev };
+}
+
+// Reconstruct ordered node-id path [start … goal] from a prev map, or null.
+function _pathTo(prev, startId, goalId) {
+  if (startId === goalId) return [startId];
+  if (!prev.has(goalId)) return null;
+  const path = [goalId];
+  let cur = goalId;
+  while (cur !== startId) {
+    cur = prev.get(cur);
+    if (cur == null) return null;
+    path.push(cur);
+  }
+  return path.reverse();
+}
+
+// Capacity of a joint's feeder splitter (a tail lands on a port of this). 1:4
+// feeder by default; honour an explicit 1:8 if the joint is set up that way.
+function _jointTailCapacity(jointId) {
+  const j = projectStore.joints.find(x => x.properties.joint_id === jointId);
+  const ratio = j && j.properties.split_ratio;
+  const m = ratio && String(ratio).match(/1:(\d+)/);
+  return m ? parseInt(m[1], 10) : 4;
+}
+
+function _tailsTerminatingAt(jointId) {
+  return projectStore.cbtTails.filter(t => t.properties.to_joint === jointId).length;
+}
+
+// ── CBT TAIL TOOL ─────────────────────────────────────────────────────────────
+// Streamlined auto-routing tail: click the CBT, optionally tap poles to steer,
+// then click the target joint. Poles between are auto-filled by shortest-path
+// over the aerial-span graph. The final pole→joint hop is the tail's own
+// underground drop (not required to be a span). Output is byte-identical to a
+// hand-drawn tail, so 3D render / fibre trace / splice plan / BoM are unaffected.
 export function activateCBTTailTool(map, onFinish) {
   clearTool(map);
 
@@ -1652,7 +1755,6 @@ export function activateCBTTailTool(map, onFinish) {
   if (!projectStore.joints.length) {
     return { error: 'No joints placed yet. A CBT tail must terminate at an underground joint.' };
   }
-  // Every CBT already has a tail → nothing to draw.
   const tailed = cbtsWithTail();
   if (projectStore.cbts.every(c => tailed.has(c.properties.cbt_id))) {
     return { error: 'Every CBT already has a tail. A CBT can only have one tail.' };
@@ -1661,155 +1763,215 @@ export function activateCBTTailTool(map, onFinish) {
   map.getCanvas().style.cursor = 'crosshair';
   const areaId = projectStore.project?.areaId || 'XX-XX';
 
-  let vertices  = [];   // [lng, lat]
-  let nodeIds   = [];   // snapped node id at each vertex (cbt_id / pole_id / joint_id)
-  let nodeTypes = [];   // 'CBT' | 'POLE' | 'JOINT'
+  // Span graph is snapshotted at tool-activation. Committed state:
+  //   cbtId / cbtCoord / entryNode  — the CBT and the pole it hangs off (graph entry)
+  //   waypoints                     — committed intermediate pole ids, in order
+  //   committedPoles                — full pole-id chain [entryNode … last waypoint]
+  //   committedCoords               — vertex coords for CBT + committedPoles.slice(1)
+  //   cache                         — Dijkstra rooted at the last routing node
+  const adj = _buildSpanGraph();
+  let cbtId = null, cbtCoord = null, entryNode = null;
+  let waypoints = [];
+  let committedPoles = [];
+  let committedCoords = [];
+  let cache = null;          // { root, dist, prev }
+  let lastRootNode = null;
 
-  // Running true length of the committed chain (metres).
-  function chainLength() {
-    return vertices.length < 2 ? 0 : haversineChain(vertices);
-  }
-
-  // Length the chain WOULD be if we appended candidate [lng, lat].
-  function lengthWith(candidate) {
-    if (!vertices.length) return 0;
-    return haversineChain([...vertices, candidate]);
-  }
-
-  function updateRubberband(cursorLngLat) {
-    if (!vertices.length) return;
-    const coords = [...vertices, [cursorLngLat.lng, cursorLngLat.lat]];
+  function rubber(coords) {
     map.getSource('rubberband-src').setData({
       type: 'FeatureCollection',
-      features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: coords }, properties: {} }]
+      features: coords.length >= 2
+        ? [{ type: 'Feature', geometry: { type: 'LineString', coordinates: coords }, properties: {} }]
+        : []
     });
   }
 
-  // What may we snap to at the current step?
-  //   • no vertices yet → CBT only (must start on a CBT without an existing tail)
-  //   • mid-chain       → POLE (route) or JOINT (terminus)
+  // Recompute committedPoles / committedCoords / cache from cbt + waypoints.
+  function recomputeCommitted() {
+    const routeNodes = [entryNode, ...waypoints];   // graph nodes to chain through
+    let poles = [entryNode];
+    let ok = true;
+    for (let k = 0; k < routeNodes.length - 1; k++) {
+      const { prev } = _dijkstra(adj, routeNodes[k]);
+      const seg = _pathTo(prev, routeNodes[k], routeNodes[k + 1]);
+      if (!seg) { ok = false; break; }
+      poles = poles.concat(seg.slice(1));           // dedup shared endpoint
+    }
+    committedPoles = ok ? poles : [entryNode];
+    lastRootNode = committedPoles[committedPoles.length - 1];
+    cache = { root: lastRootNode, ..._dijkstra(adj, lastRootNode) };
+    // CBT vertex substitutes for its own pole; then any poles beyond it.
+    committedCoords = [cbtCoord, ...committedPoles.slice(1).map(_nodeCoord).filter(Boolean)];
+  }
+
+  // Best exit pole for a joint: the reachable pole minimising (route to pole) +
+  // (straight pole→joint drop). Returns { pole, coords } or null if unreachable.
+  function bestExitToJoint(jointCoord) {
+    let bestPole = null, bestTotal = Infinity;
+    for (const [node, d] of cache.dist) {
+      const c = _nodeCoord(node);
+      if (!c) continue;                              // poles/entry only carry coords
+      // Only poles (and the CBT's entry pole) are valid drop points.
+      const isPole = projectStore.poles.some(pl => pl.properties.pole_id === node);
+      if (!isPole) continue;
+      const total = d + haversineChain([c, jointCoord]);
+      if (total < bestTotal || (total === bestTotal && bestPole && String(node) < String(bestPole))) {
+        bestTotal = total; bestPole = node;
+      }
+    }
+    if (!bestPole) return null;
+    const seg = _pathTo(cache.prev, cache.root, bestPole);
+    return seg ? { pole: bestPole, seg } : null;
+  }
+
   function snapTypesNow() {
-    if (!vertices.length) return ['CBT'];
+    if (!cbtId) return ['CBT'];
     return ['POLE', 'JOINT'];
   }
 
   function onMousemove(e) {
     const snap = _snapToNode(map, e.lngLat, 16, snapTypesNow());
-    // Suppress the snap halo on a CBT that already has a tail.
     const blocked = snap && snap.type === 'CBT' && tailed.has(snap.id);
-    if (snap && !blocked) {
+
+    if (!cbtId) {
+      // Pre-start: just show the CBT snap halo.
+      if (snap && !blocked) {
+        map.getSource('snap-src').setData(pointFC(snap.lngLat.lng, snap.lngLat.lat));
+        map.getCanvas().style.cursor = 'pointer';
+      } else {
+        map.getSource('snap-src').setData(emptyFC());
+        map.getCanvas().style.cursor = 'crosshair';
+      }
+      return;
+    }
+
+    // Started: preview the auto-routed tail to whatever we're hovering.
+    if (snap && snap.type === 'POLE') {
       map.getSource('snap-src').setData(pointFC(snap.lngLat.lng, snap.lngLat.lat));
-      const projected = lengthWith([snap.lngLat.lng, snap.lngLat.lat]);
-      map.getCanvas().style.cursor = projected > CBT_TAIL_MAX_M ? 'not-allowed' : 'pointer';
-      if (vertices.length) updateRubberband(snap.lngLat);
+      const reachable = cache.dist.has(snap.id);
+      if (reachable) {
+        const seg = _pathTo(cache.prev, cache.root, snap.id) || [cache.root];
+        const preview = committedCoords.concat(seg.slice(1).map(_nodeCoord).filter(Boolean));
+        rubber(preview);
+        const over = haversineChain(preview) > CBT_TAIL_MAX_M;
+        map.getCanvas().style.cursor = over ? 'not-allowed' : 'pointer';
+      } else {
+        rubber(committedCoords);
+        map.getCanvas().style.cursor = 'not-allowed';
+      }
+    } else if (snap && snap.type === 'JOINT') {
+      map.getSource('snap-src').setData(pointFC(snap.lngLat.lng, snap.lngLat.lat));
+      const jc = snap.lngLat ? [snap.lngLat.lng, snap.lngLat.lat] : _nodeCoord(snap.id);
+      const exit = bestExitToJoint(jc);
+      if (exit) {
+        const preview = committedCoords
+          .concat(exit.seg.slice(1).map(_nodeCoord).filter(Boolean))
+          .concat([jc]);
+        rubber(preview);
+        const over = haversineChain(preview) > CBT_TAIL_MAX_M;
+        map.getCanvas().style.cursor = over ? 'not-allowed' : 'pointer';
+      } else {
+        rubber(committedCoords);
+        map.getCanvas().style.cursor = 'not-allowed';
+      }
     } else {
       map.getSource('snap-src').setData(emptyFC());
+      rubber(committedCoords.concat([[e.lngLat.lng, e.lngLat.lat]]));
       map.getCanvas().style.cursor = 'crosshair';
-      if (vertices.length) updateRubberband(e.lngLat);
     }
-  }
-
-  function commitVertex(snap) {
-    const candidate = [snap.lngLat.lng, snap.lngLat.lat];
-    // HARD-STOP: block any vertex that would exceed 350m.
-    const projected = lengthWith(candidate);
-    if (projected > CBT_TAIL_MAX_M) {
-      showToast(
-        `CBT tail hard-stop: this segment would take the tail to ` +
-        `${Math.round(projected)} m, over the ${CBT_TAIL_MAX_M} m limit. ` +
-        `Vertex rejected — route via a closer joint or add an intermediate joint.`
-      );
-      return false;
-    }
-    vertices.push(candidate);
-    nodeIds.push(snap.id);
-    nodeTypes.push(snap.type);
-    return true;
   }
 
   function onClick(e) {
-    if (!vertices.length) {
-      // First click — must be a CBT that does not already have a tail.
+    // First click — a CBT without an existing tail.
+    if (!cbtId) {
       const snap = _snapToNode(map, e.lngLat, 16, ['CBT']);
-      if (!snap) {
-        showToast('Click on or near an existing CBT to start a tail.');
-        return;
-      }
-      if (tailed.has(snap.id)) {
-        showToast(`${snap.id} already has a tail. A CBT can only have one tail.`);
-        return;
-      }
-      commitVertex(snap);   // first vertex can never breach 350m (length 0)
+      if (!snap) { showToast('Click on or near an existing CBT to start a tail.'); return; }
+      if (tailed.has(snap.id)) { showToast(`${snap.id} already has a tail. A CBT can only have one tail.`); return; }
+      const cbt = projectStore.cbts.find(c => c.properties.cbt_id === snap.id);
+      cbtId    = snap.id;
+      cbtCoord = [snap.lngLat.lng, snap.lngLat.lat];
+      entryNode = (cbt && cbt.properties.parent_pole_id) || snap.id;
+      recomputeCommitted();
       return;
     }
 
-    // Mid-chain — snap to POLE (route) or JOINT (terminus). Both just add a
-    // vertex; RMB is what finishes the tail (consistent with the other tools).
     const snap = _snapToNode(map, e.lngLat, 16, ['POLE', 'JOINT']);
     if (!snap) {
-      showToast('Snap to a pole to follow the route, or to the parent joint, then right-click to finish.');
+      showToast('Snap to a pole to steer the route, or to the parent joint to finish.');
       return;
     }
-    // Only one joint may be committed, and it must be the last vertex. If a joint
-    // is already the current terminus, replace it rather than chaining past it.
-    if (snap.type === 'JOINT' && nodeTypes[nodeTypes.length - 1] === 'JOINT') {
-      vertices.pop(); nodeIds.pop(); nodeTypes.pop();
+
+    // Pole → waypoint (must be reachable along the span network).
+    if (snap.type === 'POLE') {
+      if (!cache.dist.has(snap.id)) {
+        showToast(`${snap.id} isn't on the aerial route from here — pick a pole connected by spans, or draw the missing span first.`);
+        return;
+      }
+      waypoints.push(snap.id);
+      recomputeCommitted();
+      return;
     }
-    commitVertex(snap);
+
+    // Joint → terminus: validate, route, length-check, commit.
+    if (snap.type === 'JOINT') {
+      const cap = _jointTailCapacity(snap.id);
+      if (_tailsTerminatingAt(snap.id) >= cap) {
+        showToast(`${snap.id}'s 1:${cap} feeder is full (${cap} tails) — pick another joint.`);
+        return;
+      }
+      const jc = [snap.lngLat.lng, snap.lngLat.lat];
+      const exit = bestExitToJoint(jc);
+      if (!exit) {
+        showToast('No aerial route exists between this CBT and that joint yet — draw the spans first, or add a waypoint.');
+        return;
+      }
+
+      // Full ordered chain: CBT → poles… → JOINT.
+      const fullPoles = committedPoles.concat(exit.seg.slice(1));   // ends at exit pole
+      const vertices  = [cbtCoord, ...fullPoles.slice(1).map(_nodeCoord).filter(Boolean), jc];
+      const nodeIds   = [cbtId,    ...fullPoles.slice(1),                                 snap.id];
+      const nodeTypes = ['CBT',    ...fullPoles.slice(1).map(() => 'POLE'),               'JOINT'];
+
+      const lengthM = Math.round(haversineChain(vertices));
+      if (lengthM > CBT_TAIL_MAX_M) {
+        showToast(
+          `CBT tail hard-stop: the routed tail is ${lengthM} m, over the ${CBT_TAIL_MAX_M} m limit. ` +
+          `Route via a closer joint or add an intermediate joint.`
+        );
+        return;
+      }
+
+      map.getSource('rubberband-src').setData(emptyFC());
+      map.getSource('snap-src').setData(emptyFC());
+
+      onFinish({
+        coordinates: vertices,
+        tail_id:     nextCBTTailId(areaId),
+        area_id:     areaId,
+        pop_id:      projectStore.cabinet?.properties.pop_id || '',
+        from_cbt:    cbtId,
+        to_joint:    snap.id,
+        via_poles:   nodeIds.slice(1, -1),
+        node_chain:  nodeIds,
+        node_types:  nodeTypes,
+        length_m:    lengthM,
+      });
+      // One tail per CBT — handler tears the tool down on form save.
+    }
   }
 
   function onContextmenu(e) {
     e.preventDefault();
-    if (!vertices.length) { cleanup(); return; }   // RMB with nothing started → exit
-    // RMB finishes — but only if the tail terminates on a joint.
-    if (nodeTypes[nodeTypes.length - 1] !== 'JOINT') {
-      showToast('A CBT tail must end on an underground joint. Snap to the parent joint, then right-click to finish.');
-      return;
-    }
-    if (vertices.length < 2) {
-      showToast('A tail needs at least a CBT and a joint.');
-      return;
-    }
-    finish();
-  }
-
-  function finish() {
-    map.getSource('rubberband-src').setData(emptyFC());
-    map.getSource('snap-src').setData(emptyFC());
-
-    const fromCbt  = nodeIds[0];
-    const toJoint  = nodeIds[nodeIds.length - 1];
-    const viaPoles = nodeIds.slice(1, -1);   // intermediate pole ids, in order
-    const lengthM  = Math.round(chainLength());
-    const tailId   = nextCBTTailId(areaId);
-    const popId    = projectStore.cabinet?.properties.pop_id || '';
-
-    const pending = {
-      coordinates: [...vertices],
-      tail_id:     tailId,
-      area_id:     areaId,
-      pop_id:      popId,
-      from_cbt:    fromCbt,
-      to_joint:    toJoint,
-      via_poles:   viaPoles,
-      // Full ordered attach chain for 3D rendering: CBT → poles… → JOINT.
-      node_chain:  [...nodeIds],
-      node_types:  [...nodeTypes],
-      length_m:    lengthM,
-    };
-
-    // Reset; tool will be torn down by the handler (one tail per CBT — no re-arm).
-    vertices = []; nodeIds = []; nodeTypes = [];
-
-    onFinish(pending);
+    cleanup();   // RMB = cancel (finishing is a joint click now)
   }
 
   function onKeydown(e) {
-    if (e.key === 'Escape') cleanup();
+    if (e.key === 'Escape') { cleanup(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
-      if (vertices.length) {
-        vertices.pop(); nodeIds.pop(); nodeTypes.pop();
-        if (!vertices.length) map.getSource('rubberband-src').setData(emptyFC());
+      if (waypoints.length) {
+        waypoints.pop();
+        recomputeCommitted();
+        rubber(committedCoords);
       }
     }
   }
