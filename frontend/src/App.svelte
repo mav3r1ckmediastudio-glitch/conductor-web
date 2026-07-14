@@ -48,6 +48,7 @@
   import ValidateRoutesPanel from './ValidateRoutesPanel.svelte';
   import DesignHealthPanel from './DesignHealthPanel.svelte';
   import CabinetCostPanel from './CabinetCostPanel.svelte';
+  import { attachNetworkSpotlight } from './networkSpotlight.js'; // DEV/PREVIEW: cursor spotlight — buildings rise + road glow.
   import {
     ensureSources, ensureTerrainLayers, syncToMap,
     activateCabinetTool, activateBuildAreaTool, activateChamberTool,
@@ -77,6 +78,7 @@
   let is3D = true;
   let drawerOpen = false;
   let showBuildings = true;
+  let showRoads = true;
   let currentBasemap = 'dark';
   let basemapSwitching = false; // prevents double-clicks during style reload
 
@@ -447,10 +449,13 @@
       }
     }
 
-    // 5. Restore building visibility from current toggle state
+    // 5. Restore building + road visibility from current toggle state
     if (map.getLayer('buildings-3d')) {
       map.setLayoutProperty('buildings-3d', 'visibility', showBuildings ? 'visible' : 'none');
     }
+    const roadVis = showRoads ? 'visible' : 'none';
+    if (map.getLayer('roads-glow')) map.setLayoutProperty('roads-glow', 'visibility', roadVis);
+    if (map.getLayer('roads-neon')) map.setLayoutProperty('roads-neon', 'visibility', roadVis);
 
     // 6. Push all stored GeoJSON data into sources
     syncToMap(map);
@@ -466,9 +471,20 @@
       bearing: -30,
       preserveDrawingBuffer: true,   // required so the map canvas can be captured for export
     });
+    // TEMP DIAGNOSTIC — exposes map to the console so we can inspect querySourceFeatures
+    // directly without a re-deploy each time. Unconditional (not gated on DEV) so it
+    // also works on the live Netlify build. REMOVE once the plant-gen issue is solved.
+    window.map = map;
 
     map.on('load', () => {
       setupMapLayers(map);
+      // Enforce the current view's camera lock from the start (handler enable/disable
+      // state lives on the Map instance and persists across basemap style reloads).
+      applyCameraLock(is3D);
+      // DEV/PREVIEW: cursor spotlight — buildings rise + road glow along the real
+      // road network, clipped at the beam edge. Test here; port to the marketing
+      // hero once tuned. Remove this call (and the import above) when done.
+      attachNetworkSpotlight(map);
       if (projectStore.stage === 'import') rpMode = 'address-import';
       // FSAA: silently resume the last .conductor file if still permitted,
       // else surface a one-click Resume button (re-grant needs a user gesture).
@@ -1309,9 +1325,28 @@
     if (toolId === 'fibre-count')         onFibreCount();
   }
 
+  // Lock/unlock the camera's pitch + bearing interaction. In 2D we disable the
+  // rotate/pitch drag handlers (right-drag, ctrl-drag), two-finger touch pitch,
+  // and the keyboard rotate/pitch keys — so the user can still pan and scroll-zoom,
+  // but cannot tilt or spin the camera off flat until they click 3D. scrollZoom,
+  // dragPan and touchZoom are untouched, so zoom in/out keeps working.
+  function applyCameraLock(threeD) {
+    if (!map) return;
+    if (threeD) {
+      map.dragRotate.enable();
+      map.touchPitch.enable();
+      map.keyboard.enableRotation();
+    } else {
+      map.dragRotate.disable();
+      map.touchPitch.disable();
+      map.keyboard.disableRotation();
+    }
+  }
+
   function setView(threeD) {
     is3D = threeD;
     if (!map) return;
+    applyCameraLock(threeD);
     map.easeTo({ pitch: threeD ? 60 : 0, bearing: threeD ? -30 : 0, duration: 1200 });
   }
 
@@ -1320,6 +1355,16 @@
     if (map && map.getLayer('buildings-3d')) {
       map.setLayoutProperty('buildings-3d', 'visibility', showBuildings ? 'visible' : 'none');
     }
+  }
+
+  function toggleRoads() {
+    showRoads = !showRoads;
+    if (!map) return;
+    const vis = showRoads ? 'visible' : 'none';
+    // The neon effect is two stacked layers: the wide blurred glow + the sharp
+    // bright line. Toggle both together.
+    if (map.getLayer('roads-glow')) map.setLayoutProperty('roads-glow', 'visibility', vis);
+    if (map.getLayer('roads-neon')) map.setLayoutProperty('roads-neon', 'visibility', vis);
   }
 
   let showOpen = false;
@@ -1610,6 +1655,7 @@
         <button class="asset-btn" on:click={onDeleteAsset}>✕ Delete Asset</button>
         <button class="asset-btn" on:click={onMoveAsset}>⇄ Move Asset</button>
         <button class="asset-btn" class:on={showBuildings} on:click={toggleBuildings}>⌂ Buildings</button>
+        <button class="asset-btn" class:on={showRoads} on:click={toggleRoads}>▬ Roads</button>
         <div class="sid-basemap-dock">
           <div class="sid-div"></div>
           <div class="sid-lbl">Basemap</div>
