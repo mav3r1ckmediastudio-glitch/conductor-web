@@ -222,14 +222,23 @@
   let routeDrawerFilter = 'all';
   let routeDrawerSearch = '';
 
-  $: drawerRows = validateResults.filter(r => {
-    if (routeDrawerFilter !== 'all' && r.status.toLowerCase() !== routeDrawerFilter) return false;
-    if (routeDrawerSearch) {
-      const q = routeDrawerSearch.toLowerCase();
-      return r.uprn.toLowerCase().includes(q) || r.address.toLowerCase().includes(q);
-    }
-    return true;
-  });
+  // Routed → Partial → Unserved, always — same ordering fix as Validate
+  // Routes (15 Jul 2026), just without the accordion: this list is short
+  // enough on-screen that a stable sort is all it needs. Applies whether
+  // "All Routes" or a single-status filter is selected — a no-op for the
+  // single-status case (already homogeneous), so one sort covers both.
+  const DRAWER_STATUS_ORDER = { ROUTED: 0, PARTIAL: 1, UNSERVED: 2 };
+  $: drawerRows = validateResults
+    .filter(r => {
+      if (routeDrawerFilter !== 'all' && r.status.toLowerCase() !== routeDrawerFilter) return false;
+      if (routeDrawerSearch) {
+        const q = routeDrawerSearch.toLowerCase();
+        return r.uprn.toLowerCase().includes(q) || r.address.toLowerCase().includes(q);
+      }
+      return true;
+    })
+    .slice()
+    .sort((a, b) => (DRAWER_STATUS_ORDER[a.status] ?? 3) - (DRAWER_STATUS_ORDER[b.status] ?? 3));
 
   function routeStatusClass(s) { return s === 'ROUTED' ? 'routed' : s === 'PARTIAL' ? 'partial' : 'unserved'; }
   function capStyle(cap) {
