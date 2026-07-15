@@ -59,6 +59,27 @@ i.e. it splices through `min(incoming, span capacity)` — e.g. a 48F span off a
 
 ---
 
+## 4. Import + georeference a map (PDF/PNG/JPG) — READY, not started, low priority (15 Jul 2026)
+
+**Ask:** import a reference image (Openreach/BT/OS GeoPDF, a scanned paper plan, or a hand-drawn sketch) and place it correctly on the live map, so it can be traced/built over.
+
+**Reality check on "auto":** true zero-click georeferencing only works when the file already carries embedded coordinates (GeoPDF, GeoTIFF, or an image with a `.tfw`/`.jgw`/`.pgw` sidecar). A flat scan or a hand sketch has no coordinates inside it to detect — nothing for "auto" to find. Verified there is currently **zero** image-overlay/georeferencing code anywhere in this codebase; this is new ground, not an extension of something existing.
+
+**What's already in our favour:**
+- `maplibre-gl` (already a dependency) has a native `ImageSource` — give it 4 corner `[lng,lat]` pairs and it does the GPU warp itself. No raster-resampling code needed on our side.
+- `projectStore.js` already has `proj4` wired for **EPSG:27700 (British National Grid) → EPSG:4326**, which is the CRS most UK utility/OS exports use. Directly reusable.
+
+**Agreed phasing (build order + scope not yet confirmed with Paul — this is a plan, not a spec to start coding from):**
+- **Phase A — control-point georeferencer (core).** Upload PNG/JPG/PDF (PDF rasterized via a new `pdfjs-dist` dependency — not in the project today, needs sign-off to add). Click a point on the image, click the matching spot on the live map (or type a known BNG easting/northing for off-screen points). 2 points → similarity transform (scale+rotate+translate); 3+ → least-squares affine, more forgiving of a skewed scan. Feed the fitted 4 corners into MapLibre's `ImageSource`. Opacity slider, toggle, delete, persisted in the project file (new `mapOverlays` collection). Covers every source type Paul mentioned — this alone is the whole feature if nothing else gets built.
+- **Phase B — world-file fast path.** If a `.tfw`/`.jgw`/`.pgw` sidecar accompanies the image, parse its 6 numbers directly — skips straight to placement (still nudgeable). Assumes BNG.
+- **Phase C — GeoPDF embedded-coordinate fast path.** Openreach/OS GeoPDFs typically embed 4 tie points in an OGC viewport/measure dictionary inside the PDF. Parsing those feeds straight into the same control-point transform from Phase A — reuses that pipeline entirely rather than being a separate code path.
+
+**Paul's own flag, worth designing around:** control-point matching is going to be visually hard on any basemap other than satellite — a scanned technical drawing's roads/building outlines line up naturally against aerial imagery, much less so against a stylised vector/neon-dark basemap. Worth defaulting to (or nudging toward) the satellite basemap when the control-point tool is active, rather than assuming the user will think to switch themselves.
+
+**Status:** parked deliberately — not urgent, sizeable build. Next step when picked back up: confirm build order (A only vs A+B vs all three) and whether `pdfjs-dist` is OK to add, then write the actual implementation spec.
+
+---
+
 ## Notes
 
 - Working browser is **Edge** (not Chrome). Confirm browser before assuming.
