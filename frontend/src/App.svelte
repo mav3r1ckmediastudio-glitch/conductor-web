@@ -356,6 +356,54 @@
     }
   }
 
+  // ── Fit the camera to whatever a project actually contains ─────────────────
+  // The map's initial center (in setupMap below) is a fixed fallback point —
+  // fine for a brand-new project, useless once a real project loads: without
+  // this, resuming/opening a project leaves the camera sitting wherever it
+  // happened to be, which for the very first load is that hardcoded fallback,
+  // nowhere near the actual build. Walks every collection's geometry (not
+  // just build area or cabinet, since early-stage projects may have neither
+  // yet) and fits to the union. No-op if the project is genuinely empty.
+  function projectBounds() {
+    let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+    let found = false;
+    const addCoord = (c) => {
+      if (!c || c.length < 2) return;
+      const [lng, lat] = c;
+      if (lng < minLng) minLng = lng;
+      if (lng > maxLng) maxLng = lng;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+      found = true;
+    };
+    const addGeom = (geom) => {
+      if (!geom) return;
+      if (geom.type === 'Point') addCoord(geom.coordinates);
+      else if (geom.type === 'LineString') geom.coordinates.forEach(addCoord);
+      else if (geom.type === 'MultiLineString') geom.coordinates.forEach(ls => ls.forEach(addCoord));
+      else if (geom.type === 'Polygon') geom.coordinates.forEach(ring => ring.forEach(addCoord));
+      else if (geom.type === 'MultiPolygon') geom.coordinates.forEach(poly => poly.forEach(ring => ring.forEach(addCoord)));
+    };
+
+    const s = projectStore;
+    if (s.cabinet) addGeom(s.cabinet.geometry);
+    if (s.buildArea) addGeom(s.buildArea.geometry);
+    const collections = ['chambers', 'ducts', 'joints', 'dropDucts', 'cables', 'bundles',
+                          'poles', 'cbts', 'spans', 'aerialDrops', 'cbtTails', 'addressPoints'];
+    for (const key of collections) {
+      for (const f of (s[key] || [])) addGeom(f.geometry);
+    }
+
+    return found ? [[minLng, minLat], [maxLng, maxLat]] : null;
+  }
+
+  function fitToProject() {
+    if (!map) return;
+    const bounds = projectBounds();
+    if (!bounds) return;   // genuinely empty project — leave the fallback view
+    map.fitBounds(bounds, { padding: 80, maxZoom: 17, duration: 600 });
+  }
+
   function exportRoutesCsv() {
     if (!validateResults.length) return;
     const hdr = 'UPRN,Address,Status,Reason,Length(m)';
@@ -489,6 +537,7 @@
         if (r.state === 'granted') {
           rpMode = projectStore.stage === 'import' ? 'address-import' : 'default';
           syncToMap(map);
+          fitToProject();
         } else if (r.state === 'prompt') {
           fsaaResume = { fileName: r.fileName };
         }
@@ -1412,7 +1461,7 @@
     try {
       if (await fsaaOpenFile()) {
         rpMode = 'default'; activeToolLabel = '';
-        if (map) syncToMap(map);
+        if (map) { syncToMap(map); fitToProject(); }
       }
     } catch (e) { showError('Could not open file: ' + (e?.message || e)); }
   }
@@ -1420,7 +1469,7 @@
     if (await fsaaResumePrompt()) {
       fsaaResume = null;
       rpMode = 'default'; activeToolLabel = '';
-      if (map) syncToMap(map);
+      if (map) { syncToMap(map); fitToProject(); }
     }
   }
   function onKeydown(e) {
@@ -1498,7 +1547,7 @@
     if (result.ok) {
       rpMode = 'default';
       activeToolLabel = '';
-      if (map) syncToMap(map);
+      if (map) { syncToMap(map); fitToProject(); }
       return;
     }
 
@@ -1510,7 +1559,7 @@
         if (r.state === 'loaded') {
           rpMode = 'default';
           activeToolLabel = '';
-          if (map) syncToMap(map);
+          if (map) { syncToMap(map); fitToProject(); }
         } else if (r.state === 'denied') {
           showError(`Permission for "${result.fileName}" wasn't granted. Use "Open File" to pick it manually.`);
         } else {
