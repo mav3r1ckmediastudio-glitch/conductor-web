@@ -24,20 +24,30 @@
   let total     = 0;
   let results   = null;   // null = not yet run
   let summary   = null;
-  let filter    = 'all';  // 'all'|'routed'|'partial'|'unserved'
   let selected  = null;
   let cancelled = false;
+
+  // Grouped-accordion display (15 Jul 2026, ported from the v2 QGIS plugin):
+  // instead of one flat list in whatever order addressPoints happened to be
+  // imported in, results are grouped Routed → Partial → Unserved behind the
+  // same colour-coded summary tiles, each independently collapsible. Tiles
+  // now toggle their section open/closed instead of swapping the list to a
+  // filtered view.
+  let showRouted   = false;
+  let showPartial  = false;
+  let showUnserved = false;
 
   // Optical filter: 'all' | 'fail' (show only optical budget failures among ROUTED)
   let optFilter = 'all';
 
-  $: rows = filterRows(results, filter, optFilter);
+  $: routedRows      = results ? results.filter(r => r.status === 'ROUTED')   : [];
+  $: partialRows     = results ? results.filter(r => r.status === 'PARTIAL')  : [];
+  $: unservedRows    = results ? results.filter(r => r.status === 'UNSERVED') : [];
+  $: routedRowsShown = optFilter === 'fail' ? routedRows.filter(r => r.linkPass === false) : routedRows;
 
-  function filterRows(r, f, of) {
-    if (!r) return [];
-    let out = f === 'all' ? r : r.filter(x => x.status.toLowerCase() === f);
-    if (of === 'fail') out = out.filter(x => x.linkPass === false);
-    return out;
+  function toggleAllGroups() {
+    const next = !(showRouted && showPartial && showUnserved);
+    showRouted = showPartial = showUnserved = next;
   }
 
   function statusClass(s) {
@@ -61,6 +71,7 @@
     running = true; cancelled = false;
     progress = 0; total = 0; results = null; summary = null; selected = null;
     optFilter = 'all';
+    showRouted = false; showPartial = false; showUnserved = false;
 
     // Yield to let Svelte repaint before the BFS loop blocks the thread.
     await new Promise(r => setTimeout(r, 20));
@@ -156,29 +167,19 @@
   <!-- Summary bar -->
   {#if summary}
     <div class="vrp-summary">
-      <div class="vrp-s ok"  on:click={() => { filter='routed';   optFilter='all'; }} class:active={filter==='routed'}   role="button" tabindex="0" on:keydown={(e)=>e.key==='Enter'&&(filter='routed')}>
+      <div class="vrp-s ok"  on:click={() => showRouted = !showRouted}     class:active={showRouted}   role="button" tabindex="0" on:keydown={(e)=>e.key==='Enter'&&(showRouted = !showRouted)}>
         <span class="vrp-sv">{summary.routed}</span><span class="vrp-sl">Routed</span>
       </div>
-      <div class="vrp-s wrn" on:click={() => { filter='partial';  optFilter='all'; }} class:active={filter==='partial'}  role="button" tabindex="0" on:keydown={(e)=>e.key==='Enter'&&(filter='partial')}>
+      <div class="vrp-s wrn" on:click={() => showPartial = !showPartial}   class:active={showPartial}  role="button" tabindex="0" on:keydown={(e)=>e.key==='Enter'&&(showPartial = !showPartial)}>
         <span class="vrp-sv">{summary.partial}</span><span class="vrp-sl">Partial</span>
       </div>
-      <div class="vrp-s bad" on:click={() => { filter='unserved'; optFilter='all'; }} class:active={filter==='unserved'} role="button" tabindex="0" on:keydown={(e)=>e.key==='Enter'&&(filter='unserved')}>
+      <div class="vrp-s bad" on:click={() => showUnserved = !showUnserved} class:active={showUnserved} role="button" tabindex="0" on:keydown={(e)=>e.key==='Enter'&&(showUnserved = !showUnserved)}>
         <span class="vrp-sv">{summary.unserved}</span><span class="vrp-sl">Unserved</span>
       </div>
-      <div class="vrp-s neu" on:click={() => { filter='all'; optFilter='all'; }} class:active={filter==='all' && optFilter==='all'} role="button" tabindex="0" on:keydown={(e)=>e.key==='Enter'&&(filter='all')}>
+      <div class="vrp-s neu" on:click={toggleAllGroups} class:active={showRouted && showPartial && showUnserved} role="button" tabindex="0" on:keydown={(e)=>e.key==='Enter'&&toggleAllGroups()}>
         <span class="vrp-sv">{summary.premises}</span><span class="vrp-sl">All</span>
       </div>
     </div>
-    <!-- Optical budget filter row (only shown after a run with results) -->
-    {#if optFailCount > 0}
-      <div class="vrp-opt-bar">
-        <span class="vrp-opt-lbl">⚠ {optFailCount} optical budget fail{optFailCount !== 1 ? 's' : ''}</span>
-        <button class="vrp-opt-btn" class:active={optFilter==='fail'}
-          on:click={() => { filter='all'; optFilter = optFilter === 'fail' ? 'all' : 'fail'; }}>
-          {optFilter === 'fail' ? 'Show all' : 'Show fails only'}
-        </button>
-      </div>
-    {/if}
   {/if}
 
   <!-- Progress -->
@@ -192,7 +193,7 @@
     </div>
   {/if}
 
-  <!-- Result table -->
+  <!-- Result table — grouped Routed → Partial → Unserved, each collapsible -->
   <div class="vrp-list">
     {#if results === null && !running}
       <div class="vrp-intro">
@@ -202,37 +203,116 @@
       </div>
     {:else if results && results.length === 0}
       <div class="vrp-empty">No address points in the project yet.</div>
-    {:else if rows.length === 0}
-      <div class="vrp-empty">No {optFilter === 'fail' ? 'optical budget failures' : filter} premises.</div>
     {:else}
-      {#each rows as row}
-        <div class="vrp-row {statusClass(row.status)}" class:sel={selected===row.uprn}
-             on:click={() => onRowClick(row)} role="button" tabindex="0"
-             on:keydown={(e)=>e.key==='Enter'&&onRowClick(row)}>
-          <div class="vrp-row-top">
-            <span class="vrp-icon {statusClass(row.status)}">{statusIcon(row.status)}</span>
-            <span class="vrp-addr">{row.address || row.uprn}</span>
-            <!-- Optical budget badge (ROUTED rows only) -->
-            {#if row.lossDb !== null}
-              <span class="vrp-opt-badge" class:pass={row.linkPass} class:fail={!row.linkPass}
-                    title="Loss: {row.lossDb.toFixed(2)} dB | Margin: {row.marginDb >= 0 ? '+' : ''}{row.marginDb.toFixed(2)} dB">
-                {row.lossDb.toFixed(1)}dB&nbsp;{row.linkPass ? '✓' : '✗'}
-              </span>
-            {/if}
-            {#if row.lengthM}
-              <span class="vrp-len">{row.lengthM}m</span>
-            {/if}
-          </div>
-          {#if row.status !== 'ROUTED'}
-            <div class="vrp-reason">{row.reason}</div>
-          {:else if row.linkPass === false}
-            <div class="vrp-reason fail-reason">
-              Budget fail — margin {row.marginDb >= 0 ? '+' : ''}{row.marginDb?.toFixed(2)} dB.
-              Check splitter count and route length.
+      <!-- Routed -->
+      <button class="vrp-group ok" on:click={() => showRouted = !showRouted}>
+        <span class="vrp-group-chevron" class:open={showRouted}>▸</span>
+        <span class="vrp-group-icon">✓</span>
+        <span class="vrp-group-label">Routed</span>
+        <span class="vrp-group-count">{routedRows.length}</span>
+      </button>
+      {#if showRouted}
+        <div class="vrp-group-body">
+          {#if optFailCount > 0}
+            <div class="vrp-opt-bar">
+              <span class="vrp-opt-lbl">⚠ {optFailCount} optical budget fail{optFailCount !== 1 ? 's' : ''}</span>
+              <button class="vrp-opt-btn" class:active={optFilter==='fail'}
+                on:click|stopPropagation={() => { optFilter = optFilter === 'fail' ? 'all' : 'fail'; }}>
+                {optFilter === 'fail' ? 'Show all' : 'Show fails only'}
+              </button>
             </div>
           {/if}
+          {#if routedRowsShown.length === 0}
+            <div class="vrp-empty">No {optFilter === 'fail' ? 'optical budget failures' : 'routed'} premises.</div>
+          {:else}
+            {#each routedRowsShown as row}
+              <div class="vrp-row {statusClass(row.status)}" class:sel={selected===row.uprn}
+                   on:click={() => onRowClick(row)} role="button" tabindex="0"
+                   on:keydown={(e)=>e.key==='Enter'&&onRowClick(row)}>
+                <div class="vrp-row-top">
+                  <span class="vrp-icon {statusClass(row.status)}">{statusIcon(row.status)}</span>
+                  <span class="vrp-addr">{row.address || row.uprn}</span>
+                  {#if row.lossDb !== null}
+                    <span class="vrp-opt-badge" class:pass={row.linkPass} class:fail={!row.linkPass}
+                          title="Loss: {row.lossDb.toFixed(2)} dB | Margin: {row.marginDb >= 0 ? '+' : ''}{row.marginDb.toFixed(2)} dB">
+                      {row.lossDb.toFixed(1)}dB&nbsp;{row.linkPass ? '✓' : '✗'}
+                    </span>
+                  {/if}
+                  {#if row.lengthM}
+                    <span class="vrp-len">{row.lengthM}m</span>
+                  {/if}
+                </div>
+                {#if row.linkPass === false}
+                  <div class="vrp-reason fail-reason">
+                    Budget fail — margin {row.marginDb >= 0 ? '+' : ''}{row.marginDb?.toFixed(2)} dB.
+                    Check splitter count and route length.
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          {/if}
         </div>
-      {/each}
+      {/if}
+
+      <!-- Partial -->
+      <button class="vrp-group wrn" on:click={() => showPartial = !showPartial}>
+        <span class="vrp-group-chevron" class:open={showPartial}>▸</span>
+        <span class="vrp-group-icon">⚡</span>
+        <span class="vrp-group-label">Partial</span>
+        <span class="vrp-group-count">{partialRows.length}</span>
+      </button>
+      {#if showPartial}
+        <div class="vrp-group-body">
+          {#if partialRows.length === 0}
+            <div class="vrp-empty">No partial premises.</div>
+          {:else}
+            {#each partialRows as row}
+              <div class="vrp-row {statusClass(row.status)}" class:sel={selected===row.uprn}
+                   on:click={() => onRowClick(row)} role="button" tabindex="0"
+                   on:keydown={(e)=>e.key==='Enter'&&onRowClick(row)}>
+                <div class="vrp-row-top">
+                  <span class="vrp-icon {statusClass(row.status)}">{statusIcon(row.status)}</span>
+                  <span class="vrp-addr">{row.address || row.uprn}</span>
+                  {#if row.lengthM}
+                    <span class="vrp-len">{row.lengthM}m</span>
+                  {/if}
+                </div>
+                <div class="vrp-reason">{row.reason}</div>
+              </div>
+            {/each}
+          {/if}
+        </div>
+      {/if}
+
+      <!-- Unserved -->
+      <button class="vrp-group bad" on:click={() => showUnserved = !showUnserved}>
+        <span class="vrp-group-chevron" class:open={showUnserved}>▸</span>
+        <span class="vrp-group-icon">✕</span>
+        <span class="vrp-group-label">Unserved</span>
+        <span class="vrp-group-count">{unservedRows.length}</span>
+      </button>
+      {#if showUnserved}
+        <div class="vrp-group-body">
+          {#if unservedRows.length === 0}
+            <div class="vrp-empty">No unserved premises.</div>
+          {:else}
+            {#each unservedRows as row}
+              <div class="vrp-row {statusClass(row.status)}" class:sel={selected===row.uprn}
+                   on:click={() => onRowClick(row)} role="button" tabindex="0"
+                   on:keydown={(e)=>e.key==='Enter'&&onRowClick(row)}>
+                <div class="vrp-row-top">
+                  <span class="vrp-icon {statusClass(row.status)}">{statusIcon(row.status)}</span>
+                  <span class="vrp-addr">{row.address || row.uprn}</span>
+                  {#if row.lengthM}
+                    <span class="vrp-len">{row.lengthM}m</span>
+                  {/if}
+                </div>
+                <div class="vrp-reason">{row.reason}</div>
+              </div>
+            {/each}
+          {/if}
+        </div>
+      {/if}
     {/if}
   </div>
 
@@ -284,6 +364,24 @@
   .vrp-list { flex: 1; overflow-y: auto; padding: 4px 8px; }
   .vrp-intro { font-size: 8.5px; color: #6a8fa8; line-height: 1.7; padding: 12px 6px; letter-spacing: 0.02em; }
   .vrp-empty { font-size: 8.5px; color: #3a5a70; padding: 14px 6px; letter-spacing: 0.04em; }
+
+  /* Group headers (Routed/Partial/Unserved accordion) */
+  .vrp-group {
+    display: flex; align-items: center; gap: 7px; width: 100%;
+    background: #080e14; border: 1px solid #1a2d40; border-radius: 5px;
+    padding: 8px 10px; margin: 4px 0; cursor: pointer;
+    font-family: 'Courier New', monospace; text-align: left;
+  }
+  .vrp-group:hover { border-color: #2a4a60; }
+  .vrp-group-chevron { font-size: 8px; color: #3a5a70; transition: transform 0.12s; flex-shrink: 0; }
+  .vrp-group-chevron.open { transform: rotate(90deg); }
+  .vrp-group-icon { font-size: 9px; font-weight: 700; flex-shrink: 0; width: 14px; text-align: center; }
+  .vrp-group-label { font-size: 8.5px; letter-spacing: 0.08em; text-transform: uppercase; flex: 1; }
+  .vrp-group-count { font-size: 9px; font-weight: 700; opacity: 0.85; }
+  .vrp-group.ok  { color: #34d399; }
+  .vrp-group.wrn { color: #fbbf24; }
+  .vrp-group.bad { color: #f87171; }
+  .vrp-group-body { padding: 2px 0 6px; }
 
   .vrp-row { padding: 7px 6px; border-bottom: 1px solid #0c141c; cursor: pointer; border-radius: 3px; transition: background 0.1s; }
   .vrp-row:hover { background: #0f1c2a; }
