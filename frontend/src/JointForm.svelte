@@ -71,38 +71,38 @@
     <div class="section-lbl">IDENTITY</div>
 
     <div class="field readonly">
-      <label>Joint ID</label>
-      <input value={pending.joint_id} readonly />
+      <label for="a11y-jointform-1">Joint ID</label>
+      <input id="a11y-jointform-1" value={pending.joint_id} readonly />
     </div>
     <div class="field readonly">
-      <label>Parent Chamber</label>
-      <input value={pending.chamber_id} readonly />
+      <label for="a11y-jointform-2">Parent Chamber</label>
+      <input id="a11y-jointform-2" value={pending.chamber_id} readonly />
     </div>
     <div class="field">
-      <label>Joint Type *</label>
-      <select bind:value={jointType}>
+      <label for="a11y-jointform-3">Joint Type *</label>
+      <select id="a11y-jointform-3" bind:value={jointType}>
         <option>SPLICE</option>
         <option>BLOWING_POINT</option>
         <option>END_OF_LINE</option>
       </select>
     </div>
     <div class="field">
-      <label>Closure Model <span class="hint">e.g. Commscope ADP-FS4 (optional)</span></label>
-      <input bind:value={closureType} placeholder="Manufacturer / model" />
+      <label for="a11y-jointform-4">Closure Model <span class="hint">e.g. Commscope ADP-FS4 (optional)</span></label>
+      <input id="a11y-jointform-4" bind:value={closureType} placeholder="Manufacturer / model" />
     </div>
     <div class="field row">
       <div style="flex:1;">
-        <label>Fibres In</label>
-        <input type="number" bind:value={fibreIn} min="0" max="288" />
+        <label for="a11y-jointform-5">Fibres In</label>
+        <input id="a11y-jointform-5" type="number" bind:value={fibreIn} min="0" max="288" />
       </div>
       <div style="flex:1;">
-        <label>Fibres Out</label>
-        <input type="number" bind:value={fibreOut} min="0" max="288" />
+        <label for="a11y-jointform-6">Fibres Out</label>
+        <input id="a11y-jointform-6" type="number" bind:value={fibreOut} min="0" max="288" />
       </div>
     </div>
     <div class="field">
-      <label>Status</label>
-      <select bind:value={status}>
+      <label for="a11y-jointform-7">Status</label>
+      <select id="a11y-jointform-7" bind:value={status}>
         <option>PROPOSED</option>
         <option>SURVEY</option>
         <option>INSTALLED</option>
@@ -122,8 +122,8 @@
 
     {#if hasSplitter}
     <div class="field">
-      <label>Split Ratio *</label>
-      <select bind:value={splitRatio}>
+      <label for="a11y-jointform-11">Split Ratio *</label>
+      <select id="a11y-jointform-11" bind:value={splitRatio}>
         <option value="">— select —</option>
         <option>1:2</option>
         <option>1:4</option>
@@ -133,16 +133,16 @@
       </select>
     </div>
     <div class="field">
-      <label>Cascade Level *</label>
-      <select bind:value={cascadeLevel}>
+      <label for="a11y-jointform-8">Cascade Level *</label>
+      <select id="a11y-jointform-8" bind:value={cascadeLevel}>
         <option value="">— select —</option>
         <option value="1">1 — Primary</option>
         <option value="2">2 — Secondary</option>
       </select>
     </div>
     <div class="field">
-      <label>Cascade Type</label>
-      <select bind:value={cascadeType}>
+      <label for="a11y-jointform-9">Cascade Type</label>
+      <select id="a11y-jointform-9" bind:value={cascadeType}>
         <option value="">— not set —</option>
         <option>URBAN_1_2_1_16</option>
         <option>RURAL_1_4_1_8</option>
@@ -155,8 +155,8 @@
     <div class="section-lbl">NOTES</div>
 
     <div class="field">
-      <label>Notes</label>
-      <input bind:value={notes} placeholder="Free text notes (optional)" />
+      <label for="a11y-jointform-10">Notes</label>
+      <input id="a11y-jointform-10" bind:value={notes} placeholder="Free text notes (optional)" />
     </div>
 
   </div>

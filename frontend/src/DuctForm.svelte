@@ -89,12 +89,12 @@
     <div class="section-lbl">IDENTITY</div>
 
     <div class="field">
-      <label>Spur Suffix <span class="hint">leave blank for main route</span></label>
-      <input bind:value={spurSuffix} placeholder="e.g. a, b" maxlength="6" />
+      <label for="a11y-ductform-1">Spur Suffix <span class="hint">leave blank for main route</span></label>
+      <input id="a11y-ductform-1" bind:value={spurSuffix} placeholder="e.g. a, b" maxlength="6" />
     </div>
     <div class="field">
-      <label>Duct Type</label>
-      <select bind:value={ductType}>
+      <label for="a11y-ductform-2">Duct Type</label>
+      <select id="a11y-ductform-2" bind:value={ductType}>
         <option>HDPE_50_40</option>
         <option>HDPE_63_51</option>
         <option>HDPE_110_94</option>
@@ -105,8 +105,8 @@
       </select>
     </div>
     <div class="field">
-      <label>Status</label>
-      <select bind:value={status}>
+      <label for="a11y-ductform-3">Status</label>
+      <select id="a11y-ductform-3" bind:value={status}>
         <option>PROPOSED</option>
         <option>PERMIT_APPLIED</option>
         <option>PERMITTED</option>
@@ -123,12 +123,12 @@
     <div class="section-lbl">CIVILS</div>
 
     <div class="field">
-      <label>Owner</label>
-      <input bind:value={owner} />
+      <label for="a11y-ductform-12">Owner</label>
+      <input id="a11y-ductform-12" bind:value={owner} />
     </div>
     <div class="field">
-      <label>Surface Type</label>
-      <select bind:value={surfaceType}>
+      <label for="a11y-ductform-4">Surface Type</label>
+      <select id="a11y-ductform-4" bind:value={surfaceType}>
         <option value="">— not yet set —</option>
         <option>TARMAC</option>
         <option>CONCRETE</option>
@@ -140,20 +140,20 @@
       </select>
     </div>
     <div class="field">
-      <label>Depth (m)</label>
-      <input type="number" bind:value={depthM} min="0" max="3" step="0.05" style="width:80px" />
+      <label for="a11y-ductform-5">Depth (m)</label>
+      <input id="a11y-ductform-5" type="number" bind:value={depthM} min="0" max="3" step="0.05" style="width:80px" />
     </div>
 
     <div class="divider"></div>
     <div class="section-lbl">PERMITS & WAYLEAVES</div>
 
     <div class="field">
-      <label>Permit Reference</label>
-      <input bind:value={permitRef} placeholder="S50 / S171 ref (optional)" />
+      <label for="a11y-ductform-6">Permit Reference</label>
+      <input id="a11y-ductform-6" bind:value={permitRef} placeholder="S50 / S171 ref (optional)" />
     </div>
     <div class="field">
-      <label>Permit Expiry</label>
-      <input bind:value={permitExpiry} placeholder="e.g. 2025-12-31" />
+      <label for="a11y-ductform-7">Permit Expiry</label>
+      <input id="a11y-ductform-7" bind:value={permitExpiry} placeholder="e.g. 2025-12-31" />
     </div>
     <div class="check-row">
       <input type="checkbox" bind:checked={wayleaveReq} id="wl" />
@@ -161,8 +161,8 @@
     </div>
     {#if wayleaveReq}
     <div class="field">
-      <label>Wayleave ID</label>
-      <input bind:value={wayleaveId} placeholder="Wayleave reference" />
+      <label for="a11y-ductform-13">Wayleave ID</label>
+      <input id="a11y-ductform-13" bind:value={wayleaveId} placeholder="Wayleave reference" />
     </div>
     {/if}
 
@@ -170,16 +170,16 @@
     <div class="section-lbl">PIA & OPENREACH</div>
 
     <div class="field">
-      <label>PIA Reference</label>
-      <input bind:value={piaRef} placeholder="Openreach PIA ref (if applicable)" />
+      <label for="a11y-ductform-8">PIA Reference</label>
+      <input id="a11y-ductform-8" bind:value={piaRef} placeholder="Openreach PIA ref (if applicable)" />
     </div>
     <div class="field">
-      <label>Openreach Reference</label>
-      <input bind:value={openreachRef} placeholder="Openreach asset ref (optional)" />
+      <label for="a11y-ductform-9">Openreach Reference</label>
+      <input id="a11y-ductform-9" bind:value={openreachRef} placeholder="Openreach asset ref (optional)" />
     </div>
     <div class="field">
-      <label>Sleeve Type</label>
-      <select bind:value={sleeveType}>
+      <label for="a11y-ductform-10">Sleeve Type</label>
+      <select id="a11y-ductform-10" bind:value={sleeveType}>
         <option value="">— not applicable —</option>
         <option>PUSH_FIT</option>
         <option>HEAT_SHRINK</option>
@@ -188,8 +188,8 @@
     </div>
     {#if sleeveType}
     <div class="field">
-      <label>Sleeve Length (m)</label>
-      <input type="number" bind:value={sleeveLength} min="0" max="10" step="0.1" style="width:80px" />
+      <label for="a11y-ductform-11">Sleeve Length (m)</label>
+      <input id="a11y-ductform-11" type="number" bind:value={sleeveLength} min="0" max="10" step="0.1" style="width:80px" />
     </div>
     {/if}
 

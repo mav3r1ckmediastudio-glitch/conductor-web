@@ -15,6 +15,56 @@
 
 import { traceFibre, resolveNode } from './fibreTrace.js';
 import { escapeHtml } from './htmlEscape.js';
+import { hashPhysicalPlanInputs } from './fibrePlanInputs.js';
+
+// ── Physical-plan freshness gate ───────────────────────────────
+// A splice plan is a PHYSICAL construction document: it depends on through-splice
+// and dark-storage records produced by the demand-driven physical fibre planner
+// (fibrePlanner.js / fibrePhysicalPlan.js). Export is gated so the beta never
+// presents an out-of-date or unvalidated plan as authoritative.
+//
+// A plan is releasable only when the project has been explicitly stamped
+// physicalPlanStatus === 'VALIDATED' by a successful demand-driven planner run
+// AND the stored input fingerprint still matches the current project. Everything
+// else (missing, 'UNVERIFIED', 'INVALID', 'PORTS_ONLY', or a stale fingerprint)
+// is gated.
+export const PHYSICAL_PLAN_VALIDATED = 'VALIDATED';
+
+// A physical plan is releasable only when it is BOTH validated AND still current:
+// its stored input fingerprint must equal the fingerprint of the project as it
+// stands now. Any edit to a planning input (topology, capacity, ratio, feed
+// mode, profile, frozen fibre) changes the fingerprint and closes this gate
+// until the plan is recomputed and re-validated (release-audit P0-1). A missing
+// fingerprint fails closed — an unverifiable plan is treated as not ready.
+export function physicalPlanReady(store) {
+  if (!store || store.physicalPlanStatus !== PHYSICAL_PLAN_VALIDATED) return false;
+  if (!store.physicalPlanInputHash) return false;
+  return store.physicalPlanInputHash === hashPhysicalPlanInputs(store);
+}
+
+// Standalone "not calculated" page returned in place of a real plan while the
+// physical planner is unverified. Kept deliberately minimal and clearly marked
+// so a downloaded file can never be mistaken for a real, buildable plan.
+function unverifiedPlanPage(title) {
+  const t = escapeHtml(title || 'Splice Plan');
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">` +
+    `<title>${t} &middot; Unverified</title><style>${CSS}` +
+    `.uv{max-width:640px;margin:40px auto;background:#fff;border:1.5px solid #C03A1A;` +
+    `border-radius:10px;padding:28px 30px;}` +
+    `.uv h1{font-size:18px;color:#6B1D0A;margin-bottom:10px;}` +
+    `.uv p{font-size:13px;color:#1A1A1A;line-height:1.6;margin-bottom:10px;}` +
+    `.uv .wm{font-size:11px;font-weight:bold;letter-spacing:2px;color:#C03A1A;` +
+    `text-transform:uppercase;margin-bottom:16px;}</style></head>` +
+    `<body><div class="page"><div class="uv">` +
+    `<div class="wm">Draft &mdash; Unverified</div>` +
+    `<h1>Physical fibre allocation not calculated</h1>` +
+    `<p>Splitter-port allocation is available, but the physical fibre plan ` +
+    `(through-splices and dark-fibre storage) has not been produced by a ` +
+    `validated planner, so a splice plan cannot be generated for ${t}.</p>` +
+    `<p>Splice-plan export re-enables once the demand-driven physical planner ` +
+    `is implemented and the project's physical plan is validated.</p>` +
+    `</div></div></body></html>`;
+}
 
 // ── IEC 60794 colour tables ───────────────────────────────────────────────────
 const IEC_NAMES  = ['Blue','Orange','Green','Brown','Slate','White','Red','Black','Yellow','Violet','Rose','Aqua'];
@@ -175,9 +225,16 @@ function buildJointSpliceData(store, jointId) {
   const splitRatio   = S(p.split_ratio   || (hasSplitter || isCbt ? '1:8' : ''));
   const splitterCap  = splitRatio ? parseInt((splitRatio.match(/:(\d+)/) || [])[1] || '8', 10) : 0;
 
-  // Pull assignment records for this joint
+  // Pull assignment records for this joint. Logical splitter-port records live in
+  // fibreAssignments; the raw physical plan (through-splices, dark storage, raw
+  // splitter inputs) lives in physicalAssignments once VALIDATED. Prefer the
+  // physical layer for physical roles, falling back to fibreAssignments for
+  // back-compat with records that predate the split.
   const allRecs = store.fibreAssignments || [];
+  const physSource = (store.physicalAssignments && store.physicalAssignments.length)
+    ? store.physicalAssignments : allRecs;
   const recs = allRecs.filter(r => S(r.joint_id) === S(jointId));
+  const physRecs = physSource.filter(r => S(r.joint_id) === S(jointId));
 
   // Build address lookup from addressPoints
   const addrOf = {};
@@ -197,12 +254,13 @@ function buildJointSpliceData(store, jointId) {
     if (id && u) uprnOf[id] = u;
   }
 
-  // Partition records by role
-  const spliceRecs   = recs.filter(r => r.fibre_role === 'THROUGH_SPLICE');
-  const spInputRecs  = recs.filter(r => r.fibre_role === 'SPLITTER_INPUT');
+  // Partition records by role. Physical roles from the physical layer; logical
+  // splitter-output/spare from the logical layer.
+  const spliceRecs   = physRecs.filter(r => r.fibre_role === 'THROUGH_SPLICE');
+  const darkRecs     = physRecs.filter(r => r.fibre_role === 'DARK_STORAGE');
+  const spInputRecs  = physRecs.filter(r => r.fibre_role === 'SPLITTER_INPUT');
   const spOutputRecs = recs.filter(r => r.fibre_role === 'SPLITTER_OUTPUT');
   const spSpareRecs  = recs.filter(r => r.fibre_role === 'SPLITTER_OUTPUT_SPARE');
-  const darkRecs     = recs.filter(r => r.fibre_role === 'DARK_STORAGE');
 
   // Through-splices are already deduplicated by the assignment engine (one record
   // per fibre pair). Use them as-is — no second dedup (a naive sorted-key dedup
@@ -412,6 +470,9 @@ function buildJointSpliceData(store, jointId) {
 }
 
 export function generateSplicePlan(store, jointId) {
+  // Freshness gate: never emit a real per-joint splice plan from an unvalidated
+  // or stale physical plan — return the clearly-marked "not calculated" page instead.
+  if (!physicalPlanReady(store)) return unverifiedPlanPage(jointId);
   const d = buildJointSpliceData(store, jointId);
   const H = [];
   H.push(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">`);
@@ -464,6 +525,12 @@ export function generateSplicePlan(store, jointId) {
 // pass-throughs with no splice closure (same exclusion computeOptical() in
 // fibreTrace.js already makes for splice-count purposes).
 export function generateRouteSplicePlan(store, uprn) {
+  // Freshness gate: a route splice plan is a physical construction document.
+  // Refuse to build one from an unvalidated or stale physical plan — the caller surfaces
+  // this error to the user (App.svelte onDownloadRouteSplice → showError).
+  if (!physicalPlanReady(store)) {
+    return { error: 'Physical fibre allocation not calculated — the physical fibre planner is unverified, so splice plans are disabled. Splitter-port allocation is still available.' };
+  }
   const result = traceFibre(store, uprn);
 
   if (result.status !== 'ROUTED') {
@@ -541,6 +608,8 @@ export function generateRouteSplicePlan(store, uprn) {
 // ── Batch generator ───────────────────────────────────────────────────────────
 
 export function generateAllSplicePlans(store) {
+  // Freshness gate: nothing to export while the physical plan is unvalidated or stale.
+  if (!physicalPlanReady(store)) return [];
   const results = [];
 
   for (const j of store.joints || []) {

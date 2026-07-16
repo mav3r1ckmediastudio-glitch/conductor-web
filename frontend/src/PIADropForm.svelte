@@ -54,24 +54,24 @@
     <div class="section-lbl">PIA IDENTITY</div>
 
     <div class="field readonly">
-      <label>Drop Type</label>
-      <input value="PIA_UG" readonly />
+      <label for="a11y-piadropform-1">Drop Type</label>
+      <input id="a11y-piadropform-1" value="PIA_UG" readonly />
     </div>
     <div class="field readonly">
-      <label>Owner</label>
-      <input value="Openreach" readonly />
+      <label for="a11y-piadropform-2">Owner</label>
+      <input id="a11y-piadropform-2" value="Openreach" readonly />
     </div>
     <div class="field readonly">
-      <label>Installation Method</label>
-      <input value="PIA_UG" readonly />
+      <label for="a11y-piadropform-3">Installation Method</label>
+      <input id="a11y-piadropform-3" value="PIA_UG" readonly />
     </div>
     <div class="field">
-      <label>PIA Reference <span class="hint">Openreach asset reference</span></label>
-      <input bind:value={piaRef} placeholder="e.g. PIA-XXXXXX" />
+      <label for="a11y-piadropform-4">PIA Reference <span class="hint">Openreach asset reference</span></label>
+      <input id="a11y-piadropform-4" bind:value={piaRef} placeholder="e.g. PIA-XXXXXX" />
     </div>
     <div class="field">
-      <label>Openreach Reference <span class="hint">optional</span></label>
-      <input bind:value={openreachRef} placeholder="Additional Openreach ref" />
+      <label for="a11y-piadropform-5">Openreach Reference <span class="hint">optional</span></label>
+      <input id="a11y-piadropform-5" bind:value={openreachRef} placeholder="Additional Openreach ref" />
     </div>
 
     <div class="divider"></div>

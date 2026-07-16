@@ -313,19 +313,44 @@ export function runDesignHealth(store) {
           // feeder splitter's consumers are OTHER downstream splitter joints
           // or CBTs (that's the whole point of a cascade), so bundleCount===0
           // is a feeder's NORMAL state, not staleness. Only flag when this
-          // joint isn't feeding anything at all: no bundles, and no cable
-          // connects it onward to another declared splitter joint or CBT.
-          const feedsAnotherSplitter = (store.cables || []).some(c => {
-            const cp = c.properties || {};
-            const other = String(cp.from_node || '') === id ? String(cp.to_node || '')
-                        : String(cp.to_node || '') === id ? String(cp.from_node || '')
-                        : null;
+          // joint isn't feeding anything at all: no bundles, and no cable,
+          // span, or CBT tail connects it onward to another declared splitter
+          // joint or CBT.
+          const isDownstreamSplitter = (other) => {
             if (!other || other === id) return false;
             if (cbtIds.has(other)) return true;   // CBTs are always splitters
             const otherJoint = (store.joints || []).find(j => String(j.properties?.joint_id) === other);
             const ohs = otherJoint?.properties?.has_splitter;
             return ohs === true || ohs === 1 || ohs === 'true';
+          };
+          const feedsViaCable = (store.cables || []).some(c => {
+            const cp = c.properties || {};
+            const other = String(cp.from_node || '') === id ? String(cp.to_node || '')
+                        : String(cp.to_node || '') === id ? String(cp.from_node || '')
+                        : null;
+            return isDownstreamSplitter(other);
           });
+          // Aerial spans are a separate collection from cables (2a above) —
+          // a splitter feeding an onward aerial leg to another splitter/CBT
+          // was previously invisible here.
+          const feedsViaSpan = (store.spans || []).some(s => {
+            const sp = s.properties || {};
+            const other = String(sp.from_node || '') === id ? String(sp.to_node || '')
+                        : String(sp.to_node || '') === id ? String(sp.from_node || '')
+                        : null;
+            return isDownstreamSplitter(other);
+          });
+          // CBT tails run from_cbt -> to_joint (the physical lay direction),
+          // but the *feed* relationship is the reverse: this joint feeds the
+          // CBT at the other end of the tail. A splitter feeding only via
+          // tails (JNT-001-style: 1:4 feeding two 1:8 CBTs) was previously
+          // invisible here — cbtTails was never inspected.
+          const feedsViaTail = (store.cbtTails || []).some(t => {
+            const tp = t.properties || {};
+            if (String(tp.to_joint || '') !== id) return false;
+            return cbtIds.has(String(tp.from_cbt || ''));
+          });
+          const feedsAnotherSplitter = feedsViaCable || feedsViaSpan || feedsViaTail;
           if (!feedsAnotherSplitter) {
             // Not dangerous the way oversubscription or an undeclared splitter
             // are (it doesn't understate an optical budget or imply false

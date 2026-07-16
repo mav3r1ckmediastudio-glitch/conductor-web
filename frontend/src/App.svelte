@@ -18,6 +18,14 @@
   import PIADuctForm from './PIADuctForm.svelte';
   import PIADropForm from './PIADropForm.svelte';
   import ProjectSetup from './ProjectSetup.svelte';
+  import SaveNudge from './SaveNudge.svelte';
+  import ActiveToolChip from './ActiveToolChip.svelte';
+  import RoutesDrawer from './RoutesDrawer.svelte';
+  import FibreAssignPanel from './FibreAssignPanel.svelte';
+  import BranchClassificationPanel from './BranchClassificationPanel.svelte';
+  import Sidebar from './Sidebar.svelte';
+  import ValidationSummaryPanel from './ValidationSummaryPanel.svelte';
+  import TopBar from './TopBar.svelte';
   import AddressImporter from './AddressImporter.svelte';
   import BuildAreaForm from './BuildAreaForm.svelte';
   import { showToast, showError } from './toast.js';
@@ -33,12 +41,12 @@
     resumeProjectFile as fsaaResumeProjectFile,
   } from './fsaa.js';
   import { exportSheet } from './mapExport.js';
+  import { setupMapLayers } from './mapLayers.js';
+  import { searchAndZoom, fitToProject as fitToProjectExtent } from './mapSearch.js';
   import { exportCadSheet } from './cadExport.js';
   import { assignFibres } from './fibreAssign.js';
-  import { docsUrl, toolTip } from './toolDocs.js';
   import { countFibres } from './fibreCount.js';
-  import { downloadSplicePlan, generateSplicePlan, downloadAllSplicePlans, generateRouteSplicePlan } from './splicePlan.js';
-  import AssetEditPanel from './AssetEditPanel.svelte';
+  import { downloadSplicePlan, generateSplicePlan, downloadAllSplicePlans, generateRouteSplicePlan, physicalPlanReady } from './splicePlan.js';
   import AssetPickerDialog from './AssetPickerDialog.svelte';
   import FibreTracePanel from './FibreTracePanel.svelte';
   import FibreCountPanel from './FibreCountPanel.svelte';
@@ -50,7 +58,7 @@
   import DesignHealthPanel from './DesignHealthPanel.svelte';
   import CabinetCostPanel from './CabinetCostPanel.svelte';
   import {
-    ensureSources, ensureTerrainLayers, syncToMap,
+    ensureSources, ensureTerrainLayers, syncToMap, invalidateSyncSource,
     activateCabinetTool, activateBuildAreaTool, activateChamberTool,
     activateDuctTool, activateJointTool, activateDropDuctTool,
     activateCableTool, activateBundleTool, activatePoleTool,
@@ -65,6 +73,17 @@
 
   const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY;
 
+  // Playwright/E2E only: swaps every basemap for a local, source-less style
+  // spec instead of a live MapTiler URL. MapLibre still fires 'load' and
+  // exposes a real canvas/GL context against `{version:8, sources:{},
+  // layers:[]}` — no network call, no API key needed — so map-tool tests
+  // (click-to-place, drag, etc.) can run in CI without a real MapTiler key
+  // or external network access. Gated on an explicit env var so normal
+  // dev/production builds are byte-for-byte unaffected; see
+  // frontend/tests/e2e/README.md and playwright.config.js.
+  const E2E_TEST_MODE = import.meta.env.VITE_TEST_MODE === '1';
+  const BLANK_STYLE = { version: 8, sources: {}, layers: [] };
+
   // ── Basemap definitions ──────────────────────────────────────────────────────
   const BASEMAPS = [
     { id: 'dark',      label: '⬛  Dark',       style: `https://api.maptiler.com/maps/dataviz-dark/style.json?key=${MAPTILER_KEY}` },
@@ -72,11 +91,12 @@
     { id: 'streets',   label: '⊞  Streets',    style: `https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_KEY}` },
     { id: 'satellite', label: '⊙  Satellite',  style: `https://api.maptiler.com/maps/hybrid/style.json?key=${MAPTILER_KEY}` },
   ];
-  const BASEMAP_STYLE = Object.fromEntries(BASEMAPS.map(b => [b.id, b.style]));
+  const BASEMAP_STYLE = E2E_TEST_MODE
+    ? Object.fromEntries(BASEMAPS.map(b => [b.id, BLANK_STYLE]))
+    : Object.fromEntries(BASEMAPS.map(b => [b.id, b.style]));
 
   let map;
   let is3D = false;   // Conductor opens in 2D by default (agreed 15 Jul 2026)
-  let drawerOpen = false;
   let showBuildings = true;
   let showRoads = true;
   let currentBasemap = 'dark';
@@ -215,145 +235,21 @@
   let activeSession = null;
   let sessionHint = ''; // the "Click an asset to..." hint for the current select-based session — activeToolLabel gets blanked on each pick, so this is what re-arms restore it from
 
-  // validateResults: populated by ValidateRoutesPanel on:results event.
-  // Used by the routes drawer at the bottom of the map.
+  // validateResults: populated by ValidateRoutesPanel on:results. Row
+  // filtering/sorting/CSV moved into RoutesDrawer.svelte with the drawer.
   let validateResults = [];
   let selectedRoute = null;
-  let routeDrawerFilter = 'all';
-  let routeDrawerSearch = '';
 
-  // Routed → Partial → Unserved, always — same ordering fix as Validate
-  // Routes (15 Jul 2026), just without the accordion: this list is short
-  // enough on-screen that a stable sort is all it needs. Applies whether
-  // "All Routes" or a single-status filter is selected — a no-op for the
-  // single-status case (already homogeneous), so one sort covers both.
-  const DRAWER_STATUS_ORDER = { ROUTED: 0, PARTIAL: 1, UNSERVED: 2 };
-  $: drawerRows = validateResults
-    .filter(r => {
-      if (routeDrawerFilter !== 'all' && r.status.toLowerCase() !== routeDrawerFilter) return false;
-      if (routeDrawerSearch) {
-        const q = routeDrawerSearch.toLowerCase();
-        return r.uprn.toLowerCase().includes(q) || r.address.toLowerCase().includes(q);
-      }
-      return true;
-    })
-    .slice()
-    .sort((a, b) => (DRAWER_STATUS_ORDER[a.status] ?? 3) - (DRAWER_STATUS_ORDER[b.status] ?? 3));
+  // Postcode/asset search + project-extent camera helpers live in
+  // mapSearch.js (pure matching split from camera side effects so the
+  // matching/bounds logic is unit-testable — see mapSearch.test.js). The
+  // search box itself lives in TopBar.svelte; it dispatches the query.
+  function onAssetSearch(query) { searchAndZoom(map, projectStore.state, query); }
+  function fitToProject() { fitToProjectExtent(map, projectStore.state); }
 
-  function routeStatusClass(s) { return s === 'ROUTED' ? 'routed' : s === 'PARTIAL' ? 'partial' : 'unserved'; }
-  function capStyle(cap) {
-    if (cap === '100%') return 'color:#4dc8ff;';
-    if (cap === '0%') return 'color:#ff5555;';
-    return 'color:#ffaa44;';
-  }
-
-  let searchQuery = '';
-
-  // Postcode/asset search — the "Zoom to postcode or asset..." bar existed as
-  // a bare placeholder with no handler; this wires it up. Three passes, in
-  // order of cost — cheapest/most-likely first:
-  //   1. Postcode match against addressPoints (spaces-insensitive — "FK20 8RU"
-  //      and "fk208ru" both match). Instant, no network.
-  //   2. Asset ID match across every ID-bearing collection, exact match first,
-  //      then a "starts with" fallback so a partial ID still finds something.
-  //      Instant, no network.
-  //   3. ONLY if the query looks postcode-shaped AND nothing local matched:
-  //      a live geocode via postcodes.io (free, no auth) — covers a postcode
-  //      outside this project's imported premises, matching what v2's
-  //      postcode_zoom.py did. Skipped entirely for non-postcode-shaped
-  //      queries so a mistyped asset ID never costs a network round-trip.
-  //      5s timeout; any failure (offline, timeout, genuinely not a postcode)
-  //      falls through to the same "not found" toast rather than erroring.
-  const UK_POSTCODE_RE = /^[A-Z]{1,2}\d[A-Z\d]?\d[A-Z]{2}$/;
-
-  async function onAssetSearch() {
-    const q = searchQuery.trim();
-    if (!q) return;
-    const qNorm = q.toUpperCase();
-    const qPostcode = qNorm.replace(/\s+/g, '');
-
-    const postcodeMatches = (projectStore.addressPoints || []).filter(a => {
-      const pc = String(a.properties?.postcode || '').replace(/\s+/g, '').toUpperCase();
-      return pc && pc === qPostcode;
-    });
-    if (postcodeMatches.length > 0) {
-      const [lng, lat] = postcodeMatches[0].geometry.coordinates;
-      map.easeTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), postcodeMatches.length > 1 ? 16 : 18), duration: 600 });
-      setSearchMarker(map, lng, lat);
-      showToast(`Found ${postcodeMatches.length} premise(s) at ${q}.`);
-      return;
-    }
-
-    const collections = [
-      { arr: projectStore.chambers,      idProp: 'chamber_id', label: 'Chamber' },
-      { arr: projectStore.ducts,         idProp: 'duct_id',    label: 'Duct' },
-      { arr: projectStore.joints,        idProp: 'joint_id',   label: 'Joint' },
-      { arr: projectStore.dropDucts,     idProp: 'ddct_id',    label: 'Drop Duct' },
-      { arr: projectStore.cables,        idProp: 'cable_id',   label: 'Cable' },
-      { arr: projectStore.bundles,       idProp: 'bundle_id',  label: 'Bundle' },
-      { arr: projectStore.poles,         idProp: 'pole_id',    label: 'Pole' },
-      { arr: projectStore.cbts,          idProp: 'cbt_id',     label: 'CBT' },
-      { arr: projectStore.spans,         idProp: 'span_id',    label: 'Span' },
-      { arr: projectStore.aerialDrops,   idProp: 'adrop_id',   label: 'Aerial Drop' },
-      { arr: projectStore.cbtTails,      idProp: 'tail_id',    label: 'CBT Tail' },
-      { arr: projectStore.addressPoints, idProp: 'uprn',       label: 'Premise' },
-    ];
-
-    let found = null;
-    for (const { arr, idProp, label } of collections) {
-      const exact = (arr || []).find(f => String(f.properties?.[idProp] || '').toUpperCase() === qNorm);
-      if (exact) { found = { feature: exact, label }; break; }
-    }
-    if (!found) {
-      for (const { arr, idProp, label } of collections) {
-        const partial = (arr || []).find(f => String(f.properties?.[idProp] || '').toUpperCase().startsWith(qNorm));
-        if (partial) { found = { feature: partial, label }; break; }
-      }
-    }
-
-    if (found) {
-      const geom = found.feature.geometry;
-      let center = null;
-      if (geom?.type === 'Point') center = geom.coordinates;
-      else if (geom?.type === 'LineString' && geom.coordinates?.length) center = geom.coordinates[Math.floor(geom.coordinates.length / 2)];
-
-      if (center) {
-        map.easeTo({ center, zoom: Math.max(map.getZoom(), 18), duration: 600 });
-        setSearchMarker(map, center[0], center[1]);
-        showToast(`Found ${found.label} ${q}.`);
-      } else {
-        showToast(`Found ${found.label} ${q}, but it has no location to zoom to.`);
-      }
-      return;
-    }
-
-    if (UK_POSTCODE_RE.test(qPostcode)) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
-        const res = await fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(qPostcode)}`, { signal: controller.signal });
-        clearTimeout(timeoutId);
-        if (res.ok) {
-          const data = await res.json();
-          const { longitude, latitude } = data.result || {};
-          if (typeof longitude === 'number' && typeof latitude === 'number') {
-            map.easeTo({ center: [longitude, latitude], zoom: Math.max(map.getZoom(), 15), duration: 600 });
-            setSearchMarker(map, longitude, latitude);
-            showToast(`Found ${q} via postcodes.io — not in this project's imported premises.`);
-            return;
-          }
-        }
-        // 404 (not a real postcode) or an unexpected response shape — fall
-        // through to the generic "not found" toast below, same as before.
-      } catch (e) {
-        // Offline, timed out, or postcodes.io is down — fail quietly to the
-        // same "not found" toast rather than surfacing a raw network error.
-        console.error('[search] postcodes.io lookup failed:', e);
-      }
-    }
-
-    showToast(`No postcode or asset matching "${q}" found in this project.`);
-  }
+  // Active project id for the TopBar's Open menu highlight — recomputed on
+  // every store mutation (storeVersion bump) so it tracks project switches.
+  $: activeProjectIdForMenu = (storeVersion, projectStore.activeId());
 
   function onDrawerRowClick(r) {
     selectedRoute = r.uprn;
@@ -365,159 +261,10 @@
     }
   }
 
-  // ── Fit the camera to whatever a project actually contains ─────────────────
-  // The map's initial center (in setupMap below) is a fixed fallback point —
-  // fine for a brand-new project, useless once a real project loads: without
-  // this, resuming/opening a project leaves the camera sitting wherever it
-  // happened to be, which for the very first load is that hardcoded fallback,
-  // nowhere near the actual build. Walks every collection's geometry (not
-  // just build area or cabinet, since early-stage projects may have neither
-  // yet) and fits to the union. No-op if the project is genuinely empty.
-  function projectBounds() {
-    let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
-    let found = false;
-    const addCoord = (c) => {
-      if (!c || c.length < 2) return;
-      const [lng, lat] = c;
-      if (lng < minLng) minLng = lng;
-      if (lng > maxLng) maxLng = lng;
-      if (lat < minLat) minLat = lat;
-      if (lat > maxLat) maxLat = lat;
-      found = true;
-    };
-    const addGeom = (geom) => {
-      if (!geom) return;
-      if (geom.type === 'Point') addCoord(geom.coordinates);
-      else if (geom.type === 'LineString') geom.coordinates.forEach(addCoord);
-      else if (geom.type === 'MultiLineString') geom.coordinates.forEach(ls => ls.forEach(addCoord));
-      else if (geom.type === 'Polygon') geom.coordinates.forEach(ring => ring.forEach(addCoord));
-      else if (geom.type === 'MultiPolygon') geom.coordinates.forEach(poly => poly.forEach(ring => ring.forEach(addCoord)));
-    };
-
-    const s = projectStore;
-    if (s.cabinet) addGeom(s.cabinet.geometry);
-    if (s.buildArea) addGeom(s.buildArea.geometry);
-    const collections = ['chambers', 'ducts', 'joints', 'dropDucts', 'cables', 'bundles',
-                          'poles', 'cbts', 'spans', 'aerialDrops', 'cbtTails', 'addressPoints'];
-    for (const key of collections) {
-      for (const f of (s[key] || [])) addGeom(f.geometry);
-    }
-
-    return found ? [[minLng, minLat], [maxLng, maxLat]] : null;
-  }
-
-  function fitToProject() {
-    if (!map) return;
-    const bounds = projectBounds();
-    if (!bounds) return;   // genuinely empty project — leave the fallback view
-    map.fitBounds(bounds, { padding: 80, maxZoom: 17, duration: 600 });
-  }
-
-  function exportRoutesCsv() {
-    if (!validateResults.length) return;
-    const hdr = 'UPRN,Address,Status,Reason,Length(m)';
-    const rows = validateResults.map(r => `"${r.uprn}","${r.address.replace(/"/g,'""')}","${r.status}","${(r.reason||'').replace(/"/g,'""')}","${r.lengthM}"`);
-    const blob = new Blob([hdr + '\n' + rows.join('\n')], { type: 'text/csv' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'validate_routes.csv'; a.click();
-  }
-
-  // ── Map layer setup (called on first load AND after every basemap switch) ────
-  // All our custom sources, layers, terrain, 3D poles, and data go through here.
-  // Defensive throughout — every addLayer/addSource is guarded so re-calling on
-  // an already-set-up map is a no-op.
-  function setupMapLayers(map) {
-    // 1. GeoJSON sources + non-terrain symbol layers (chambers, joints, labels etc.)
-    ensureSources(map);
-
-    // 2. Terrain DEM source + elevation
-    if (!map.getSource('terrain')) {
-      map.addSource('terrain', {
-        type: 'raster-dem',
-        url: `https://api.maptiler.com/tiles/terrain-rgb-v2/tiles.json?key=${MAPTILER_KEY}`,
-        tileSize: 256,
-      });
-    }
-    map.setTerrain({ source: 'terrain', exaggeration: 1.5 });
-
-    // 3. Terrain-dependent line layers + 3D pole CustomLayerInterface
-    ensureTerrainLayers(map);
-
-    // 4. Decorative vector overlay layers (buildings + neon roads).
-    //    Guarded behind a source check — satellite/hybrid raster styles may not
-    //    expose `maptiler_planet` vector tiles, or the transportation source-layer
-    //    may not exist; defensive try/catch prevents a hard crash.
-    if (map.getSource('maptiler_planet')) {
-      if (!map.getLayer('buildings-3d')) {
-        try {
-          map.addLayer({
-            id: 'buildings-3d',
-            source: 'maptiler_planet',
-            'source-layer': 'building',
-            type: 'fill-extrusion',
-            minzoom: 14,
-            paint: {
-              'fill-extrusion-color': '#ffffff',
-              'fill-extrusion-height': ['get', 'render_height'],
-              'fill-extrusion-base': ['get', 'render_min_height'],
-              'fill-extrusion-opacity': 0.3,
-            },
-          });
-        } catch (e) {
-          console.warn('[basemap] buildings-3d not available in this style:', e.message);
-        }
-      }
-
-      if (!map.getLayer('roads-glow')) {
-        try {
-          map.addLayer({
-            id: 'roads-glow',
-            source: 'maptiler_planet',
-            'source-layer': 'transportation',
-            type: 'line',
-            filter: ['in', 'class', 'motorway', 'primary', 'secondary', 'tertiary', 'residential'],
-            paint: {
-              'line-color': '#ff00aa',
-              'line-width': ['interpolate', ['linear'], ['zoom'], 12, 6, 16, 16],
-              'line-blur': 10,
-              'line-opacity': 0.6,
-            },
-          });
-        } catch (e) {
-          console.warn('[basemap] roads-glow not available in this style:', e.message);
-        }
-      }
-
-      if (!map.getLayer('roads-neon')) {
-        try {
-          map.addLayer({
-            id: 'roads-neon',
-            source: 'maptiler_planet',
-            'source-layer': 'transportation',
-            type: 'line',
-            filter: ['in', 'class', 'motorway', 'primary', 'secondary', 'tertiary', 'residential'],
-            paint: {
-              'line-color': '#ff44cc',
-              'line-width': ['interpolate', ['linear'], ['zoom'], 12, 1, 16, 2],
-              'line-opacity': 0.9,
-            },
-          });
-        } catch (e) {
-          console.warn('[basemap] roads-neon not available in this style:', e.message);
-        }
-      }
-    }
-
-    // 5. Restore building + road visibility from current toggle state
-    if (map.getLayer('buildings-3d')) {
-      map.setLayoutProperty('buildings-3d', 'visibility', showBuildings ? 'visible' : 'none');
-    }
-    const roadVis = showRoads ? 'visible' : 'none';
-    if (map.getLayer('roads-glow')) map.setLayoutProperty('roads-glow', 'visibility', roadVis);
-    if (map.getLayer('roads-neon')) map.setLayoutProperty('roads-neon', 'visibility', roadVis);
-
-    // 6. Push all stored GeoJSON data into sources
-    syncToMap(map);
-  }
+  // Map-layer (re)build lives in mapLayers.js — see setupMapLayers() there.
+  // Called on first load AND after every basemap switch, with the current
+  // toggle state passed explicitly.
+  const layerOpts = () => ({ maptilerKey: MAPTILER_KEY, showBuildings, showRoads });
 
   onMount(() => {
     map = new maplibregl.Map({
@@ -533,9 +280,18 @@
     // directly without a re-deploy each time. Unconditional (not gated on DEV) so it
     // also works on the live Netlify build. REMOVE once the plant-gen issue is solved.
     window.map = map;
+    // E2E test seams (guarded — only in VITE_TEST_MODE, never in a production
+    // build). Let the branch-classification acceptance spec load a ready-made
+    // design and open a right-panel deterministically, instead of driving the
+    // map canvas and the radial tool wheel (both far too brittle headless).
+    if (E2E_TEST_MODE) {
+      window.__conductorSeed = (state) => { projectStore.restoreState(state); };
+      window.__conductorOpenPanel = (mode) => { rpMode = mode; };
+      window.__conductorStore = projectStore;
+    }
 
     map.on('load', () => {
-      setupMapLayers(map);
+      setupMapLayers(map, layerOpts());
       // Enforce the current view's camera lock from the start (handler enable/disable
       // state lives on the Map instance and persists across basemap style reloads).
       applyCameraLock(is3D);
@@ -588,7 +344,7 @@
       map.jumpTo({ center, zoom, pitch, bearing });
 
       // Rebuild every custom layer and repopulate data
-      setupMapLayers(map);
+      setupMapLayers(map, layerOpts());
 
       basemapSwitching = false;
     });
@@ -657,6 +413,10 @@
     clearTool(map);
     if (map && map.getSource('build-area-src')) {
       map.getSource('build-area-src').setData({ type: 'FeatureCollection', features: [] });
+      // Direct source write outside syncToMap -- drop the cache entry so the next
+      // sync re-pushes from store state (restores a pre-existing build area that
+      // this cancel visually cleared).
+      invalidateSyncSource('build-area-src');
     }
   }
 
@@ -1293,6 +1053,37 @@
     rpMode = 'default';
   }
 
+  // ── branch classification (release-audit §3 / paid-beta gate) ───────────────
+  // Opens the resolution list where a user classifies every inferred
+  // PASS_THROUGH vs SPLITTER_OUTPUT branch, then re-runs planning — all in-app.
+  function onBranchClassify() {
+    if (stage !== 'design') return;
+    clearTool(map);
+    activeToolLabel = '';
+    rpMode = 'branch-classify';
+  }
+  // A single-branch resolve wrote feed_mode to the store (storeVersion already
+  // bumped) — just reflect the change on the map.
+  function onBranchClassifyChanged() {
+    syncToMap(map);
+  }
+  // Re-run the demand-driven planner over the freshly classified network. Same
+  // path as Auto-Assign: assignFibres → applyFibreAssignment stamps the plan
+  // status + input fingerprint, so physicalPlanReady() opens the export gate the
+  // moment the plan validates, and closes it again on any later edit.
+  function onBranchReplan() {
+    const result = assignFibres(projectStore.state);
+    if (!result.ok) { showToast(result.reason); return; }
+    projectStore.applyFibreAssignment(result);
+    syncToMap(map);
+    fibreAssignResult = result;
+    if (result.physicalPlanStatus === 'VALIDATED') showToast('Physical plan validated — splice export available.');
+    else showToast('Physical plan: ' + (result.physicalPlanStatus || 'not validated') + '. Resolve remaining branches, then re-run.');
+  }
+  function onBranchClassifyClose() {
+    rpMode = 'default';
+  }
+
   // ── fibre-count (Tier 2) ─────────────────────────────────────────────────
   // Not a map-click tool — runs the utilisation calculation over all cables +
   // spans, shows a panel with per-segment stats. Clicking a segment row in the
@@ -1405,6 +1196,23 @@
     if (toolId === 'fibre-trace')         onFibreTrace();
     if (toolId === 'fibre-assign')        onFibreAssign();
     if (toolId === 'fibre-count')         onFibreCount();
+    if (toolId === 'branch-classify')     onBranchClassify();
+  }
+
+  // ✕ on the active-tool chip — full tool teardown. Extracted from the chip's
+  // inline handler when ActiveToolChip became its own component.
+  function onToolChipCancel() {
+    clearTool(map);
+    activeToolLabel = '';
+    activeToolId    = '';
+    rpMode = 'default';
+    pendingBuildArea = null;
+    pendingCabinet = null;
+    fibreTraceResult = null;
+    fibreCountResult = null;
+    clearTraceHighlight(map);
+    clearCountHighlight(map);
+    if (map.getSource('ba-rubber-src')) map.getSource('ba-rubber-src').setData({ type: 'FeatureCollection', features: [] });
   }
 
   // Lock/unlock the camera's pitch + bearing interaction. In 2D we disable the
@@ -1449,18 +1257,10 @@
     if (map.getLayer('roads-neon')) map.setLayoutProperty('roads-neon', 'visibility', vis);
   }
 
-  let showOpen = false;
-  let projectList = [];
-
   // ── File System Access (durable .conductor file) ──────────────────────────
   let fsaa = { status: 'no-file', lastSaved: null, fileName: null, supported: false };
   let fsaaResume = null;   // { fileName } when a saved file is waiting for a resume click
   fsaaOnStatus(s => { fsaa = s; });
-
-  function fmtSaved(ts) {
-    if (!ts) return '';
-    return new Date(ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  }
 
   async function onSaveToFile() {
     try { await fsaaSaveAs(); }
@@ -1488,10 +1288,10 @@
   }
 
   // ── Map sheet export (PNG/SVG) — 2D only ──────────────────────────────────
-  let showExport = false;
+  // The export dropdown itself lives in TopBar.svelte; it closes itself and
+  // dispatches the chosen format here.
   let exporting = false;
   async function doExport(format) {
-    showExport = false;
     if (is3D) { showToast('Switch to 2D view before exporting the map.'); return; }
     if (!map) return;
     exporting = true;
@@ -1511,7 +1311,6 @@
   // CAD sheet (beta): vector technical HLD plot. Additive — reuses the same 2D
   // guard and dropdown as the map export but calls the standalone cadExport.js.
   async function doCadExport(format) {
-    showExport = false;
     if (is3D) { showToast('Switch to 2D view before exporting the CAD sheet.'); return; }
     if (!map) return;
     exporting = true;
@@ -1538,11 +1337,8 @@
     await onSaveToFile();
   }
 
-  function refreshList() { projectList = projectStore.listProjects(); }
-
   function newProject() {
     if (!confirm('Start a new project? Your current project stays saved and can be re-opened.')) return;
-    showOpen = false;
     projectStore.newProject();
     rpMode = 'default';
     activeToolLabel = '';
@@ -1550,7 +1346,6 @@
   }
 
   function openProject(id) {
-    showOpen = false;
     const result = projectStore.openProject(id);
 
     if (result.ok) {
@@ -1585,7 +1380,6 @@
     if (!confirm(`Delete "${name || 'this project'}"? This can't be undone.`)) return;
     const wasActive = id === projectStore.activeId();
     projectStore.deleteProject(id);
-    refreshList();
     if (wasActive) {
       // The project we just deleted was the one open on screen — fall back to
       // a fresh project rather than leaving the UI pointed at a dead id.
@@ -1597,181 +1391,67 @@
   }
 </script>
 
-<svelte:window on:click={() => { showOpen = false; showExport = false; }} on:keydown={onKeydown} />
+<svelte:window on:keydown={onKeydown} />
 
 <div class="screen">
 
   {#if showSaveNudge}
-    <div class="save-nudge" role="alert">
-      <span>Save this project to a file? Keeps your work safe on disk with autosave.</span>
-      <button class="sn-save" on:click={onNudgeSave}>Save File</button>
-      <button class="sn-dismiss" on:click={dismissNudge} title="Dismiss">✕</button>
-    </div>
+    <SaveNudge on:save={onNudgeSave} on:dismiss={dismissNudge} />
   {/if}
 
   {#if stage === 'setup'}
     <ProjectSetup on:create={onProjectCreated} />
   {/if}
 
-  <div class="topbar">
-    <div class="tb-logo">
-      <div class="logo-main">CONDUCTOR</div>
-      <div class="logo-sub">FTTP DESIGN</div>
-    </div>
-    <div class="tb-stats">
-      {#if project}
-        <div class="stat"><div class="sv neu" style="font-size:11px;">{project.name}</div><div class="sl">{project.areaId}</div></div>
-      {:else}
-        <div class="stat"><div class="sv neu" style="font-size:11px;">No Project</div><div class="sl">—</div></div>
-      {/if}
-      <div class="stat"><div class="sv neu">{cheapStats.premises || '—'}</div><div class="sl">Premises</div></div>
-      <div class="stat" title={statsStale ? 'Stale — re-run Validate Routes' : ''}>
-        <div class="sv ok">{routeStats.routed !== null ? routeStats.routed : '—'}{statsStale ? '*' : ''}</div>
-        <div class="sl">Routed</div>
-      </div>
-      <div class="stat" title={statsStale ? 'Stale — re-run Validate Routes' : ''}>
-        <div class="sv wrn">{routeStats.partial !== null ? routeStats.partial : '—'}{statsStale ? '*' : ''}</div>
-        <div class="sl">Partial</div>
-      </div>
-      <div class="stat" title={statsStale ? 'Stale — re-run Validate Routes' : ''}>
-        <div class="sv bad">{routeStats.unserved !== null ? routeStats.unserved : '—'}{statsStale ? '*' : ''}</div>
-        <div class="sl">Unserved</div>
-      </div>
-      <div class="stat"><div class="sv neu">{cheapStats.fibre_km != null ? cheapStats.fibre_km + 'km' : '—'}</div><div class="sl">Fibre</div></div>
-      <div class="stat"><div class="sv neu">{cheapStats.duct_km != null ? cheapStats.duct_km + 'km' : '—'}</div><div class="sl">Duct</div></div>
-      <div class="stat" style="border-right:none;"><div class="sv neu">{cheapStats.materials_cost ? '£' + cheapStats.materials_cost.toLocaleString('en-GB', {maximumFractionDigits:0}) : '—'}</div><div class="sl">Est. Materials</div></div>
-    </div>
-    <div class="tb-centre">
-      <div class="tb-grp-wrap">
-        <div class="tb-grp-lbl">Validation</div>
-        <div class="tb-grp">
-          <button class="tb-btn hi" disabled={stage !== 'design'} on:click={onValidateRoutes}>✓ Validate Routes</button>
-          <button class="tb-btn hi" disabled={stage !== 'design'} on:click={onDesignHealth}>⚡ Design Health</button>
-        </div>
-      </div>
-      <div class="tb-sep"></div>
-      <div class="tb-grp-wrap">
-        <div class="tb-grp-lbl">Outputs</div>
-        <div class="tb-grp">
-          <button class="tb-btn" disabled={stage !== 'design'} on:click={onSplicePlan}>Splice Plan</button>
-          <button class="tb-btn" disabled={stage !== 'design'} on:click={onSld}>SLD</button>
-          <button class="tb-btn" disabled={stage !== 'design'} on:click={onBom}>Bill of Materials</button>
-        </div>
-      </div>
-    </div>
-    <div class="tb-right">
-      <div style="display:flex;align-items:center;gap:6px;">
-        <input class="srch" placeholder="Zoom to postcode or asset..." bind:value={searchQuery} on:keydown={(e) => e.key === 'Enter' && onAssetSearch()} />
-        <button class="go" on:click={onAssetSearch}>GO</button>
-      </div>
-      <div class="vtog">
-        <button class="vt" class:on={is3D} on:click={() => setView(true)}>3D</button>
-        <button class="vt" class:on={!is3D} on:click={() => setView(false)}>2D</button>
-      </div>
-      {#if fsaa.supported}
-        {#if fsaaResume}
-          <button class="tb-resume" on:click={onResumeFile} title="Reconnect to your last project file">↻ Resume {fsaaResume.fileName}</button>
-        {/if}
-        <div class="fsaa-grp">
-          <button class="tb-new" on:click={onSaveToFile} title="Save project to a file on disk">⤓ Save File</button>
-          <button class="tb-new" on:click={onOpenFile}  title="Open a .conductor file from disk">⤢ Open File</button>
-          <span class="fsaa-ind"
-                class:saved={fsaa.status === 'saved'}
-                class:saving={fsaa.status === 'saving'}
-                class:unsaved={fsaa.status === 'unsaved'}
-                class:error={fsaa.status === 'error'}
-                title={fsaa.fileName || ''}>
-            {#if fsaa.status === 'saving'}Saving…
-            {:else if fsaa.status === 'saved'}Saved {fmtSaved(fsaa.lastSaved)}
-            {:else if fsaa.status === 'unsaved'}Unsaved…
-            {:else if fsaa.status === 'error'}⚠ Not saved
-            {:else}No file{/if}
-          </span>
-        </div>
-      {/if}
-      <div class="tb-open-wrap">
-        <button class="tb-new" class:tb-disabled={is3D || exporting}
-                on:click|stopPropagation={() => { if (!is3D && !exporting) showExport = !showExport; }}
-                title={is3D ? 'Switch to 2D view to export the map' : 'Export map sheet (legend, totals, scale)'}>
-          {exporting ? '⏳ Exporting…' : '⎙ Export ▾'}
-        </button>
-        {#if showExport && !is3D}
-          <div class="tb-open-menu" on:click|stopPropagation>
-            <button class="tb-open-item exp-item" on:click={() => doExport('svg')}>SVG — vector, editable</button>
-            <button class="tb-open-item exp-item" on:click={() => doExport('png')}>PNG — image</button>
-            <button class="tb-open-item exp-item" on:click={() => doCadExport('svg')}>CAD Sheet (beta) — SVG</button>
-            <button class="tb-open-item exp-item" on:click={() => doCadExport('png')}>CAD Sheet (beta) — PNG</button>
-          </div>
-        {/if}
-      </div>
-      <button class="tb-new" on:click={newProject} title="New Project">+ New</button>
-      <div class="tb-open-wrap">
-        <button class="tb-new" on:click|stopPropagation={() => { refreshList(); showOpen = !showOpen; }} title="Open Project">Open ▾</button>
-        {#if showOpen}
-          <div class="tb-open-menu" on:click|stopPropagation role="menu" tabindex="-1">
-            {#if projectList.length === 0}
-              <div class="tb-open-empty">No saved projects</div>
-            {:else}
-              {#each projectList as p}
-                <div class="tb-open-row">
-                  <button class="tb-open-item" class:active={p.id === projectStore.activeId()} on:click={() => openProject(p.id)}>
-                    <span class="oi-name">{p.name}</span>
-                    <span class="oi-area">{p.areaId}</span>
-                  </button>
-                  <button class="tb-open-del" title="Delete project" on:click|stopPropagation={() => onDeleteProject(p.id, p.name)}>🗑</button>
-                </div>
-              {/each}
-            {/if}
-          </div>
-        {/if}
-      </div>
-    </div>
-  </div>
+  <TopBar
+    {project}
+    {cheapStats}
+    {routeStats}
+    {statsStale}
+    {stage}
+    {is3D}
+    {exporting}
+    {fsaa}
+    {fsaaResume}
+    activeProjectId={activeProjectIdForMenu}
+    on:validateRoutes={onValidateRoutes}
+    on:designHealth={onDesignHealth}
+    on:splicePlan={onSplicePlan}
+    on:sld={onSld}
+    on:bom={onBom}
+    on:search={(e) => onAssetSearch(e.detail)}
+    on:setView={(e) => setView(e.detail)}
+    on:resumeFile={onResumeFile}
+    on:saveFile={onSaveToFile}
+    on:openFile={onOpenFile}
+    on:export={(e) => doExport(e.detail)}
+    on:cadExport={(e) => doCadExport(e.detail)}
+    on:newProject={newProject}
+    on:openProject={(e) => openProject(e.detail)}
+    on:deleteProject={(e) => onDeleteProject(e.detail.id, e.detail.name)}
+  />
 
   <div class="body">
 
-    <div class="sidebar">
-      {#if stage === 'import'}
-        <div class="sid-lbl">Step 1</div>
-        <button class="cat-pill on" on:click={() => rpMode = 'address-import'}>⬆ Import Address Data</button>
-        <div class="sid-hint">Import a CSV or SHP of address data to inform your build area boundary.</div>
-      {:else if stage === 'build-area'}
-        <div class="sid-lbl">Step 2</div>
-        <button class="cat-pill on" on:click={onDrawBuildArea}>⬡ Draw Build Area</button>
-        <div class="sid-hint">Click corners on the map to define your build area polygon. Right-click to finish.</div>
-      {:else if stage === 'cabinet'}
-        <div class="sid-lbl">Step 3</div>
-        <button class="cat-pill on" on:click={onPlaceCabinet}>■ Place Cabinet / POP</button>
-        <div class="sid-hint">Place your cabinet or POP. All design tools unlock after this step.</div>
-      {:else if stage === 'design'}
-        <div class="sid-lbl">Build Tools</div>
-        <button class="cat-pill" class:on={activeCat==='civil'}  on:click={() => activeCat='civil'}>⬡ Civil</button>
-        <button class="cat-pill" class:on={activeCat==='fibre'}  on:click={() => activeCat='fibre'}>⌁ Fibre</button>
-        <button class="cat-pill" class:on={activeCat==='aerial'} on:click={() => activeCat='aerial'}>⌒ Aerial &amp; Poles</button>
-        <button class="cat-pill" class:on={activeCat==='pia'}    on:click={() => activeCat='pia'}>⬛ PIA Underground</button>
-        <div class="sid-div"></div>
-        <div class="sid-lbl">Asset Tools</div>
-        <button class="asset-btn" on:click={onEditAsset}>✎ Edit Asset</button>
-        <button class="asset-btn" on:click={onDeleteAsset}>✕ Delete Asset</button>
-        <button class="asset-btn" on:click={onMoveAsset}>⇄ Move Asset</button>
-        <button class="asset-btn" class:on={showBuildings} on:click={toggleBuildings}>⌂ Buildings</button>
-        <button class="asset-btn" class:on={showRoads} on:click={toggleRoads}>▬ Roads</button>
-        <div class="sid-basemap-dock">
-          <div class="sid-div"></div>
-          <div class="sid-lbl">Basemap</div>
-          <div class="basemap-wrap">
-            {#each BASEMAPS as bm}
-              <button
-                class="basemap-btn"
-                class:on={currentBasemap === bm.id}
-                disabled={basemapSwitching}
-                on:click={() => changeBasemap(bm.id)}
-              >{bm.label}</button>
-            {/each}
-          </div>
-        </div>
-      {/if}
-    </div>
+    <Sidebar
+      {stage}
+      {activeCat}
+      {showBuildings}
+      {showRoads}
+      basemaps={BASEMAPS}
+      {currentBasemap}
+      {basemapSwitching}
+      on:importAddresses={() => rpMode = 'address-import'}
+      on:drawBuildArea={onDrawBuildArea}
+      on:placeCabinet={onPlaceCabinet}
+      on:selectCat={(e) => activeCat = e.detail}
+      on:editAsset={onEditAsset}
+      on:deleteAsset={onDeleteAsset}
+      on:moveAsset={onMoveAsset}
+      on:toggleBuildings={toggleBuildings}
+      on:toggleRoads={toggleRoads}
+      on:changeBasemap={(e) => changeBasemap(e.detail)}
+    />
 
     <div class="map-wrap">
       <div id="map"></div>
@@ -1788,74 +1468,14 @@
       {/if}
 
       {#if activeToolLabel}
-        <div class="active-chip">
-          <div class="chip-dot"></div>
-          <span>{activeToolLabel}</span>
-          {#if activeToolId}
-            <a
-              href={docsUrl(activeToolId)}
-              target="_blank"
-              rel="noopener"
-              class="chip-help"
-              title={toolTip(activeToolId)}
-              on:click|stopPropagation
-            >ⓘ</a>
-          {/if}
-          <button class="chip-cancel" on:click={() => {
-            clearTool(map);
-            activeToolLabel = '';
-            activeToolId    = '';
-            rpMode = 'default';
-            pendingBuildArea = null;
-            pendingCabinet = null;
-            fibreTraceResult = null;
-            fibreCountResult = null;
-            clearTraceHighlight(map);
-            clearCountHighlight(map);
-            if (map.getSource('ba-rubber-src')) map.getSource('ba-rubber-src').setData({ type: 'FeatureCollection', features: [] });
-          }}>✕</button>
-        </div>
+        <ActiveToolChip label={activeToolLabel} toolId={activeToolId} on:cancel={onToolChipCancel} />
       {/if}
 
-      <div class="routes-drawer" style="height:{drawerOpen ? '220px' : '36px'};">
-        <div class="routes-handle" on:click={() => drawerOpen = !drawerOpen}>
-          <span class="handle-title">Routes</span>
-          <span class="handle-count">{drawerRows.length}</span>
-          <select class="handle-filter" bind:value={routeDrawerFilter} on:click|stopPropagation>
-            <option value="all">All Routes</option>
-            <option value="routed">Routed</option>
-            <option value="partial">Partial</option>
-            <option value="unserved">Unserved</option>
-          </select>
-          <input class="handle-search" placeholder="Search routes..." bind:value={routeDrawerSearch} on:click|stopPropagation />
-          <button class="handle-csv" on:click|stopPropagation={exportRoutesCsv}>↓ CSV</button>
-          <button class="handle-toggle">{drawerOpen ? '▼' : '▲'}</button>
-        </div>
-        {#if drawerOpen}
-        <div class="routes-table-wrap">
-          {#if validateResults.length === 0}
-            <div style="padding:14px 16px;font-size:8.5px;color:#3a5a70;letter-spacing:0.04em;">Run ✓ Validate Routes to populate this table.</div>
-          {:else}
-          <table class="routes-table">
-            <thead><tr>
-              <th>Status</th><th>UPRN</th><th>Address</th><th>Length</th><th>Reason</th>
-            </tr></thead>
-            <tbody>
-              {#each drawerRows as r}
-                <tr class:sel={selectedRoute === r.uprn} on:click={() => onDrawerRowClick(r)}>
-                  <td><span class="status-pill {routeStatusClass(r.status)}">{r.status}</span></td>
-                  <td style="color:#4dc8ff;font-weight:600;">{r.uprn}</td>
-                  <td>{r.address}</td>
-                  <td>{r.lengthM ? r.lengthM + 'm' : '—'}</td>
-                  <td style="color:#6a8fa8;">{r.reason || '—'}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-          {/if}
-        </div>
-        {/if}
-      </div>
+      <RoutesDrawer
+        results={validateResults}
+        {selectedRoute}
+        on:rowClick={(e) => onDrawerRowClick(e.detail)}
+      />
     </div>
 
     <div class="rpanel">
@@ -1913,47 +1533,18 @@
         <PIADropForm pending={pendingPIADrop} on:save={onPIADropSaved} on:cancel={onPIADropCancelled} />
 
       {:else if rpMode === 'fibre-trace'}
-        <FibreTracePanel result={fibreTraceResult} on:close={onFibreTraceClose} on:downloadRouteSplice={onDownloadRouteSplice} />
+        <FibreTracePanel result={fibreTraceResult} canExportSplice={(storeVersion, physicalPlanReady(projectStore.state))} on:close={onFibreTraceClose} on:downloadRouteSplice={onDownloadRouteSplice} />
 
       {:else if rpMode === 'fibre-assign'}
-        <div class="fa-panel">
-          <div class="fa-hdr">
-            <span class="fa-title">Auto-Assign Fibres</span>
-            <button class="fa-close" on:click={onFibreAssignClose} title="Dismiss">✕</button>
-          </div>
-          {#if fibreAssignResult}
-            <div class="fa-stats">
-              <div class="fa-stat"><div class="fa-sv ok">{fibreAssignResult.stats.assigned}</div><div class="fa-sl">Assigned</div></div>
-              <div class="fa-stat"><div class="fa-sv">{fibreAssignResult.stats.splitters}</div><div class="fa-sl">Splitters</div></div>
-              <div class="fa-stat"><div class="fa-sv">{fibreAssignResult.stats.spare}</div><div class="fa-sl">Spare</div></div>
-              <div class="fa-stat"><div class="fa-sv {fibreAssignResult.stats.overcap ? 'bad' : ''}">{fibreAssignResult.stats.overcap}</div><div class="fa-sl">Over-cap</div></div>
-            </div>
-            <div class="fa-sub">
-              {fibreAssignResult.stats.feeders} feeder (1:4) · {fibreAssignResult.stats.terminals} terminal splitter{fibreAssignResult.stats.terminals === 1 ? '' : 's'}
-            </div>
+        <FibreAssignPanel result={fibreAssignResult} on:close={onFibreAssignClose} />
 
-            {#if fibreAssignResult.flags.length}
-              <div class="fa-flags">
-                <div class="fa-flags-lbl">⚠ {fibreAssignResult.flags.length} warning{fibreAssignResult.flags.length === 1 ? '' : 's'}</div>
-                {#each fibreAssignResult.flags as fl}
-                  <div class="fa-flag">{fl}</div>
-                {/each}
-              </div>
-            {/if}
-
-            <div class="fa-log-lbl">Log</div>
-            <div class="fa-log">
-              {#each fibreAssignResult.log as line}
-                <div class="fa-log-line">{line}</div>
-              {/each}
-            </div>
-
-            <div class="fa-note">Click a CBT with “Edit Asset” to see its splitter port grid.</div>
-          {/if}
-          <div class="fa-actions">
-            <button class="fa-done" on:click={onFibreAssignClose}>Done</button>
-          </div>
-        </div>
+      {:else if rpMode === 'branch-classify'}
+        <BranchClassificationPanel
+          storeVersion={storeVersion}
+          planStatus={(storeVersion, projectStore.physicalPlanStatus)}
+          on:changed={onBranchClassifyChanged}
+          on:replan={onBranchReplan}
+          on:close={onBranchClassifyClose} />
 
       {:else if rpMode === 'fibre-count'}
         <FibreCountPanel
@@ -1996,69 +1587,23 @@
         <CabinetCostPanel on:close={onCabinetCostClose} />
 
       {:else}
-        <div class="rp-hdr">
-          <span class="rp-hdr-title">Validation Summary</span>
-          <span class="rp-timestamp">—</span>
-          <button class="rp-refresh">↻</button>
-          <button class="health-btn" disabled={stage !== 'design'} on:click={onDesignHealth}>✓ Health</button>
-        </div>
-        <div class="val-body">
-          <div class="val-counts">
-            <div class="vc"><div class="vc-val bad">0</div><div class="vc-lbl">Critical</div></div>
-            <div class="vc"><div class="vc-val bad">{routeStats.partial !== null ? routeStats.partial : '—'}</div><div class="vc-lbl">Errors</div></div>
-            <div class="vc"><div class="vc-val wrn">0</div><div class="vc-lbl">Warnings</div></div>
-            <div class="vc"><div class="vc-val neu">{cheapStats.premises || '—'}</div><div class="vc-lbl">Total</div></div>
-          </div>
-          <div class="int-row"><span class="int-k">Network Integrity</span><span class="int-v">{routeStats.routed !== null ? Math.round(routeStats.routed / Math.max(routeStats.routed + routeStats.partial, 1) * 100) + '%' : '—'}</span></div>
-          <div class="int-bar"><div class="int-fill" style="width:{routeStats.routed !== null ? Math.round(routeStats.routed / Math.max(routeStats.routed + routeStats.partial, 1) * 100) : 3}%"></div></div>
-          <div class="checks-note">
-            {#if stage === 'setup' || stage === 'import'}
-              Create a project and import address data to begin.
-            {:else if stage === 'build-area'}
-              Draw your build area boundary to continue.
-            {:else if stage === 'cabinet'}
-              Place a cabinet to unlock all design tools.
-            {:else if routeStats.routed !== null && statsStale}
-              Results stale — re-run Validate Routes after design changes.
-            {:else if routeStats.routed !== null}
-              {routeStats.routed} routed · {routeStats.partial} partial · {routeStats.unserved} unserved
-            {:else}
-              Click ✓ Validate Routes to check fibre connectivity.
-            {/if}
-          </div>
-        </div>
-
-        <div class="outputs-section">
-          <div class="outputs-lbl">Engineer Outputs</div>
-          <button class="out-btn" disabled={stage !== 'design'} on:click={onValidateRoutes}>↗ Validate Fibre Routes</button>
-          <button class="out-btn" disabled={stage !== 'design'} on:click={onSplicePlan}>↗ Splice Plan Export</button>
-          <button class="out-btn" disabled={stage !== 'design'} on:click={onSld}>↗ Single Line Diagram</button>
-          <button class="out-btn" disabled={stage !== 'design'} on:click={onBom}>↗ Bill of Materials</button>
-          <button class="out-btn" disabled={stage !== 'design'} on:click={onCabinetCost}>↗ Cabinet Cost Calculator</button>
-        </div>
-
-          <div class="rp-splitter"></div>
-
-          <div class="asset-section">
-            {#if selectedAsset}
-              <AssetEditPanel
-                selected={selectedAsset}
-                on:saved={onAssetPanelSaved}
-                on:deleted={onAssetPanelDeleted}
-                on:move={onAssetPanelMove}
-                on:close={onAssetPanelClose}
-              />
-            {:else}
-              <div class="asset-hdr">
-                <div class="asset-hdr-lbl">Selected Asset</div>
-                <div class="asset-type">—</div>
-                <div class="asset-id">—</div>
-              </div>
-              <div class="asset-body" style="padding:12px 14px;font-size:11px;color:#6ba3c7;letter-spacing:0.03em;line-height:1.8;">
-                Use Edit Asset to select and inspect an asset.
-              </div>
-            {/if}
-          </div>
+        <ValidationSummaryPanel
+          {stage}
+          {routeStats}
+          {statsStale}
+          {cheapStats}
+          {selectedAsset}
+          on:designHealth={onDesignHealth}
+          on:validateRoutes={onValidateRoutes}
+          on:splicePlan={onSplicePlan}
+          on:sld={onSld}
+          on:bom={onBom}
+          on:cabinetCost={onCabinetCost}
+          on:saved={onAssetPanelSaved}
+          on:deleted={onAssetPanelDeleted}
+          on:move={onAssetPanelMove}
+          on:close={onAssetPanelClose}
+        />
       {/if}
     </div>
   </div>
@@ -2079,114 +1624,12 @@
   .screen { display: flex; flex-direction: column; height: 100vh; width: 100vw; overflow: hidden; }
 
   /* ── Topbar ── */
-  .topbar { height: 44px; background: #0d1520; border-bottom: 1px solid #1a2d40; display: flex; align-items: center; padding: 0 12px; gap: 12px; flex-shrink: 0; z-index: 30; }
-  .tb-logo { display: flex; flex-direction: column; gap: 1px; }
-  .logo-main { font-size: 12px; font-weight: 700; letter-spacing: 0.18em; color: #4dc8ff; text-shadow: 0 0 8px #00aaff66; }
-  .logo-sub { font-size: 7px; color: #3a5a70; letter-spacing: 0.14em; }
-  .tb-stats { display: flex; gap: 0; border-left: 1px solid #1a2d40; padding-left: 12px; }
-  .stat { display: flex; flex-direction: column; align-items: center; padding: 0 7px; border-right: 1px solid #1a2d40; flex-shrink: 1; min-width: 0; }
-  .sv { font-size: 12px; font-weight: 700; line-height: 1; white-space: nowrap; }
-  .sv.ok { color: #4dc8ff; }
-  .sv.bad { color: #ff5555; }
-  .sv.wrn { color: #ffaa44; }
-  .sv.neu { color: #7ab8d4; }
-  .sl { font-size: 7px; color: #3a5a70; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 2px; }
-  .tb-centre { display: flex; align-items: center; gap: 8px; flex: 1; justify-content: center; }
-  .tb-grp-wrap { display: flex; flex-direction: column; align-items: center; gap: 2px; }
-  .tb-grp-lbl { font-size: 7px; color: #3a5a70; letter-spacing: 0.12em; text-transform: uppercase; }
-  .tb-grp { display: flex; gap: 4px; }
-  .tb-btn { background: #0a1018; border: 1px solid #1a2d40; color: #6a8fa8; font-family: 'Courier New', monospace; font-size: 8.5px; letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 10px; border-radius: 4px; cursor: pointer; white-space: nowrap; transition: all 0.12s; }
-  .tb-btn:hover:not(:disabled) { border-color: #00aaff33; color: #4dc8ff; }
-  .tb-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-  .tb-btn.hi { border-color: #00aaff22; color: #4dc8ff99; }
-  .tb-sep { width: 1px; height: 28px; background: #1a2d40; }
-  .tb-right { display: flex; align-items: center; gap: 8px; }
-  .srch { background: #080e14; border: 1px solid #1a2d40; color: #7ab8d4; font-family: 'Courier New', monospace; font-size: 9px; padding: 4px 10px; border-radius: 4px; width: 200px; outline: none; }
-  .srch::placeholder { color: #2a4050; }
-  .go { background: #0a1018; border: 1px solid #1a2d40; color: #4dc8ff; font-family: 'Courier New', monospace; font-size: 9px; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
-  .vtog { display: flex; border: 1px solid #1a2d40; border-radius: 4px; overflow: hidden; }
-  .vt { background: #0a1018; border: none; color: #3a5a70; font-family: 'Courier New', monospace; font-size: 9px; padding: 4px 10px; cursor: pointer; }
-  .vt.on { background: #00aaff14; color: #4dc8ff; }
-  .tb-new { background: #0a1018; border: 1px solid #1a2d40; color: #6a8fa8; font-family: 'Courier New', monospace; font-size: 9px; letter-spacing: 0.06em; padding: 4px 10px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
-  .tb-new:hover { border-color: #00aaff33; color: #4dc8ff; }
-  .tb-open-wrap { position: relative; }
-  .tb-open-menu { position: absolute; top: calc(100% + 4px); right: 0; background: #0d1520; border: 1px solid #1a2d40; border-radius: 5px; min-width: 200px; z-index: 100; box-shadow: 0 8px 24px #00000088; }
-  .tb-open-empty { font-size: 9px; color: #3a5a70; padding: 10px 12px; }
-  .tb-open-row { display: flex; align-items: stretch; border-bottom: 1px solid #1a2d4033; }
-  .tb-open-row:last-child { border-bottom: none; }
-  .tb-open-item { display: flex; align-items: center; justify-content: space-between; flex: 1; min-width: 0; box-sizing: border-box; background: transparent; border: none; padding: 8px 12px; cursor: pointer; gap: 12px; }
-  .tb-open-item:hover { background: #0f1c28; }
-  .tb-open-item.active .oi-name { color: #4dc8ff; }
-  .tb-open-item.active::before { content: '●'; color: #4dc8ff; font-size: 6px; margin-right: 6px; }
-  .tb-open-del { background: transparent; border: none; padding: 8px 10px; cursor: pointer; font-size: 11px; opacity: 0.5; }
-  .tb-open-del:hover { opacity: 1; background: #2a0f0f; }
-  .oi-name { font-size: 9px; color: #a0c4d8; font-family: 'Courier New', monospace; letter-spacing: 0.04em; }
-  .oi-area { font-size: 8px; color: #3a5a70; font-family: 'Courier New', monospace; }
 
   /* ── FSAA file controls ── */
-  .fsaa-grp { display: flex; align-items: center; gap: 6px; padding-left: 6px; margin-left: 2px; border-left: 1px solid #1a2d40; }
-  .tb-disabled { opacity: 0.4; cursor: not-allowed; }
-  .exp-item { display: block; width: 100%; box-sizing: border-box; border-bottom: 1px solid #1a2d4033; color: #a0c4d8; font-family: 'Courier New', monospace; font-size: 10px; letter-spacing: 0.04em; text-align: left; }
-  .exp-item:last-child { border-bottom: none; }
-  .exp-item:hover { color: #4dc8ff; }
-  .fsaa-ind { font-family: 'Courier New', monospace; font-size: 8.5px; letter-spacing: 0.04em; color: #3a5a70; white-space: nowrap; min-width: 68px; }
-  .fsaa-ind.saved   { color: #5dd6a0; }
-  .fsaa-ind.saving  { color: #ffc04d; }
-  .fsaa-ind.unsaved { color: #ffc04d; }
-  .fsaa-ind.error   { color: #ff6b6b; }
-  .tb-resume { background: #102030; border: 1px solid #00aaff55; color: #4dc8ff; font-family: 'Courier New', monospace; font-size: 9px; letter-spacing: 0.05em; padding: 4px 10px; border-radius: 4px; cursor: pointer; white-space: nowrap; animation: fsaaPulse 2s ease-in-out infinite; }
-  .tb-resume:hover { background: #15273a; border-color: #4dc8ff; }
-  @keyframes fsaaPulse { 0%,100% { box-shadow: 0 0 0 0 #00aaff00; } 50% { box-shadow: 0 0 8px 0 #00aaff44; } }
-
-  /* ── Save-to-file nudge banner ── */
-  .save-nudge {
-    position: fixed; top: 56px; right: 16px; z-index: 200;
-    display: flex; align-items: center; gap: 10px;
-    background: #0d1520; border: 1px solid #00aaff55; border-radius: 6px;
-    padding: 10px 12px; box-shadow: 0 8px 24px #00000088;
-    font-family: 'Courier New', monospace; font-size: 10.5px; color: #a0c4d8;
-    max-width: 320px; animation: fsaaPulse 2.5s ease-in-out infinite;
-  }
-  .sn-save { background: #102030; border: 1px solid #4dc8ff; color: #4dc8ff; font-size: 9px; letter-spacing: 0.05em; padding: 4px 10px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
-  .sn-save:hover { background: #15273a; }
-  .sn-dismiss { background: transparent; border: none; color: #5b7488; cursor: pointer; font-size: 11px; padding: 2px 4px; }
-  .sn-dismiss:hover { color: #a0c4d8; }
 
   /* ── Body ── */
   .body { display: flex; flex: 1; overflow: hidden; }
 
-  /* ── Sidebar ── */
-  .sidebar { width: 140px; background: #0d1520; border-right: 1px solid #1a2d40; display: flex; flex-direction: column; justify-content: center; flex-shrink: 0; z-index: 10; position: relative; }
-  .sid-lbl { font-size: 7.5px; color: #3a5a70; letter-spacing: 0.12em; text-transform: uppercase; padding: 6px 12px 3px; }
-  .sid-div { height: 1px; background: #1a2d40; margin: 8px 12px; }
-  .sid-hint { font-size: 8px; color: #2a4050; letter-spacing: 0.08em; text-transform: uppercase; padding: 4px 12px; line-height: 1.6; }
-  .cat-pill { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-left: 2px solid transparent; color: #6a8fa8; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; transition: all 0.15s; background: transparent; border-top: none; border-right: none; border-bottom: none; width: 100%; text-align: left; font-family: 'Courier New', monospace; }
-  .cat-pill:hover { background: #0f1c28; color: #a0c4d8; border-left-color: #2a4a5e; }
-  .cat-pill.on { background: #00aaff0a; border-left-color: #4dc8ff; color: #4dc8ff; }
-  .asset-btn { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-left: 2px solid transparent; color: #6a8fa8; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; transition: all 0.15s; background: transparent; border-top: none; border-right: none; border-bottom: none; width: 100%; text-align: left; font-family: 'Courier New', monospace; }
-  .asset-btn:hover { background: #0f1c28; color: #a0c4d8; border-left-color: #2a4a5e; }
-  .asset-btn.on { background: #00aaff0a; border-left-color: #4dc8ff; color: #4dc8ff; }
-
-  /* ── Basemap switcher ── */
-  .sid-basemap-dock { position: absolute; left: 0; right: 0; bottom: 8px; background: #0d1520; }
-  .basemap-wrap { display: flex; flex-direction: column; gap: 2px; padding: 2px 10px 6px; }
-  .basemap-btn {
-    display: block; width: 100%;
-    background: #080e14;
-    border: 1px solid #1a2d40;
-    color: #5a7a90;
-    font-family: 'Courier New', monospace;
-    font-size: 9px;
-    letter-spacing: 0.05em;
-    padding: 6px 8px;
-    border-radius: 4px;
-    cursor: pointer;
-    text-align: left;
-    transition: all 0.12s;
-  }
-  .basemap-btn:hover:not(:disabled) { background: #0f1c28; color: #a0c4d8; border-color: #2a4a5e; }
-  .basemap-btn.on { background: #00aaff0d; border-color: #00aaff44; color: #4dc8ff; }
-  .basemap-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
   /* ── Basemap switching overlay ── */
   .basemap-loading {
@@ -2216,127 +1659,19 @@
   /* ── Map ── */
   .map-wrap { flex: 1; position: relative; overflow: hidden; }
   #map { width: 100%; height: 100%; }
-  .active-chip { position: absolute; bottom: 60px; left: 50%; transform: translateX(-50%); background: #0d1520ee; border: 1px solid #00aaff44; border-radius: 20px; padding: 7px 18px 7px 12px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: #4dc8ff; display: flex; align-items: center; gap: 8px; white-space: nowrap; z-index: 5; }
-  .chip-dot { width: 6px; height: 6px; border-radius: 50%; background: #4dc8ff; box-shadow: 0 0 6px #00aaff; animation: pulse 1.5s ease-in-out infinite; }
-  .chip-help { color: #4dc8ff55; font-size: 13px; text-decoration: none; padding: 0 2px; line-height: 1; transition: color 0.12s; }
-  .chip-help:hover { color: #4dc8ff; }
-  .chip-cancel { background: transparent; border: none; color: #3a5a70; font-size: 11px; cursor: pointer; padding: 0 0 0 8px; line-height: 1; }
-  .chip-cancel:hover { color: #ff5555; }
   @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: .3 } }
 
-  .routes-drawer { position: absolute; bottom: 0; left: 0; right: 0; z-index: 20; display: flex; flex-direction: column; transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
-  .routes-handle { height: 36px; background: #0d1520; border-top: 1px solid #1a2d40; display: flex; align-items: center; padding: 0 16px; gap: 12px; cursor: pointer; flex-shrink: 0; user-select: none; }
-  .routes-handle:hover { background: #111c28; }
-  .handle-title { font-size: 9px; color: #6a8fa8; letter-spacing: 0.12em; text-transform: uppercase; }
-  .handle-count { background: #1a2d40; border-radius: 10px; padding: 2px 8px; font-size: 8px; color: #7ab8d4; letter-spacing: 0.06em; }
-  .handle-search { background: #080e14; border: 1px solid #1a2d40; color: #7ab8d4; font-family: 'Courier New', monospace; font-size: 9px; padding: 4px 10px; border-radius: 4px; width: 160px; outline: none; margin-left: auto; }
-  .handle-search::placeholder { color: #2a4050; }
-  .handle-filter { background: #080e14; border: 1px solid #1a2d40; color: #6a8fa8; font-family: 'Courier New', monospace; font-size: 9px; padding: 4px 8px; border-radius: 4px; outline: none; margin-left: 6px; }
-  .handle-csv { background: transparent; border: 1px solid #1a2d40; color: #3a5a70; font-family: 'Courier New', monospace; font-size: 8px; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 8px; border-radius: 4px; cursor: pointer; margin-left: 6px; }
-  .handle-csv:hover { border-color: #00aaff44; color: #4dc8ff; }
-  .handle-toggle { background: transparent; border: none; color: #3a5a70; font-size: 12px; cursor: pointer; padding: 0 0 0 8px; line-height: 1; }
-  .handle-toggle:hover { color: #4dc8ff; }
-  .routes-table-wrap { background: #0d1520; border-top: 1px solid #1a2d4044; overflow: auto; flex: 1; }
-  .routes-table { width: 100%; border-collapse: collapse; }
-  .routes-table th { background: #0a1018; color: #3a5a70; font-size: 8px; letter-spacing: 0.1em; text-transform: uppercase; padding: 7px 12px; text-align: left; border-bottom: 1px solid #1a2d40; border-right: 1px solid #1a2d4033; font-weight: 600; white-space: nowrap; position: sticky; top: 0; }
-  .routes-table td { font-size: 9px; color: #7ab8d4; padding: 6px 12px; border-bottom: 1px solid #0f1a24; border-right: 1px solid #0f1a2466; white-space: nowrap; }
-  .routes-table tr { cursor: pointer; }
-  .routes-table tr:hover td { background: #0f1c2a; color: #a0c4d8; }
-  .routes-table tr.sel td { background: #0d2038; }
-  .status-pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 8px; font-weight: 700; letter-spacing: 0.06em; }
-  .status-pill.routed { background: #00aaff14; color: #4dc8ff; border: 1px solid #00aaff33; }
-  .status-pill.partial { background: #ffaa4414; color: #ffaa44; border: 1px solid #ffaa4433; }
-  .status-pill.unserved { background: #ff555514; color: #ff5555; border: 1px solid #ff555533; }
 
   /* ── Right panel ── */
   .rpanel { width: 300px; background: #0d1520; border-left: 1px solid #1a2d40; display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden; z-index: 10; }
-  .rp-hdr { height: 44px; background: #0d1520; border-bottom: 1px solid #1a2d40; display: flex; align-items: center; padding: 0 14px; gap: 8px; flex-shrink: 0; }
-  .rp-hdr-title { font-size: 9px; color: #a0c4d8; letter-spacing: 0.14em; text-transform: uppercase; flex: 1; font-weight: 600; }
-  .rp-timestamp { font-size: 8px; color: #3a5a70; }
-  .rp-refresh { background: #0f1c28; border: 1px solid #1a2d40; color: #6a8fa8; font-family: 'Courier New', monospace; font-size: 11px; width: 24px; height: 24px; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-  .rp-refresh:hover { border-color: #00aaff44; color: #4dc8ff; }
-  .health-btn { background: #00aaff14; border: 1px solid #00aaff44; color: #4dc8ff; font-family: 'Courier New', monospace; font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; padding: 4px 10px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
-  .health-btn:hover { background: #00aaff22; }
 
-  .val-body { padding: 12px 14px; border-bottom: 1px solid #1a2d40; }
-  .val-counts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
-  .vc { background: #080e14; border-radius: 5px; padding: 8px 10px; }
-  .vc-val { font-size: 20px; font-weight: 700; line-height: 1; }
-  .vc-val.ok { color: #4dc8ff; }
-  .vc-val.bad { color: #ff5555; }
-  .vc-val.wrn { color: #ffaa44; }
-  .vc-val.neu { color: #7ab8d4; }
-  .vc-lbl { font-size: 11px; color: #6ba3c7; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 4px; text-shadow: 0 0 6px #00aaff44; }
-  .int-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
-  .int-k { font-size: 11px; color: #7ab8d4; text-transform: uppercase; letter-spacing: 0.06em; text-shadow: 0 0 6px #00aaff44; }
-  .int-v { font-size: 11px; color: #7ab8d4; }
-  .int-bar { height: 2px; background: #080e14; border-radius: 2px; margin-bottom: 8px; }
-  .int-fill { height: 2px; background: #4dc8ff; border-radius: 2px; width: 3%; }
-  .checks-note { font-size: 11px; color: #6ba3c7; letter-spacing: 0.03em; line-height: 1.5; }
 
-  .health-banner { margin: 10px 14px; padding: 8px 10px; border-radius: 5px; font-size: 8.5px; letter-spacing: 0.04em; line-height: 1.5; }
-  .health-banner.caution { background: #ffaa4414; border: 1px solid #ffaa4433; color: #ffaa44; }
 
-  .outputs-section { padding: 10px 14px; border-bottom: 1px solid #1a2d40; }
-  .outputs-lbl { font-size: 11px; color: #6ba3c7; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 8px; text-shadow: 0 0 6px #00aaff44; }
-  .out-btn { display: block; width: 100%; background: #0a1018; border: 1px solid #1a2d40; color: #6a8fa8; font-family: 'Courier New', monospace; font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase; padding: 7px 10px; text-align: left; cursor: pointer; margin-bottom: 4px; border-radius: 4px; transition: all 0.12s; }
-  .out-btn:hover { border-color: #00aaff33; color: #4dc8ff; background: #0d1a28; }
 
-  .rp-splitter { height: 3px; background: #1a2d40; cursor: row-resize; flex-shrink: 0; position: relative; }
-  .rp-splitter::after { content: ''; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 24px; height: 1px; background: #2a4a5e; border-radius: 1px; }
-  .rp-splitter:hover { background: #2a4a5e; }
 
-  .asset-section { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
-  .asset-hdr { padding: 12px 14px 8px; border-bottom: 1px solid #1a2d40; flex-shrink: 0; }
-  .asset-hdr-lbl { font-size: 11px; color: #6ba3c7; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 5px; text-shadow: 0 0 6px #00aaff44; }
-  .asset-type { font-size: 11px; color: #6ba3c7; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 3px; }
-  .asset-id { font-size: 14px; font-weight: 700; letter-spacing: 0.08em; color: #4dc8ff; text-shadow: 0 0 8px #00aaff44; }
-  .asset-body { padding: 0 14px; flex: 1; }
-  .arow { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid #080e14; }
-  .ak { font-size: 8.5px; color: #6a8fa8; text-transform: uppercase; letter-spacing: 0.05em; }
-  .av { font-size: 8.5px; color: #a0c4d8; text-align: right; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .av.ok { color: #4dc8ff; }
-  .av.hi { color: #ffaa44; }
-  .asset-actions { padding: 10px 14px; display: flex; gap: 5px; border-top: 1px solid #1a2d40; flex-shrink: 0; }
-  .act-btn { flex: 1; background: #0a1018; border: 1px solid #1a2d40; color: #6a8fa8; font-family: 'Courier New', monospace; font-size: 8px; letter-spacing: 0.06em; text-transform: uppercase; padding: 6px 4px; border-radius: 4px; cursor: pointer; text-align: center; transition: all 0.12s; }
-  .act-btn:hover { border-color: #00aaff33; color: #4dc8ff; }
 
-  .ri-section { border-top: 1px solid #1a2d40; padding: 12px 14px; flex-shrink: 0; }
-  .ri-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-  .ri-lbl { font-size: 7.5px; color: #3a5a70; letter-spacing: 0.12em; text-transform: uppercase; }
-  .ri-id { font-size: 11px; color: #4dc8ff; font-weight: 700; letter-spacing: 0.06em; }
-  .ri-badge { font-size: 7px; background: #00aaff14; border: 1px solid #00aaff33; color: #4dc8ff; padding: 2px 7px; border-radius: 10px; }
-  .ri-from { font-size: 7.5px; color: #3a5a70; margin-bottom: 8px; letter-spacing: 0.04em; }
-  .ri-stats { display: flex; gap: 0; border: 1px solid #1a2d40; border-radius: 5px; overflow: hidden; }
-  .ri-stat { flex: 1; padding: 8px 10px; text-align: center; border-right: 1px solid #1a2d40; }
-  .ri-stat:last-child { border-right: none; }
-  .ri-sv { font-size: 14px; font-weight: 700; color: #7ab8d4; line-height: 1; }
-  .ri-sv.ok { color: #4dc8ff; text-shadow: 0 0 6px #00aaff33; }
-  .ri-sl { font-size: 7px; color: #3a5a70; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 3px; }
 
   /* ── Fibre-assign result panel ── */
-  .fa-panel { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
-  .fa-hdr { height: 44px; background: #0d1520; border-bottom: 1px solid #1a2d40; display: flex; align-items: center; padding: 0 14px; gap: 8px; flex-shrink: 0; }
-  .fa-title { font-size: 9px; color: #a0c4d8; letter-spacing: 0.14em; text-transform: uppercase; flex: 1; font-weight: 600; }
-  .fa-close { background: #0f1c28; border: 1px solid #1a2d40; color: #6a8fa8; font-family: 'Courier New', monospace; font-size: 11px; width: 24px; height: 24px; border-radius: 4px; cursor: pointer; }
-  .fa-close:hover { border-color: #ff555544; color: #ff5555; }
-  .fa-stats { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 5px; padding: 12px 14px 6px; }
-  .fa-stat { background: #080e14; border-radius: 5px; padding: 8px 4px; text-align: center; }
-  .fa-sv { font-size: 17px; font-weight: 700; line-height: 1; color: #7ab8d4; }
-  .fa-sv.ok { color: #4dc8ff; }
-  .fa-sv.bad { color: #ff5555; }
-  .fa-sl { font-size: 6.5px; color: #3a5a70; letter-spacing: 0.06em; text-transform: uppercase; margin-top: 3px; }
-  .fa-sub { font-size: 8px; color: #6a8fa8; letter-spacing: 0.04em; padding: 2px 14px 8px; }
-  .fa-flags { margin: 0 14px 8px; padding: 8px 10px; background: #ffaa440a; border: 1px solid #ffaa4433; border-radius: 5px; }
-  .fa-flags-lbl { font-size: 8px; color: #ffaa44; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 5px; }
-  .fa-flag { font-size: 8px; color: #c79552; line-height: 1.5; padding: 1px 0; }
-  .fa-log-lbl { font-size: 7.5px; color: #3a5a70; letter-spacing: 0.12em; text-transform: uppercase; padding: 4px 14px 4px; }
-  .fa-log { flex: 1; overflow-y: auto; padding: 0 14px; }
-  .fa-log-line { font-size: 8px; color: #6a8fa8; line-height: 1.6; padding: 1px 0; border-bottom: 1px solid #0c141c; }
-  .fa-note { font-size: 8px; color: #3a5a70; letter-spacing: 0.03em; padding: 8px 14px; line-height: 1.6; }
-  .fa-actions { padding: 10px 14px; border-top: 1px solid #1a2d40; flex-shrink: 0; }
-  .fa-done { width: 100%; background: #00aaff14; border: 1px solid #00aaff44; color: #4dc8ff; font-family: 'Courier New', monospace; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; padding: 8px; border-radius: 4px; cursor: pointer; }
-  .fa-done:hover { background: #00aaff22; }
   /* ── Topbar account avatar ── */
 
 </style>

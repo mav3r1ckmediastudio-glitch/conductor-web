@@ -17,11 +17,27 @@
   let status     = 'PROPOSED';
   let notes      = '';
 
+  // Branch classification (release-audit §3). A CBT tail from a splitter to a
+  // CBT is normally an optical output leg, so we PROPOSE SPLITTER_OUTPUT — but
+  // never silently assume it. The user must tick an explicit confirmation
+  // before the tail can be placed as a splitter output; switching to
+  // PASS_THROUGH clears that requirement.
+  let feedMode     = 'SPLITTER_OUTPUT';
+  let splitterId   = '';
+  let splitterPort = '';
+  let splitterConfirmed = false;
+
+  // Proposed default splitter id: the upstream joint the tail terminates on.
+  $: proposedSplitterId = pending && pending.to_joint ? `${pending.to_joint}-SP` : '';
+  // Save is blocked until a proposed SPLITTER_OUTPUT is explicitly confirmed.
+  $: needsConfirm = feedMode === 'SPLITTER_OUTPUT' && !splitterConfirmed;
+
   // Same formula as CableForm's display — a single loose tube covers up to
   // 12 fibres. For a tail's normal 1-fibre case this is just 1 tube.
   $: tubeCount = Math.max(1, Math.floor(parseInt(fibreCount) / 12));
 
   function save() {
+    if (needsConfirm) return; // must confirm SPLITTER_OUTPUT first
     dispatch('save', {
       coordinates:  pending.coordinates,
       tail_id:      pending.tail_id,
@@ -38,6 +54,9 @@
       tube_count:   tubeCount,
       fibre_type:   fibreType,
       status,
+      feed_mode:     feedMode,
+      splitter_id:   feedMode === 'SPLITTER_OUTPUT' ? ((splitterId.trim() || proposedSplitterId) || null) : null,
+      splitter_port: feedMode === 'SPLITTER_OUTPUT' && splitterPort !== '' ? parseInt(splitterPort, 10) : null,
       notes: notes.trim(),
     });
     reset();
@@ -47,6 +66,7 @@
 
   function reset() {
     fibreCount = '1'; fibreType = 'G.657A2'; status = 'PROPOSED'; notes = '';
+    feedMode = 'SPLITTER_OUTPUT'; splitterId = ''; splitterPort = ''; splitterConfirmed = false;
   }
 </script>
 
@@ -68,32 +88,32 @@
     <div class="section-lbl">IDENTITY</div>
 
     <div class="field readonly">
-      <label>Tail ID</label>
-      <input value={pending.tail_id} readonly />
+      <label for="a11y-cbttailform-1">Tail ID</label>
+      <input id="a11y-cbttailform-1" value={pending.tail_id} readonly />
     </div>
     <div class="field readonly">
-      <label>Length <span class="hint">true measured — BoM</span></label>
-      <input value="{pending.length_m} m" readonly class="calc" />
+      <label for="a11y-cbttailform-2">Length <span class="hint">true measured — BoM</span></label>
+      <input id="a11y-cbttailform-2" value="{pending.length_m} m" readonly class="calc" />
     </div>
     <div class="field readonly">
-      <label>From CBT</label>
-      <input value={pending.from_cbt} readonly class="calc" />
+      <label for="a11y-cbttailform-3">From CBT</label>
+      <input id="a11y-cbttailform-3" value={pending.from_cbt} readonly class="calc" />
     </div>
     <div class="field readonly">
-      <label>To Joint</label>
-      <input value={pending.to_joint} readonly class="calc" />
+      <label for="a11y-cbttailform-4">To Joint</label>
+      <input id="a11y-cbttailform-4" value={pending.to_joint} readonly class="calc" />
     </div>
     <div class="field readonly">
-      <label>Via Poles <span class="hint">route order</span></label>
-      <input value={(pending.via_poles && pending.via_poles.length) ? pending.via_poles.join(' → ') : '— direct'} readonly class={pending.via_poles && pending.via_poles.length ? 'calc' : ''} />
+      <label for="a11y-cbttailform-5">Via Poles <span class="hint">route order</span></label>
+      <input id="a11y-cbttailform-5" value={(pending.via_poles && pending.via_poles.length) ? pending.via_poles.join(' → ') : '— direct'} readonly class={pending.via_poles && pending.via_poles.length ? 'calc' : ''} />
     </div>
 
     <div class="divider"></div>
     <div class="section-lbl">FIBRE SPEC</div>
 
     <div class="field">
-      <label>Fibre Count *</label>
-      <select bind:value={fibreCount}>
+      <label for="a11y-cbttailform-6">Fibre Count *</label>
+      <select id="a11y-cbttailform-6" bind:value={fibreCount}>
         <option>1</option>
         <option>2</option>
         <option>4</option>
@@ -103,20 +123,20 @@
       </select>
     </div>
     <div class="field readonly">
-      <label>Tube Count <span class="hint">auto — fibres ÷ 12</span></label>
-      <input value={tubeCount} readonly class="calc" />
+      <label for="a11y-cbttailform-7">Tube Count <span class="hint">auto — fibres ÷ 12</span></label>
+      <input id="a11y-cbttailform-7" value={tubeCount} readonly class="calc" />
     </div>
     <div class="field">
-      <label>Fibre Type</label>
-      <select bind:value={fibreType}>
+      <label for="a11y-cbttailform-8">Fibre Type</label>
+      <select id="a11y-cbttailform-8" bind:value={fibreType}>
         <option>G.657A2</option>
         <option>G.657A1</option>
         <option>G.652D</option>
       </select>
     </div>
     <div class="field">
-      <label>Status</label>
-      <select bind:value={status}>
+      <label for="a11y-cbttailform-9">Status</label>
+      <select id="a11y-cbttailform-9" bind:value={status}>
         <option>PROPOSED</option>
         <option>SURVEY</option>
         <option>INSTALLED</option>
@@ -125,18 +145,43 @@
     </div>
 
     <div class="divider"></div>
+    <div class="section-lbl">BRANCH CLASSIFICATION</div>
+
+    <div class="field">
+      <label for="a11y-cbttailform-10">Feed Mode *</label>
+      <select id="a11y-cbttailform-10" bind:value={feedMode} data-testid="tail-feed-mode">
+        <option value="SPLITTER_OUTPUT">SPLITTER_OUTPUT — optical leg of the splitter (proposed)</option>
+        <option value="PASS_THROUGH">PASS_THROUGH — raw fibres continue downstream</option>
+      </select>
+    </div>
+    {#if feedMode === 'SPLITTER_OUTPUT'}
+      <div class="field">
+        <label for="a11y-cbttailform-11">Splitter ID <span class="hint">upstream splitter</span></label>
+        <input id="a11y-cbttailform-11" bind:value={splitterId} placeholder={proposedSplitterId || 'e.g. JNT-001-SP'} data-testid="tail-splitter-id" />
+      </div>
+      <div class="field">
+        <label for="a11y-cbttailform-12">Splitter Port <span class="hint">optical output number</span></label>
+        <input id="a11y-cbttailform-12" bind:value={splitterPort} type="number" min="1" placeholder="e.g. 1" data-testid="tail-splitter-port" />
+      </div>
+      <label class="confirm-row">
+        <input type="checkbox" bind:checked={splitterConfirmed} data-testid="tail-splitter-confirm" />
+        <span>Confirm this tail is a splitter output leg</span>
+      </label>
+    {/if}
+
+    <div class="divider"></div>
     <div class="section-lbl">NOTES</div>
 
     <div class="field">
-      <label>Notes</label>
-      <input bind:value={notes} placeholder="Optional notes" />
+      <label for="a11y-cbttailform-13">Notes</label>
+      <input id="a11y-cbttailform-13" bind:value={notes} placeholder="Optional notes" />
     </div>
 
   </div>
 
   <div class="form-actions">
     <button class="btn-cancel" on:click={cancel}>Cancel</button>
-    <button class="btn-save" on:click={save}>Place Tail</button>
+    <button class="btn-save" on:click={save} disabled={needsConfirm} data-testid="tail-place">Place Tail</button>
   </div>
 </div>
 {/if}
@@ -168,4 +213,7 @@
   .btn-cancel:hover { border-color: #2a4a5e; color: #a0c4d8; }
   .btn-save { flex: 2; background: #00aaff14; border: 1px solid #00aaff44; color: #4dc8ff; font-family: 'Courier New', monospace; font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase; padding: 8px; border-radius: 4px; cursor: pointer; }
   .btn-save:hover { background: #00aaff22; }
+  .btn-save:disabled { opacity: 0.4; cursor: not-allowed; }
+  .confirm-row { display: flex; align-items: center; gap: 6px; font-size: 8.5px; color: #a0c4d8; letter-spacing: 0.04em; text-transform: none; cursor: pointer; margin-top: 2px; }
+  .confirm-row input { width: auto; }
 </style>

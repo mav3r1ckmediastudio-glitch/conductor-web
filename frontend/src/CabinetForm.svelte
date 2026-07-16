@@ -96,12 +96,12 @@
     <div class="section-lbl">IDENTITY</div>
 
     <div class="field">
-      <label>Site Name *</label>
-      <input bind:value={popName} placeholder="e.g. Tyndrum Cabinet 1" />
+      <label for="a11y-cabinetform-1">Site Name *</label>
+      <input id="a11y-cabinetform-1" bind:value={popName} placeholder="e.g. Tyndrum Cabinet 1" />
     </div>
     <div class="field">
-      <label>POP Type</label>
-      <select bind:value={popType}>
+      <label for="a11y-cabinetform-2">POP Type</label>
+      <select id="a11y-cabinetform-2" bind:value={popType}>
         <option>CABINET</option>
         <option>EXCHANGE</option>
         <option>DATACENTRE</option>
@@ -109,12 +109,12 @@
       </select>
     </div>
     <div class="field">
-      <label>Operator</label>
-      <input bind:value={operator} />
+      <label for="a11y-cabinetform-3">Operator</label>
+      <input id="a11y-cabinetform-3" bind:value={operator} />
     </div>
     <div class="field">
-      <label>Status</label>
-      <select bind:value={status}>
+      <label for="a11y-cabinetform-4">Status</label>
+      <select id="a11y-cabinetform-4" bind:value={status}>
         <option>PROPOSED</option>
         <option>SURVEY</option>
         <option>ACTIVE</option>
@@ -128,16 +128,16 @@
     <div class="section-lbl">LOCATION</div>
 
     <div class="field">
-      <label>Address</label>
-      <input bind:value={address} placeholder="Street address (optional)" />
+      <label for="a11y-cabinetform-5">Address</label>
+      <input id="a11y-cabinetform-5" bind:value={address} placeholder="Street address (optional)" />
     </div>
     <div class="field">
-      <label>Postcode</label>
-      <input bind:value={postcode} placeholder="e.g. FK20 8RU" maxlength="8" />
+      <label for="a11y-cabinetform-6">Postcode</label>
+      <input id="a11y-cabinetform-6" bind:value={postcode} placeholder="e.g. FK20 8RU" maxlength="8" />
     </div>
     <div class="field">
-      <label>Power Supply</label>
-      <select bind:value={powerSupply}>
+      <label for="a11y-cabinetform-7">Power Supply</label>
+      <select id="a11y-cabinetform-7" bind:value={powerSupply}>
         <option value="">— not yet set —</option>
         <option>MAINS</option>
         <option>GENERATOR</option>
@@ -146,8 +146,8 @@
       </select>
     </div>
     <div class="field">
-      <label>Lease Expiry</label>
-      <input bind:value={leaseExpiry} placeholder="e.g. 2030-03-31 (optional)" />
+      <label for="a11y-cabinetform-8">Lease Expiry</label>
+      <input id="a11y-cabinetform-8" bind:value={leaseExpiry} placeholder="e.g. 2030-03-31 (optional)" />
     </div>
 
     <div class="divider"></div>
@@ -204,12 +204,12 @@
     <div class="section-lbl">NOTES & REFS</div>
 
     <div class="field">
-      <label>Photo Reference</label>
-      <input bind:value={photoRef} placeholder="Photo filename or URL (optional)" />
+      <label for="a11y-cabinetform-10">Photo Reference</label>
+      <input id="a11y-cabinetform-10" bind:value={photoRef} placeholder="Photo filename or URL (optional)" />
     </div>
     <div class="field">
-      <label>Notes</label>
-      <input bind:value={notes} placeholder="Equipment orders, site access, survey findings…" />
+      <label for="a11y-cabinetform-9">Notes</label>
+      <input id="a11y-cabinetform-9" bind:value={notes} placeholder="Equipment orders, site access, survey findings…" />
     </div>
 
   </div>

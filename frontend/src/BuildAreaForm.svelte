@@ -30,18 +30,18 @@
     <div class="section-lbl">IDENTITY</div>
 
     <div class="field">
-      <label>Area Name *</label>
-      <input bind:value={areaName} placeholder="e.g. Tarvin Village" />
+      <label for="a11y-buildareaform-1">Area Name *</label>
+      <input id="a11y-buildareaform-1" bind:value={areaName} placeholder="e.g. Tarvin Village" />
     </div>
 
     <div class="field">
-      <label>Phase</label>
-      <input type="number" bind:value={phase} min="1" max="99" style="width:80px;" />
+      <label for="a11y-buildareaform-2">Phase</label>
+      <input id="a11y-buildareaform-2" type="number" bind:value={phase} min="1" max="99" style="width:80px;" />
     </div>
 
     <div class="field">
-      <label>Status</label>
-      <select bind:value={status}>
+      <label for="a11y-buildareaform-3">Status</label>
+      <select id="a11y-buildareaform-3" bind:value={status}>
         <option>PLANNED</option>
         <option>HLD</option>
         <option>MLD</option>

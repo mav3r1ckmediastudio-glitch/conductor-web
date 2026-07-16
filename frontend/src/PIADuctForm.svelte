@@ -74,24 +74,24 @@
     <div class="section-lbl">PIA IDENTITY</div>
 
     <div class="field readonly">
-      <label>Duct Type</label>
-      <input value="PIA_SUBDUCT" readonly />
+      <label for="a11y-piaductform-1">Duct Type</label>
+      <input id="a11y-piaductform-1" value="PIA_SUBDUCT" readonly />
     </div>
     <div class="field readonly">
-      <label>Owner</label>
-      <input value="Openreach" readonly />
+      <label for="a11y-piaductform-2">Owner</label>
+      <input id="a11y-piaductform-2" value="Openreach" readonly />
     </div>
     <div class="field">
-      <label>PIA Reference <span class="hint">required — Openreach asset ref</span></label>
-      <input bind:value={piaRef} placeholder="e.g. PIA-XXXXXX" />
+      <label for="a11y-piaductform-3">PIA Reference <span class="hint">required — Openreach asset ref</span></label>
+      <input id="a11y-piaductform-3" bind:value={piaRef} placeholder="e.g. PIA-XXXXXX" />
     </div>
     <div class="field">
-      <label>Openreach Reference</label>
-      <input bind:value={openreachRef} placeholder="Additional Openreach ref (optional)" />
+      <label for="a11y-piaductform-4">Openreach Reference</label>
+      <input id="a11y-piaductform-4" bind:value={openreachRef} placeholder="Additional Openreach ref (optional)" />
     </div>
     <div class="field">
-      <label>Status</label>
-      <select bind:value={status}>
+      <label for="a11y-piaductform-5">Status</label>
+      <select id="a11y-piaductform-5" bind:value={status}>
         <option>PROPOSED</option>
         <option>PERMIT_APPLIED</option>
         <option>PERMITTED</option>
@@ -100,20 +100,20 @@
       </select>
     </div>
     <div class="field">
-      <label>Subduct Count <span class="hint">number of 22/17mm subducts in this section</span></label>
-      <input type="number" bind:value={subductCount} min="1" max="12" style="width:80px" />
+      <label for="a11y-piaductform-6">Subduct Count <span class="hint">number of 22/17mm subducts in this section</span></label>
+      <input id="a11y-piaductform-6" type="number" bind:value={subductCount} min="1" max="12" style="width:80px" />
     </div>
     <div class="field">
-      <label>Spur Suffix <span class="hint">leave blank for main route</span></label>
-      <input bind:value={spurSuffix} placeholder="e.g. a, b" maxlength="6" />
+      <label for="a11y-piaductform-7">Spur Suffix <span class="hint">leave blank for main route</span></label>
+      <input id="a11y-piaductform-7" bind:value={spurSuffix} placeholder="e.g. a, b" maxlength="6" />
     </div>
 
     <div class="divider"></div>
     <div class="section-lbl">PHYSICAL</div>
 
     <div class="field">
-      <label>Surface Type</label>
-      <select bind:value={surfaceType}>
+      <label for="a11y-piaductform-8">Surface Type</label>
+      <select id="a11y-piaductform-8" bind:value={surfaceType}>
         <option value="">— not yet set —</option>
         <option>TARMAC</option>
         <option>CONCRETE</option>
@@ -125,8 +125,8 @@
       </select>
     </div>
     <div class="field">
-      <label>Depth (m)</label>
-      <input type="number" bind:value={depthM} min="0" max="3" step="0.05" style="width:80px" />
+      <label for="a11y-piaductform-9">Depth (m)</label>
+      <input id="a11y-piaductform-9" type="number" bind:value={depthM} min="0" max="3" step="0.05" style="width:80px" />
     </div>
 
     <div class="divider"></div>

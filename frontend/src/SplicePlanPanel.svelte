@@ -9,7 +9,7 @@
 
   import { createEventDispatcher } from 'svelte';
   import { projectStore } from './projectStore.js';
-  import { generateSplicePlan, generateAllSplicePlans, downloadSplicePlan, downloadAllSplicePlans } from './splicePlan.js';
+  import { generateSplicePlan, generateAllSplicePlans, downloadSplicePlan, downloadAllSplicePlans, physicalPlanReady } from './splicePlan.js';
 
   const dispatch = createEventDispatcher();
 
@@ -17,6 +17,11 @@
   let preview  = null;   // { html, stats } for selected joint
   let filter   = 'all';  // 'all' | 'joint' | 'cbt' | 'splitter'
   let downloading = false;
+
+  // Physical-plan freshness gate. Splice plans are physical construction
+  // documents; while the physical planner is unverified, export is disabled.
+  // (The panel is remounted whenever it's reopened, so reading once is fine.)
+  const planReady = physicalPlanReady(projectStore.state);
 
   $: items = buildItems(filter);
   $: if (selected) preview = buildPreview(selected.id);
@@ -44,7 +49,9 @@
 
   function buildPreview(id) {
     const store = projectStore.state;
-    const recs  = (store.fibreAssignments || []).filter(r => String(r.joint_id) === String(id));
+    const source = (store.physicalAssignments && store.physicalAssignments.length)
+      ? store.physicalAssignments : (store.fibreAssignments || []);
+    const recs  = source.filter(r => String(r.joint_id) === String(id));
     const splices   = recs.filter(r => r.fibre_role === 'THROUGH_SPLICE').length;
     const outputs   = recs.filter(r => r.fibre_role === 'SPLITTER_OUTPUT').length;
     const spares    = recs.filter(r => r.fibre_role === 'SPLITTER_OUTPUT_SPARE').length;
@@ -58,13 +65,14 @@
   }
 
   function onDownload() {
-    if (!selected) return;
+    if (!selected || !planReady) return;
     const store = projectStore.state;
     const html  = generateSplicePlan(store, selected.id);
     downloadSplicePlan(html, `${selected.id}.html`);
   }
 
   function onDownloadAll() {
+    if (!planReady) return;
     downloading = true;
     const n = downloadAllSplicePlans(projectStore.state);
     setTimeout(() => { downloading = false; }, n * 200 + 500);
@@ -76,6 +84,13 @@
     <span class="spp-title">Splice Plans</span>
     <button class="spp-close" on:click={() => dispatch('close')} title="Close">✕</button>
   </div>
+
+  {#if !planReady}
+    <div class="spp-unverified">
+      <div class="spp-uv-title">⚠ Physical fibre allocation not calculated</div>
+      <div class="spp-uv-body">Splitter ports are allocated and shown, but through-splices and dark-fibre storage are unverified. Splice-plan export is disabled until the physical planner is validated.</div>
+    </div>
+  {/if}
 
   <!-- Filter row -->
   <div class="spp-filters">
@@ -111,7 +126,9 @@
   {#if selected}
     <div class="spp-preview">
       <div class="spp-prev-hdr">{selected.label}</div>
-      {#if preview}
+      {#if !planReady}
+        <div class="spp-prev-warn">Preview unavailable — physical fibre plan unverified.</div>
+      {:else if preview}
         {#if !preview.hasData}
           <div class="spp-prev-warn">Run Auto-Assign Fibres first to populate splice records.</div>
         {:else}
@@ -123,7 +140,7 @@
           </div>
         {/if}
       {/if}
-      <button class="spp-dl" on:click={onDownload}>
+      <button class="spp-dl" on:click={onDownload} disabled={!planReady}>
         &#8659; Download {selected.id}.html
       </button>
     </div>
@@ -131,7 +148,7 @@
 
   <!-- Footer actions -->
   <div class="spp-actions">
-    <button class="spp-dl-all" on:click={onDownloadAll} disabled={downloading || items.length === 0}>
+    <button class="spp-dl-all" on:click={onDownloadAll} disabled={downloading || items.length === 0 || !planReady}>
       {downloading ? 'Downloading…' : `&#8659; Download All (${items.length})`}
     </button>
     <button class="spp-done" on:click={() => dispatch('close')}>Done</button>
@@ -146,6 +163,10 @@
   .spp-close { background: #0f1c28; border: 1px solid #1a2d40; color: #6a8fa8; font-family: 'Courier New', monospace; font-size: 11px; width: 24px; height: 24px; border-radius: 4px; cursor: pointer; }
   .spp-close:hover { border-color: #ff555544; color: #ff5555; }
 
+  .spp-unverified { margin: 10px 14px 4px; padding: 9px 11px; background: #ffaa440d; border: 1px solid #ffaa4444; border-radius: 5px; }
+  .spp-uv-title { font-size: 8.5px; font-weight: 700; color: #ffaa44; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 5px; }
+  .spp-uv-body { font-size: 8px; color: #c79552; line-height: 1.6; }
+  .spp-dl:disabled { opacity: 0.4; cursor: default; }
   .spp-filters { display: flex; align-items: center; padding: 8px 14px 6px; gap: 4px; border-bottom: 1px solid #1a2d4033; flex-shrink: 0; }
   .spf { background: #0a1018; border: 1px solid #1a2d40; color: #3a5a70; font-family: 'Courier New', monospace; font-size: 7.5px; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 8px; border-radius: 3px; cursor: pointer; }
   .spf:hover { border-color: #00aaff33; color: #6a8fa8; }

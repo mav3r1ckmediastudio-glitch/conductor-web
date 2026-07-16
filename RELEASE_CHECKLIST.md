@@ -13,6 +13,8 @@ Use this before pushing the repo to GitHub, sharing a customer demo, or preparin
 - [ ] `THIRD_PARTY_NOTICES.md` is present.
 - [ ] `ATTRIBUTION.md` is present.
 - [ ] `COMMERCIAL_EULA_TEMPLATE.md` has been reviewed before being sent to customers.
+- [ ] `NETLIFY_BASIC_AUTH_CREDENTIALS` is set in the deploy platform's environment variables (unique per deployment, 12+ char passwords) — see SECURITY_AND_KEYS.md. `frontend/public/_headers` itself must never contain real credentials.
+- [ ] Build was run via `npm run build` (not `build:no-auth-gate`) for anything reachable outside your own machine, and `dist/_headers` was spot-checked to contain a real Basic-Auth rule before deploy.
 
 ## Mapping
 
@@ -37,3 +39,5 @@ Use this before pushing the repo to GitHub, sharing a customer demo, or preparin
 - [ ] No customer/live network data is included in the repo.
 - [ ] Demo data is clearly fictional or cleared for use.
 - [ ] README explains how to configure environment variables without exposing secrets.
+- [ ] `SCHEMA_VERSION` in `frontend/src/projectSchema.js` was bumped if this release renamed/removed a project-file field or changed a required type (see that file's header comment for what does/doesn't need a bump).
+- [ ] `npm run test:e2e` (Playwright, `frontend/tests/e2e/`) passes, not just `npm test` (vitest) — they cover different things; vitest never touches App.svelte/mapTools.js.

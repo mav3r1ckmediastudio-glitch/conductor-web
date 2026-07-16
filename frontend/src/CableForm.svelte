@@ -13,7 +13,23 @@
   let status     = 'PROPOSED';
   let notes      = '';
 
+  // Branch classification (release-audit §3): how this cable is fed from its
+  // upstream node. PASS_THROUGH = raw fibres continue downstream and carry
+  // demand; SPLITTER_OUTPUT = an optical output leg of the upstream splitter
+  // (then splitter_id / splitter_port identify which leg). No default — the
+  // classification must be a DELIBERATE choice (a silent PASS_THROUGH default
+  // would bypass inferred-classification protection for a cable leaving a
+  // splitter), so Place stays disabled until the user picks a mode (and, for a
+  // splitter output, supplies its splitter id + port).
+  let feedMode     = '';
+  let splitterId   = '';
+  let splitterPort = '';
+
   $: tubeCount = Math.floor(parseInt(fibreCount) / 12);
+
+  // Place is enabled only once the branch is deliberately + completely classified.
+  $: canSave = feedMode === 'PASS_THROUGH' ||
+    (feedMode === 'SPLITTER_OUTPUT' && splitterId.trim() !== '' && splitterPort !== '' && parseInt(splitterPort, 10) >= 1);
 
   function save() {
     dispatch('save', {
@@ -32,6 +48,9 @@
       to_node_type:   pending.to_node_type,
       length_m:       pending.length_m,
       status,
+      feed_mode:      feedMode,
+      splitter_id:    feedMode === 'SPLITTER_OUTPUT' ? (splitterId.trim() || null) : null,
+      splitter_port:  feedMode === 'SPLITTER_OUTPUT' && splitterPort !== '' ? parseInt(splitterPort, 10) : null,
       notes: notes.trim(),
     });
     reset();
@@ -42,6 +61,7 @@
   function reset() {
     cableType = 'DISTRIBUTION'; fibreCount = '48';
     fibreType = 'G.657A2'; status = 'PROPOSED'; notes = '';
+    feedMode = ''; splitterId = ''; splitterPort = '';
   }
 </script>
 
@@ -63,24 +83,24 @@
     <div class="section-lbl">IDENTITY</div>
 
     <div class="field readonly">
-      <label>Cable ID</label>
-      <input value={pending.cable_id} readonly />
+      <label for="a11y-cableform-1">Cable ID</label>
+      <input id="a11y-cableform-1" value={pending.cable_id} readonly />
     </div>
     <div class="field readonly">
-      <label>Length</label>
-      <input value="{pending.length_m} m" readonly class="calc" />
+      <label for="a11y-cableform-2">Length</label>
+      <input id="a11y-cableform-2" value="{pending.length_m} m" readonly class="calc" />
     </div>
     <div class="field readonly">
-      <label>Parent Duct</label>
-      <input value={pending.duct_id || '— not matched'} readonly class={pending.duct_id ? 'calc' : ''} />
+      <label for="a11y-cableform-3">Parent Duct</label>
+      <input id="a11y-cableform-3" value={pending.duct_id || '— not matched'} readonly class={pending.duct_id ? 'calc' : ''} />
     </div>
 
     <div class="divider"></div>
     <div class="section-lbl">CABLE SPEC</div>
 
     <div class="field">
-      <label>Cable Type *</label>
-      <select bind:value={cableType}>
+      <label for="a11y-cableform-4">Cable Type *</label>
+      <select id="a11y-cableform-4" bind:value={cableType}>
         <option>FEEDER</option>
         <option>DISTRIBUTION</option>
         <option>BACKHAUL</option>
@@ -88,8 +108,8 @@
       </select>
     </div>
     <div class="field">
-      <label>Fibre Count *</label>
-      <select bind:value={fibreCount}>
+      <label for="a11y-cableform-5">Fibre Count *</label>
+      <select id="a11y-cableform-5" bind:value={fibreCount}>
         <option>12</option>
         <option>24</option>
         <option>48</option>
@@ -98,20 +118,20 @@
       </select>
     </div>
     <div class="field readonly">
-      <label>Tube Count <span class="hint">auto — fibres ÷ 12</span></label>
-      <input value={tubeCount} readonly class="calc" />
+      <label for="a11y-cableform-6">Tube Count <span class="hint">auto — fibres ÷ 12</span></label>
+      <input id="a11y-cableform-6" value={tubeCount} readonly class="calc" />
     </div>
     <div class="field">
-      <label>Fibre Type</label>
-      <select bind:value={fibreType}>
+      <label for="a11y-cableform-7">Fibre Type</label>
+      <select id="a11y-cableform-7" bind:value={fibreType}>
         <option>G.657A2</option>
         <option>G.657A1</option>
         <option>G.652D</option>
       </select>
     </div>
     <div class="field">
-      <label>Status</label>
-      <select bind:value={status}>
+      <label for="a11y-cableform-8">Status</label>
+      <select id="a11y-cableform-8" bind:value={status}>
         <option>PROPOSED</option>
         <option>SURVEY</option>
         <option>INSTALLED</option>
@@ -120,18 +140,41 @@
     </div>
 
     <div class="divider"></div>
+    <div class="section-lbl">BRANCH CLASSIFICATION</div>
+
+    <div class="field">
+      <label for="a11y-cableform-9">Feed Mode *</label>
+      <select id="a11y-cableform-9" bind:value={feedMode} data-testid="cable-feed-mode">
+        <option value="" disabled>Select feed mode…</option>
+        <option value="PASS_THROUGH">PASS_THROUGH — raw fibres continue downstream</option>
+        <option value="SPLITTER_OUTPUT">SPLITTER_OUTPUT — optical leg of the upstream splitter</option>
+      </select>
+    </div>
+    {#if feedMode === 'SPLITTER_OUTPUT'}
+      <div class="field">
+        <label for="a11y-cableform-10">Splitter ID <span class="hint">upstream splitter, e.g. JNT-001-SP</span></label>
+        <input id="a11y-cableform-10" bind:value={splitterId} placeholder="{pending.from_node ? pending.from_node + '-SP' : 'e.g. JNT-001-SP'}" data-testid="cable-splitter-id" />
+      </div>
+      <div class="field">
+        <label for="a11y-cableform-11">Splitter Port <span class="hint">optical output number</span></label>
+        <input id="a11y-cableform-11" bind:value={splitterPort} type="number" min="1" placeholder="e.g. 1" data-testid="cable-splitter-port" />
+      </div>
+    {/if}
+
+    <div class="divider"></div>
     <div class="section-lbl">NOTES</div>
 
     <div class="field">
-      <label>Notes</label>
-      <input bind:value={notes} placeholder="Optional notes" />
+      <label for="a11y-cableform-12">Notes</label>
+      <input id="a11y-cableform-12" bind:value={notes} placeholder="Optional notes" />
     </div>
 
   </div>
 
   <div class="form-actions">
     <button class="btn-cancel" on:click={cancel}>Cancel</button>
-    <button class="btn-save" on:click={save}>Place Cable</button>
+    <button class="btn-save" on:click={save} disabled={!canSave}
+            title={canSave ? '' : 'Choose a feed mode first'} data-testid="cable-place">Place Cable</button>
   </div>
 </div>
 {/if}
@@ -163,4 +206,6 @@
   .btn-cancel:hover { border-color: #2a4a5e; color: #a0c4d8; }
   .btn-save { flex: 2; background: #00aaff14; border: 1px solid #00aaff44; color: #4dc8ff; font-family: 'Courier New', monospace; font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase; padding: 8px; border-radius: 4px; cursor: pointer; }
   .btn-save:hover { background: #00aaff22; }
+  .btn-save:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-save:disabled:hover { background: #00aaff14; }
 </style>

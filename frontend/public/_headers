@@ -1,2 +1,18 @@
-/*
-  Basic-Auth: paul:REPLACE_ME_1 colleague2:REPLACE_ME_2 colleague3:REPLACE_ME_3
+# Netlify custom headers.
+#
+# IMPORTANT: this file is intentionally credential-free. It used to contain
+# a literal Basic-Auth rule with placeholder credentials
+# (paul:REPLACE_ME_1, colleague2:REPLACE_ME_2, colleague3:REPLACE_ME_3) —
+# committed straight into the repo, which means every clone/zip shipped a
+# documented, guessable access gate. See docs/dev-notes and
+# SECURITY_AND_KEYS.md ("Netlify Basic-Auth credentials").
+#
+# The real Basic-Auth rule is now generated at build time by
+# scripts/generate-headers.mjs (runs automatically as part of `npm run
+# build`, after `vite build`) from the NETLIFY_BASIC_AUTH_CREDENTIALS
+# environment variable, and written into dist/_headers only — dist/ is
+# gitignored and never committed.
+#
+# Running `vite dev` or `vite preview` directly (bypassing `npm run
+# build`) will NOT apply Basic-Auth; that's expected for local
+# development, not a bug.

@@ -38,6 +38,7 @@
 // status values: 'no-file' | 'saved' | 'saving' | 'unsaved' | 'error'
 
 import { projectStore } from './projectStore.js';
+import { showToast } from './toast.js';
 
 const FILE_EXT    = '.conductor';
 const FILE_DESC   = 'Conductor Web project';
@@ -136,7 +137,7 @@ async function writeNow() {
   _writing = true;
   setStatus('saving');
   try {
-    const json = JSON.stringify(projectStore.state);
+    const json = JSON.stringify(projectStore.stampForSave());
     const w = await _handle.createWritable();
     await w.write(json);
     await w.close();
@@ -198,9 +199,33 @@ async function loadFromHandle(handle) {
   try { state = JSON.parse(text); }
   catch { throw new Error('That file is not a valid Conductor project.'); }
 
+  // try/finally: loadExternalState() no longer throws on a bad file (see
+  // projectStore.js) — it returns a report — but this flag still needs to
+  // reliably clear even if something else in here throws unexpectedly.
+  // Previously a plain assignment either side of the call left
+  // _suppressResetDetach stuck true forever on any exception mid-load,
+  // silently disabling the reset-detach listener for the rest of the
+  // session.
+  let result;
   _suppressResetDetach = true;
-  projectStore.loadExternalState(state);   // emits 'reset'; writes under projectStore.activeId()
-  _suppressResetDetach = false;
+  try {
+    result = projectStore.loadExternalState(state);   // emits 'reset' on success; writes under projectStore.activeId()
+  } finally {
+    _suppressResetDetach = false;
+  }
+
+  if (!result.ok) {
+    // Nothing was mutated (loadExternalState rejected before touching
+    // state) — the currently-open project, if any, is untouched. Surface
+    // exactly why so the user can fix or discard the bad file, instead of
+    // silently getting a corrupted project.
+    throw new Error('That file is not a valid Conductor project: ' + result.errors.join(' '));
+  }
+  if (result.warnings.length) {
+    const shown = result.warnings.slice(0, 3).join(' ');
+    const more = result.warnings.length > 3 ? ` (+${result.warnings.length - 3} more)` : '';
+    showToast(`"${handle.name}" needed repair on open: ${shown}${more}`, { type: 'warning', duration: 9000 });
+  }
 
   const id = projectStore.activeId();
   _handle = handle;
