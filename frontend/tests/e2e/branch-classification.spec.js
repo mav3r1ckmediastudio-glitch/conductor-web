@@ -78,6 +78,7 @@ test.describe('§4 branch-classification lifecycle', () => {
     await gotoApp(page);
     await seedAndOpen(page);
     await expect(page.getByTestId('bcp-row')).toHaveCount(1);
+    await page.getByTestId('bcp-port-select').selectOption('1');
     await page.getByTestId('bcp-resolve-split').click();
     await expect(page.getByTestId('bcp-all-clear')).toBeVisible();
   });
