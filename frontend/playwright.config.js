@@ -41,10 +41,10 @@ export default defineConfig({
   ],
 
   webServer: {
-    command: 'npm run dev -- --port ' + PORT,
+    command: 'npm run dev -- --host 127.0.0.1 --port ' + PORT,
     url: `http://127.0.0.1:${PORT}`,
     reuseExistingServer: !process.env.CI,
-    timeout: 30000,
+    timeout: 120000,
     env: {
       VITE_TEST_MODE: '1',
     },
