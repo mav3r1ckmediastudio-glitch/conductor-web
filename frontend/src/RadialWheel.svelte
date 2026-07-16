@@ -90,6 +90,12 @@
           <circle cx="18" cy="10" r="1.25" fill="currentColor" stroke="none"/>
           <circle cx="18" cy="16" r="1.25" fill="currentColor" stroke="none"/>
         ` },
+        { id: 'branch-classify', label: 'Branch Classification', iconSvg: `
+          <path d="M4,10 L9,10 M9,10 L15,5 M9,10 L15,15"/>
+          <circle cx="4" cy="10" r="1.5" fill="currentColor" stroke="none"/>
+          <circle cx="15" cy="5" r="1.5" fill="currentColor" stroke="none"/>
+          <circle cx="15" cy="15" r="1.5" fill="currentColor" stroke="none"/>
+        ` },
         { id: 'fibre-trace', label: 'Fibre Trace', iconSvg: `
           <path d="M2,15 L8,15 A4,4 0 0,1 12,11 L18,11"/>
           <circle cx="2" cy="15" r="1.5" fill="currentColor" stroke="none"/>
@@ -328,6 +334,10 @@
               : 'cubic-bezier(0.4,0,0.64,-0.4)'};
           "
           on:click={() => selectTool(tool)}
+          on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectTool(tool); } }}
+          role="button"
+          tabindex="0"
+          aria-label={tool.label}
         >
           <path
             d={spokePath(i, n)}
@@ -372,6 +382,10 @@
         stroke-width={wheelOpen ? 1.2 : 2}
         filter={wheelOpen ? 'none' : 'url(#hubGlow)'}
         on:click={toggleHub}
+        on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleHub(); } }}
+        role="button"
+        tabindex="0"
+        aria-label="Toggle tool wheel"
         style="cursor:pointer;"
       />
       <text

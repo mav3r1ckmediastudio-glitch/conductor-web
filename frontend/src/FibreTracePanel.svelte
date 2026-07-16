@@ -5,6 +5,10 @@
   //   { status, reason, uprn, entry, nodes, edges, hops[], lengthM, optical }
   // optical (ROUTED only): { loss_db, budget_db, margin_db, link_pass, breakdown }
   export let result = null;
+  // Physical-plan freshness gate, passed from App. When false, the route
+  // splice-plan export is disabled (splice plans are physical documents that
+  // depend on the unverified physical planner).
+  export let canExportSplice = false;
 
   const dispatch = createEventDispatcher();
 
@@ -126,9 +130,16 @@
 
     <div class="ft-actions">
       {#if result.status === 'ROUTED'}
-        <button class="ft-btn" on:click={() => dispatch('downloadRouteSplice')}>
-          &#8659; Download Route Splice Plan
-        </button>
+        {#if canExportSplice}
+          <button class="ft-btn" on:click={() => dispatch('downloadRouteSplice')}>
+            &#8659; Download Route Splice Plan
+          </button>
+        {:else}
+          <button class="ft-btn" disabled
+            title="Physical fibre allocation not calculated — splice plans are disabled until the physical planner is validated.">
+            Route Splice Plan — unverified
+          </button>
+        {/if}
       {/if}
       <button class="ft-btn secondary" on:click={close}>Done</button>
     </div>

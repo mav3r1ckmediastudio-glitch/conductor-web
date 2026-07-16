@@ -17,13 +17,14 @@
 // Run with: npm test
 
 import { describe, it, expect } from 'vitest';
-import { generateRouteSplicePlan } from '../splicePlan.js';
+import { generateRouteSplicePlan, generateSplicePlan, generateAllSplicePlans, physicalPlanReady } from '../splicePlan.js';
+import { hashPhysicalPlanInputs } from '../fibrePlanInputs.js';
 
 // A two-splitter cascade (1:4 feeder JNT-1 -> 1:8 terminal JNT-2 -> cabinet),
 // matching the same shape used by designHealth.test.js's chainedStore(2) —
 // the actual valid Gigaloch-style cascade, not a contrived fixture.
 function twoJointRoutedStore() {
-  return {
+  const s = {
     cabinet: { properties: { pop_id: 'CAB-1' }, geometry: { coordinates: [0, 0] } },
     joints: [
       {
@@ -50,7 +51,16 @@ function twoJointRoutedStore() {
       { assign_id: 'ASN-0003', joint_id: 'JNT-2', splitter_id: 'JNT-2-SP', fibre_role: 'SPLITTER_INPUT', tube_number: 1, fibre_number: 1 },
       { assign_id: 'ASN-0004', joint_id: 'JNT-2', splitter_id: 'JNT-2-SP', cable_id: 'JNT-2-SP', bundle_id: 'BUN-1', port: 1, fibre_role: 'SPLITTER_OUTPUT', tube_number: 1, fibre_number: 2 },
     ],
+    // The route-splice suites below exercise the real generator, so the fixture
+    // is an engineer-validated physical plan. The quarantine gate itself is
+    // covered by the dedicated 'quarantine gate' describe block at the end.
+    physicalPlanStatus: 'VALIDATED',
   };
+  // A validated plan is only releasable when its stored fingerprint matches the
+  // current project (release-audit P0-1); stamp it so the ROUTED-path suites
+  // exercise the real generator.
+  s.physicalPlanInputHash = hashPhysicalPlanInputs(s);
+  return s;
 }
 
 describe('generateRouteSplicePlan — HTML escaping (1 Jul audit §3.4)', () => {
@@ -159,9 +169,51 @@ describe('generateRouteSplicePlan — pole exclusion', () => {
       { properties: { cable_id: 'CBL-A', from_node: 'JNT-1', to_node: 'POLE-1', length_m: 20, fibre_count: 12 } },
       { properties: { cable_id: 'CBL-B', from_node: 'POLE-1', to_node: 'CAB-1', length_m: 20, fibre_count: 12 } },
     );
+    store.physicalPlanInputHash = hashPhysicalPlanInputs(store);   // topology changed → re-fingerprint
     const result = generateRouteSplicePlan(store, '1000001');
     expect(result.error).toBeUndefined();
     expect(result.jointIds).not.toContain('POLE-1');
     expect(result.jointIds).toEqual(['JNT-2', 'JNT-1']);
+  });
+});
+
+describe('generateRouteSplicePlan — physical-plan quarantine gate', () => {
+  it('refuses to export when the physical plan carries no status (legacy project)', () => {
+    const store = twoJointRoutedStore();
+    delete store.physicalPlanStatus;
+    const result = generateRouteSplicePlan(store, '1000001');
+    expect(result.error).toBeTruthy();
+    expect(result.html).toBeUndefined();
+  });
+
+  it('refuses to export when physicalPlanStatus is UNVERIFIED', () => {
+    const store = { ...twoJointRoutedStore(), physicalPlanStatus: 'UNVERIFIED' };
+    expect(generateRouteSplicePlan(store, '1000001').error).toBeTruthy();
+  });
+
+  it('physicalPlanReady requires VALIDATED status AND a matching input fingerprint', () => {
+    // VALIDATED but no fingerprint → fails closed (release-audit P0-1).
+    expect(physicalPlanReady({ physicalPlanStatus: 'VALIDATED' })).toBe(false);
+    expect(physicalPlanReady({ physicalPlanStatus: 'UNVERIFIED' })).toBe(false);
+    expect(physicalPlanReady({ physicalPlanStatus: 'PORTS_ONLY' })).toBe(false);
+    expect(physicalPlanReady({})).toBe(false);
+    expect(physicalPlanReady(null)).toBe(false);
+    // VALIDATED with a matching fingerprint → ready.
+    const ok = twoJointRoutedStore();
+    expect(physicalPlanReady(ok)).toBe(true);
+  });
+
+  it('generateSplicePlan returns the DRAFT — Unverified page, not a real plan, when unverified', () => {
+    const store = { ...twoJointRoutedStore(), physicalPlanStatus: 'UNVERIFIED' };
+    const html = generateSplicePlan(store, 'JNT-2');
+    expect(html).toContain('Physical fibre allocation not calculated');
+    expect(html).toContain('Unverified');
+    // And it is NOT the real plan (no splice/splitter detail tables).
+    expect(html).not.toContain('Tube colour coding');
+  });
+
+  it('generateAllSplicePlans exports nothing while unverified', () => {
+    const store = { ...twoJointRoutedStore(), physicalPlanStatus: 'UNVERIFIED' };
+    expect(generateAllSplicePlans(store)).toEqual([]);
   });
 });

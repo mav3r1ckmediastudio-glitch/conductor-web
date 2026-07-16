@@ -37,13 +37,13 @@
       <div class="section-lbl">NEW PROJECT</div>
 
       <div class="field">
-        <label>Project Name *</label>
-        <input bind:value={projectName} placeholder="e.g. Tyndrum Rural FTTP" />
+        <label for="a11y-projectsetup-1">Project Name *</label>
+        <input id="a11y-projectsetup-1" bind:value={projectName} placeholder="e.g. Tyndrum Rural FTTP" />
       </div>
 
       <div class="field">
-        <label>Country *</label>
-        <select bind:value={countryCode}>
+        <label for="a11y-projectsetup-2">Country *</label>
+        <select id="a11y-projectsetup-2" bind:value={countryCode}>
           <option value="SCOT">Scotland</option>
           <option value="ENG">England</option>
           <option value="WAL">Wales</option>
@@ -52,8 +52,8 @@
       </div>
 
       <div class="field">
-        <label>Build Area Code * <span class="hint">2–6 chars, used in all asset IDs</span></label>
-        <input value={buildCode} on:input={buildCodeInput} placeholder="e.g. TTY" maxlength="6" />
+        <label for="a11y-projectsetup-3">Build Area Code * <span class="hint">2–6 chars, used in all asset IDs</span></label>
+        <input id="a11y-projectsetup-3" value={buildCode} on:input={buildCodeInput} placeholder="e.g. TTY" maxlength="6" />
       </div>
 
       {#if areaId}

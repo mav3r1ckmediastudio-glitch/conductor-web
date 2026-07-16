@@ -31,6 +31,8 @@
 // splice-plan tool exists — there is nothing to consume them yet.
 
 import { buildFibreGraph } from './fibreTrace.js';
+import { buildFibreNetwork } from './fibreNetwork.js';
+import { planPhysicalFibres } from './fibrePlanner.js';
 
 const FROZEN_STATES = new Set(['INSTALLED', 'LIVE']);
 const STD_MODULES = [2, 4, 8, 16, 32];
@@ -130,7 +132,7 @@ function bfsFromPop(adj, popId) {
 //     log: [str], flags: [str],
 //     stats: { splitters, terminals, feeders, assigned, spare, overcap },
 //   }
-export function assignFibres(store) {
+export function assignFibres(store, opts = {}) {
   const log = [];
   const flags = [];
   const L = (m) => log.push(m);
@@ -169,6 +171,10 @@ export function assignFibres(store) {
   // ── Auto-derive missing splitters from topology ────────────────────────────
   const adj = buildFibreGraph(store);
   const { parent, dist } = bfsFromPop(adj, popId);
+  // The physical network owns explicit branch classification. Stage 1 consults
+  // it so a port selected on a SPLITTER_OUTPUT segment is also the port written
+  // into the logical cascade assignment (one source of truth).
+  const classifiedNetwork = buildFibreNetwork(store);
 
   // Terminals = nodes with direct consumers.
   const terminals = {};   // id -> consumer count
@@ -242,6 +248,8 @@ export function assignFibres(store) {
   const rec = (o) => { counter++; assignments.push({ assign_id: 'ASN-' + String(counter).padStart(4, '0'), ...o }); };
 
   let assigned = 0, spare = 0, overcap = 0;
+  const logicalErrors = [];
+  const expectedOutputPorts = new Map(); // child splitter -> canonical edge port
 
   // ── STAGE 1: feeder splitters (1:4) — allocate child terminals to ports ─────
   // Matches v2 exactly: the feeder's downstream child (a terminal joint OR a CBT)
@@ -267,7 +275,35 @@ export function assignFibres(store) {
       if (capOf(splitters[t]) === 4) continue;   // another feeder is not a child here
       if (traceUpToSplitter(t) === p) {
         const d = dist.get(t) ?? 9999;
-        kids.push({ asset: t, sortKey: [d, t], port: feederPortOf(store, t), status: statusOf(store, t) });
+        const status = statusOf(store, t);
+        const storedPort = feederPortOf(store, t);
+        const classified = splitterOutputForChild(classifiedNetwork, p, t);
+        let port = storedPort;
+
+        if (classified && Number.isInteger(classified.port)) {
+          const prior = expectedOutputPorts.get(t);
+          if (prior && (prior.parent !== p || prior.port !== classified.port || prior.edgeId !== classified.edgeId)) {
+            logicalErrors.push({
+              code: 'OUTPUT_CHILD_REUSE', id: classified.edgeId,
+              message: `Downstream splitter ${t} is associated with more than one optical output (${prior.edgeId} and ${classified.edgeId}).`,
+            });
+          } else {
+            expectedOutputPorts.set(t, { parent: p, edgeId: classified.edgeId, port: classified.port });
+          }
+
+          // Proposed assets are reconciled to the segment's canonical port.
+          // Installed/live assets fail closed instead of being silently moved.
+          if (storedPort != null && storedPort !== classified.port && FROZEN_STATES.has(status)) {
+            logicalErrors.push({
+              code: 'OUTPUT_FROZEN_PORT_CONFLICT', id: classified.edgeId,
+              message: `Segment ${classified.edgeId} selects splitter port ${classified.port} for ${t}, but the ${status} asset is frozen on feeder_port ${storedPort}. Resolve the conflict explicitly.`,
+            });
+          } else {
+            port = classified.port;
+          }
+        }
+
+        kids.push({ asset: t, sortKey: [d, t], port, status });
       }
     }
     const { occupied, portOf, flags: f } = stickyAllocate(kids, cap);
@@ -299,26 +335,31 @@ export function assignFibres(store) {
       }
     }
 
-    // Dark-store the remaining fibres on the feeder's input cable (the feeder uses
-    // exactly 1 input fibre; the rest of the cable terminates dark at this joint).
-    if (feederCable && feederCable.fibre_count > 1) {
-      const byTube = {};
-      for (let abs = 2; abs <= feederCable.fibre_count; abs++) {
-        const t = tubeForFibre(abs);
-        (byTube[t] = byTube[t] || []).push(posInTube(abs));
-      }
-      for (const [t, fibs] of Object.entries(byTube)) {
-        rec({
-          cable_id: feederCable.id, joint_id: p, fibre_role: 'DARK_STORAGE',
-          tube_number: parseInt(t, 10), fibre_number: fibs[0], dark_count: fibs.length,
-        });
-      }
-    }
+    // NOTE (demand-driven through-splicing): the Stage-1 blanket
+    // DARK_STORAGE emission for the feeder's input cable was a capacity-fill
+    // artefact — it dark-stored "everything the feeder didn't use" off cable
+    // capacity, not off downstream demand. Per the remediation spec §2 it stays
+    // dropped here; physical dark storage is now owned by the demand-driven
+    // planner (fibrePhysicalPlan.js). Splitter-port allocation (SPLITTER_INPUT /
+    // SPLITTER_OUTPUT / SPARE above) is unaffected.
 
     splitterSummary[p] = mergeSummary(splitterSummary[p], {
       has_splitter: true, split_ratio: ratio, fibre_in: 1, fibre_out: Object.keys(portOf).length,
     });
     L(`Stage-1 feeder ${p} (${ratio}) → ${Object.keys(portOf).length}/${cap} ports`);
+  }
+
+  // Defence in depth: even if allocation logic changes later, never report a
+  // validated run when the logical splice output disagrees with the explicitly
+  // classified physical segment.
+  for (const [child, expected] of expectedOutputPorts) {
+    const actual = splitterPorts[child];
+    if (actual !== expected.port) {
+      logicalErrors.push({
+        code: 'OUTPUT_LOGICAL_PORT_MISMATCH', id: expected.edgeId,
+        message: `Segment ${expected.edgeId} selects splitter port ${expected.port} for ${child}, but logical allocation produced ${actual ?? '(unassigned)'}.`,
+      });
+    }
   }
 
   // ── STAGE 2: terminal splitters (1:8 etc.) — allocate consumers to ports ────
@@ -363,177 +404,24 @@ export function assignFibres(store) {
     L(`Stage-2 ${isCbt ? 'CBT' : 'joint'} ${sp} (${ratio}) → ${Object.keys(portOf).length}/${cap} ports`);
   }
 
-  // ── STAGE 3: cable/span fibre numbering → THROUGH_SPLICE + DARK_STORAGE ──────
-  // Walk every cable and aerial span. At each end-node, determine which fibres are
-  // consumed by splitter inputs at that node. The remaining fibres pass straight
-  // through (THROUGH_SPLICE pairs) or are unused (DARK_STORAGE).
-  //
-  // Fibre consumption model (faithful to v2):
-  //   • Each splitter at a node consumes exactly 1 fibre on the incoming cable.
-  //   • Fibres are consumed in order starting at absolute fibre 1 (T1 F1, T1 F2 …).
-  //   • A 1:4 feeder splitter and a 1:8 terminal each consume 1 fibre.
-  //   • A THROUGH_SPLICE pairs from_cable[T,F] ↔ to_cable[T,F] for every fibre
-  //     that passes through the joint without being consumed.
-  //
-  // We need a cable adjacency: per node, which cables/spans attach to it.
-  const cablesByNode = {};   // nodeId -> [{ id, fibre_count, isSpan }]
-  const segInfo = {};        // id -> { fibre_count, from_node, to_node }
-
-  for (const c of store.cables || []) {
-    const id = S(c.properties.cable_id); if (!id) continue;
-    const fn = S(c.properties.from_node), tn = S(c.properties.to_node);
-    const fc = parseInt(c.properties.fibre_count, 10) || 0;
-    segInfo[id] = { fibre_count: fc, from_node: fn, to_node: tn, isSpan: false };
-    if (fn) { (cablesByNode[fn] = cablesByNode[fn] || []).push({ id, fibre_count: fc, isSpan: false }); }
-    if (tn) { (cablesByNode[tn] = cablesByNode[tn] || []).push({ id, fibre_count: fc, isSpan: false }); }
+  // ── STAGE 3: demand-driven physical fibre plan ──────────────────────────────
+  // The capacity-fill Stage 3 has been replaced by the demand-driven physical
+  // planner (fibreNetwork -> fibreDemand -> fibrePhysicalPlan -> fibrePlanValidation,
+  // orchestrated by planPhysicalFibres). It runs as a separate, validated pass and
+  // is NEVER mixed into the logical splitter-port records above. Its output is
+  // returned as `physicalAssignments` and is authoritative only when its
+  // validation passes (physicalPlanStatus === 'VALIDATED').
+  const physical = planPhysicalFibres(store, {
+    profile: opts.profile,
+    existingAssignments: (store.physicalAssignments && store.physicalAssignments.length)
+      ? store.physicalAssignments : store.fibreAssignments,
+  });
+  if (logicalErrors.length) {
+    physical.errors = [...(physical.errors || []), ...logicalErrors];
+    physical.ok = false;
+    physical.status = 'INVALID';
   }
-  for (const s of store.spans || []) {
-    const id = S(s.properties.span_id); if (!id) continue;
-    const fn = S(s.properties.from_node), tn = S(s.properties.to_node);
-    const fc = parseInt(s.properties.fibre_count, 10) || 0;
-    segInfo[id] = { fibre_count: fc, from_node: fn, to_node: tn, isSpan: true };
-    if (fn) { (cablesByNode[fn] = cablesByNode[fn] || []).push({ id, fibre_count: fc, isSpan: true }); }
-    if (tn) { (cablesByNode[tn] = cablesByNode[tn] || []).push({ id, fibre_count: fc, isSpan: true }); }
-  }
-
-  // CBT tails — the fibre feed from a parent JOINT up the pole chain to a CBT.
-  // A CBT's splitter input arrives on its tail, NOT on a cable/span. The tail
-  // carries the splitter feed (1 fibre for a 1:8 terminal at the CBT). Index by
-  // CBT so we can attribute each CBT's SPLITTER_INPUT to its own tail.
-  const tailByCbt = {};   // cbtId -> { id, fibre_count, to_joint }
-  for (const t of store.cbtTails || []) {
-    const tailId = S(t.properties.tail_id) || S(t.properties.cbttail_id) || S(t.properties.id) || `TAIL-${S(t.properties.from_cbt)}`;
-    const cbtId  = S(t.properties.from_cbt);
-    const joint  = S(t.properties.to_joint);
-    // A 1:8 CBT terminal needs a single feed fibre up the tail. Default 1 if unset.
-    const fc = parseInt(t.properties.fibre_count, 10) || 1;
-    if (cbtId) {
-      tailByCbt[cbtId] = { id: tailId, fibre_count: fc, to_joint: joint };
-    }
-  }
-
-  // Count splitter inputs consumed at each node (each splitter = 1 fibre in).
-  const splitterInputsAtNode = {};   // nodeId -> count
-  for (const id of splitterSet) {
-    splitterInputsAtNode[id] = (splitterInputsAtNode[id] || 0) + 1;
-  }
-
-  // ── CBT splitter inputs arrive via the tail ────────────────────────────────
-  // Emit a SPLITTER_INPUT record for every CBT, attributed to its tail (so the
-  // splice plan shows "Input fibre: T1 F1 on <tail>"). The CBT consumes its feed
-  // off the tail, so we mark the CBT node as NOT additionally consuming a fibre
-  // off any span (its span/riser carries the tail through, not a separate feed).
-  const cbtFedByTail = new Set();
-  for (const c of store.cbts || []) {
-    const cbtId = S(c.properties.cbt_id);
-    if (!cbtId || !splitterSet.has(cbtId)) continue;
-    const tail = tailByCbt[cbtId];
-    if (tail) {
-      rec({
-        cable_id: tail.id, joint_id: cbtId,
-        fibre_role: 'SPLITTER_INPUT',
-        tube_number: 1, fibre_number: 1,
-        splitter_id: cbtId + '-SP',
-      });
-      cbtFedByTail.add(cbtId);
-    }
-  }
-
-  // For each cable/span, pair up the two ends and emit splice records.
-  // The node closer to the POP is the "in" end; further is the "out" end.
-  const processedSegs = new Set();
-  for (const [segId, info] of Object.entries(segInfo)) {
-    if (processedSegs.has(segId)) continue;
-    processedSegs.add(segId);
-
-    const { fibre_count: fc, from_node: fn, to_node: tn, isSpan } = info;
-    if (!fc || !fn || !tn) continue;
-
-    // Determine which end is closer to the POP (lower dist = toward cabinet).
-    const dFrom = dist.get(fn) ?? 9999;
-    const dTo   = dist.get(tn) ?? 9999;
-    const inNode  = dFrom < dTo ? fn : tn;   // cabinet side
-    const outNode = dFrom < dTo ? tn : fn;   // premises side
-
-    // If the downstream end is a 1:4 feeder splitter, Stage 1 already fully
-    // accounts for this cable (1 input fibre + dark storage at the feeder joint).
-    // Skip it here to avoid double-emitting SPLITTER_INPUT / DARK_STORAGE.
-    if (splitters[outNode] && capOf(splitters[outNode]) === 4) continue;
-
-    // A cable feeds INTO the splitter at its downstream (out) end — that splitter
-    // consumes 1 input fibre off this cable. The splitter at the IN end (if any)
-    // treats this cable as an OUTPUT leg, not an input, so it consumes nothing here.
-    // Terminal (1:8) splitters fed by a tail consume via the tail, not this cable.
-    const outIsSplitter = !!splitters[outNode] && !cbtFedByTail.has(outNode);
-    const consumedOut = outIsSplitter ? 1 : 0;
-
-    // Emit the splitter input fibre (F1 of this cable) for the downstream splitter.
-    let fibrePointer = 1;
-    for (let i = 0; i < consumedOut; i++, fibrePointer++) {
-      const tube = tubeForFibre(fibrePointer);
-      const pos  = posInTube(fibrePointer);
-      rec({
-        cable_id: segId, joint_id: outNode,
-        fibre_role: 'SPLITTER_INPUT',
-        tube_number: tube, fibre_number: pos,
-        splitter_id: outNode + '-SP',
-      });
-    }
-
-    // For this cable, find what other cable/span it pairs with at the out-node
-    // (the joint that splices it to the next segment toward premises).
-    // THROUGH_SPLICE: remaining fibres (fibrePointer..fc) pair identically on both cables.
-    // We emit one THROUGH_SPLICE per fibre that BOTH cables can carry — the
-    // pass-through is limited by the smaller cable. Fibres on the larger cable
-    // beyond the partner's capacity become dark storage at this joint.
-    const partnersAtOut = (cablesByNode[outNode] || []).filter(c => c.id !== segId);
-    // Use the first partner (highest fibre count wins if tie).
-    const partner = partnersAtOut.sort((a, b) => b.fibre_count - a.fibre_count)[0];
-
-    // The number of fibres that can pass through = min(this remaining, partner cap).
-    const passThroughLimit = partner ? Math.min(fc, partner.fibre_count) : fc;
-
-    for (let abs = fibrePointer; abs <= passThroughLimit; abs++) {
-      const tube = tubeForFibre(abs);
-      const pos  = posInTube(abs);
-      if (partner) {
-        // Only emit once (from this cable's perspective); avoid duplicate if we
-        // process the partner later. Track by sorted pair.
-        const pairKey = [segId, partner.id].sort().join('|') + '|' + abs;
-        if (!processedSegs.has(pairKey)) {
-          processedSegs.add(pairKey);
-          rec({
-            cable_id: segId, joint_id: outNode,
-            fibre_role: 'THROUGH_SPLICE',
-            tube_number: tube, fibre_number: pos,
-            splice_to_cable: partner.id,
-            splice_to_tube: tube, splice_to_fibre: pos,
-          });
-        }
-      }
-    }
-
-    // DARK_STORAGE:
-    //   • Terminal segment (no partner): all fibres after the consumed ones.
-    //   • Mismatched splice: fibres on the larger cable beyond the partner cap.
-    const darkStart = partner ? passThroughLimit + 1 : fibrePointer;
-    if (darkStart <= fc) {
-      const byTube = {};
-      for (let abs = darkStart; abs <= fc; abs++) {
-        const t = tubeForFibre(abs);
-        (byTube[t] = byTube[t] || []).push(posInTube(abs));
-      }
-      for (const [t, fibs] of Object.entries(byTube)) {
-        rec({
-          cable_id: segId, joint_id: outNode,
-          fibre_role: 'DARK_STORAGE',
-          tube_number: parseInt(t, 10),
-          fibre_number: fibs[0],
-          dark_count: fibs.length,
-        });
-      }
-    }
-  }
+  L(`Physical plan: ${physical.status}` + (physical.errors && physical.errors.length ? ` (${physical.errors.length} issue(s))` : ''));
 
   const stats = {
     splitters: Object.keys(splitters).length,
@@ -543,7 +431,25 @@ export function assignFibres(store) {
   };
   L(`Done — ${stats.splitters} splitters, ${assigned} consumers assigned, ${spare} spare ports, ${overcap} over-capacity.`);
 
-  return { ok: true, reason: 'Assigned.', consumerPorts, splitterPorts, splitterSummary, assignments, log, flags, stats };
+  // Logical (splitter-port) records and physical (raw-fibre) records are kept in
+  // separate, explicitly-typed arrays so the two layers can never be confused
+  // (remediation spec §12). `assignments` remains the logical layer for existing
+  // consumers; `physicalAssignments` carries the validated physical plan.
+  const logicalAssignments = assignments.map(a => ({ ...a, plan_layer: 'LOGICAL' }));
+  const physicalAssignments = (physical.records || []).map(a => ({ ...a, plan_layer: 'PHYSICAL' }));
+  return {
+    ok: true, reason: 'Assigned.',
+    consumerPorts, splitterPorts, splitterSummary,
+    assignments: logicalAssignments,
+    logicalAssignments,
+    physicalAssignments,
+    physicalPlan: { status: physical.status, errors: physical.errors || [] },
+    log, flags, stats,
+    // Physical plan is authoritative only when it validated. Otherwise ports are
+    // still trustworthy but the raw-fibre plan stays gated (PORTS_ONLY).
+    assignmentMode: physical.status === 'VALIDATED' ? 'FULL' : 'PORTS_ONLY',
+    physicalPlanStatus: physical.status,
+  };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -562,6 +468,39 @@ function feederPortOf(store, jointOrCbtId) {
   for (const j of store.joints || []) if (S(j.properties.joint_id) === jointOrCbtId) return intOrNull(j.properties.feeder_port);
   for (const c of store.cbts || [])   if (S(c.properties.cbt_id)   === jointOrCbtId) return intOrNull(c.properties.feeder_port);
   return null;
+}
+
+// Return the explicit optical-output edge whose downstream branch first reaches
+// `childId`. Traversal stops at the first splitter on each branch, so a segment
+// cannot be associated with a more distant splitter through another splitter.
+function splitterOutputForChild(network, parentId, childId) {
+  if (!network || !network.root) return null;
+  const matches = [];
+  for (const edge of (network.outEdges.get(parentId) || [])) {
+    if (edge.feedMode !== 'SPLITTER_OUTPUT' || edge.feedModeInferred) continue;
+    if (edge.splitterId !== `${parentId}-SP`) continue;
+    const children = firstDownstreamSplitters(network, edge.to);
+    if (children.has(childId)) matches.push({ edgeId: edge.id, port: edge.splitterPort });
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function firstDownstreamSplitters(network, startId) {
+  const found = new Set();
+  const seen = new Set();
+  const queue = [startId];
+  while (queue.length) {
+    const id = queue.shift();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const node = network.nodes.get(id);
+    if (node && node.hasSplitter) {
+      found.add(id);
+      continue;
+    }
+    for (const edge of (network.outEdges.get(id) || [])) queue.push(edge.to);
+  }
+  return found;
 }
 function mergeSummary(existing, add) { return { ...(existing || {}), ...add }; }
 
@@ -595,7 +534,11 @@ function emptyResult(reason) {
   return {
     ok: false, reason,
     consumerPorts: {}, splitterPorts: {}, splitterSummary: {},
-    assignments: [], log: [reason], flags: [],
+    assignments: [], logicalAssignments: [], physicalAssignments: [],
+    physicalPlan: { status: 'UNVERIFIED', errors: [] },
+    log: [reason], flags: [],
     stats: { splitters: 0, terminals: 0, feeders: 0, assigned: 0, spare: 0, overcap: 0 },
+    assignmentMode: 'PORTS_ONLY',
+    physicalPlanStatus: 'UNVERIFIED',
   };
 }

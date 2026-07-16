@@ -3,9 +3,27 @@
 // Workflow stages: 'setup' → 'import' → 'build-area' → 'cabinet' → 'design'
 
 import proj4 from 'proj4';
-import { showError } from './toast.js';
+import { showError, showToast } from './toast.js';
 import { computeCascadeDelete } from './cascadeDelete.js';
 import { analyseProject, repairProject } from './repairProject.js';
+import { validateProjectState, stampVersion } from './projectSchema.js';
+import { hashPhysicalPlanInputs } from './fibrePlanInputs.js';
+
+// Set by vite.config.js's `define` from package.json — see that file for
+// why. Guarded for any code path that imports this module outside the
+// vite/vitest pipeline (that global wouldn't be replaced there).
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
+
+// Turn a validateProjectState() warnings list into one toast message. Kept
+// short (first 3 + a count) — the point is "something was silently unusable
+// and got dropped, go check your file," not a full diagnostic dump in a
+// toast.
+function warnAboutRepairs(warnings, context) {
+  if (!warnings.length) return;
+  const shown = warnings.slice(0, 3).join(' ');
+  const more = warnings.length > 3 ? ` (+${warnings.length - 3} more)` : '';
+  showToast(`${context} needed repair: ${shown}${more}`, { type: 'warning', duration: 9000 });
+}
 
 // EPSG:27700 (OSGB36 / British National Grid) → EPSG:4326 (WGS84).
 // Includes the +towgs84 7-parameter datum shift, so output matches QGIS's
@@ -259,6 +277,13 @@ const DEFAULT_STATE = {
   cbtTails: [],
   addressPoints: [],
   fibreAssignments: [],
+  physicalAssignments: [],
+  physicalPlanInputHash: null,
+  // Trust marker for the PHYSICAL fibre plan (through-splices / dark storage).
+  // 'UNVERIFIED' until the demand-driven physical planner has produced a plan
+  // that passes every invariant; only a validated planner run sets 'VALIDATED'.
+  // Logical splitter-port allocation is unaffected by this flag.
+  physicalPlanStatus: 'UNVERIFIED',
 };
 
 function load() {
@@ -268,11 +293,27 @@ function load() {
     if (id) {
       const raw = localStorage.getItem(projectKey(id));
       if (raw) {
-        const state = { ...DEFAULT_STATE, ...JSON.parse(raw) };
+        let parsed;
+        try { parsed = JSON.parse(raw); }
+        catch (e) {
+          showError('Your saved project data was corrupted and could not be read. Starting with a blank project — check for a .conductor file backup if you have one.');
+          return { ...DEFAULT_STATE };
+        }
+        const result = validateProjectState(parsed);
+        if (!result.ok) {
+          console.error('[projectStore] saved project failed validation:', result.errors);
+          showError('Your saved project could not be loaded (' + result.errors.join(' ') + '). Starting with a blank project — your data is still on disk under this browser\'s storage and has not been deleted.');
+          return { ...DEFAULT_STATE };
+        }
+        warnAboutRepairs(result.warnings, 'Your saved project');
+        if (result.migrations && result.migrations.length) {
+          showToast(result.migrations[0], { type: 'warning', duration: 12000 });
+        }
+        const state = { ...DEFAULT_STATE, ...result.state };
         // Retro-fit fibre fields onto pre-existing spans/drops, then persist so
         // the migration only runs once per project.
         if (backfillFibreFields(state)) {
-          try { localStorage.setItem(projectKey(id), JSON.stringify(state)); }
+          try { localStorage.setItem(projectKey(id), JSON.stringify(stampVersion(state, APP_VERSION))); }
           catch (e) { showError('A background data update could not be saved — it will retry next time you open this project.'); }
         }
         return state;
@@ -288,6 +329,7 @@ function save(state) {
   try {
     let id = localStorage.getItem(ACTIVE_KEY);
     if (!id) { id = newId(); localStorage.setItem(ACTIVE_KEY, id); }
+    stampVersion(state, APP_VERSION);
     localStorage.setItem(projectKey(id), JSON.stringify(state));
     upsertIndex(id, state);
   } catch (e) {
@@ -298,6 +340,47 @@ function save(state) {
     // next autosave) but isn't a sign you've lost your work outright.
     showError('Local backup save failed (storage may be full). If you have a project file open, your work is still safe there — otherwise, save a .conductor file now as a precaution.');
   }
+}
+
+// ── Debounced persistence ────────────────────────────────────────────
+// save() above is the heavy write: JSON.stringify of the WHOLE project plus a
+// localStorage write. Doing that synchronously on every single asset mutation
+// makes building a large network O(n^2) — the main autosave cost on big designs.
+// We coalesce it: frequent edits (add/move/edit/delete of assets) schedule a
+// write a few hundred ms later, so a burst of actions produces ONE write instead
+// of hundreds. A pending write is ALWAYS flushed synchronously before we switch
+// project and before the tab is hidden/closed, so nothing is ever lost. Low-
+// frequency structural changes (project setup, stage transitions, open/new/
+// restore) still write immediately via _updateNow()/flushSave(). The active-
+// project pointer (ACTIVE_KEY) and the index keep their own immediate writes,
+// so "reopen the last project on startup" is completely unaffected.
+const SAVE_DEBOUNCE_MS = 400;
+let _saveTimer = null;
+let _pendingState = null;
+
+function scheduleSave(state) {
+  _pendingState = state;
+  if (_saveTimer) return;
+  _saveTimer = setTimeout(() => { _saveTimer = null; flushSave(); }, SAVE_DEBOUNCE_MS);
+  // Don't let a queued autosave keep a Node process (e.g. tests) alive.
+  if (_saveTimer && typeof _saveTimer.unref === 'function') _saveTimer.unref();
+}
+
+// Write any coalesced state to localStorage right now. Safe to call anytime;
+// a no-op when nothing is pending.
+function flushSave() {
+  if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+  if (_pendingState) { const s = _pendingState; _pendingState = null; save(s); }
+}
+
+// Never let a coalesced write outlive the tab. pagehide covers close / navigate
+// away / mobile backgrounding; visibilitychange→hidden covers desktop tab
+// switches. Guarded so it's a no-op in non-browser environments (e.g. tests).
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('pagehide', flushSave);
+  window.addEventListener('visibilitychange', () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') flushSave();
+  });
 }
 
 class ProjectStore {
@@ -324,34 +407,65 @@ class ProjectStore {
   get cbtTails()      { return this._state.cbtTails || []; }
   get addressPoints() { return this._state.addressPoints; }
   get fibreAssignments() { return this._state.fibreAssignments || []; }
+  get physicalPlanStatus() { return this._state.physicalPlanStatus || 'UNVERIFIED'; }
+  get physicalAssignments() { return this._state.physicalAssignments || []; }
+  get physicalPlanInputHash() { return this._state.physicalPlanInputHash || null; }
 
   on(fn) { this._listeners.push(fn); return () => { this._listeners = this._listeners.filter(l => l !== fn); }; }
   _emit(event, extra) { this._listeners.forEach(fn => fn(event, this._state, extra)); }
 
+  // Frequent mutations (asset add / edit / move / delete). Debounced write.
   _update(patch) {
     this._state = { ...this._state, ...patch };
-    save(this._state);
+    scheduleSave(this._state);
+    this._emit('change');
+  }
+
+  // Low-frequency structural changes that callers/tests expect on disk right
+  // away (project setup, stage transitions). Immediate write.
+  _updateNow(patch) {
+    this._state = { ...this._state, ...patch };
+    _pendingState = this._state;
+    flushSave();
     this._emit('change');
   }
 
   _save() {
-    save(this._state);
+    _pendingState = this._state;
+    flushSave();
+  }
+
+  // Public: force any coalesced autosave to disk now. Wired to tab hide/close
+  // above; also available to callers before a risky operation.
+  flush() {
+    _pendingState = this._state;
+    flushSave();
+  }
+
+  // Stamp schema/app version onto the live state and return it. Used by
+  // fsaa.js's .conductor file write path, which serializes
+  // projectStore.state directly rather than going through save() above
+  // (that writes to localStorage, not a file) — this keeps both write
+  // paths stamping the same version fields via the same helper.
+  stampForSave() {
+    stampVersion(this._state, APP_VERSION);
+    return this._state;
   }
 
   setupProject(project) {
-    this._update({ project, stage: 'import' });
+    this._updateNow({ project, stage: 'import' });
   }
 
   setAddressPoints(features) {
-    this._update({ addressPoints: features, stage: 'build-area' });
+    this._updateNow({ addressPoints: features, stage: 'build-area' });
   }
 
   setBuildArea(feature) {
-    this._update({ buildArea: feature, stage: 'cabinet' });
+    this._updateNow({ buildArea: feature, stage: 'cabinet' });
   }
 
   setCabinet(feature) {
-    this._update({ cabinet: feature, stage: 'design' });
+    this._updateNow({ cabinet: feature, stage: 'design' });
   }
 
   addChamber(feature) {
@@ -475,7 +589,8 @@ class ProjectStore {
 
   restoreState(snapshot) {
     this._state = snapshot;
-    save(this._state);
+    _pendingState = this._state;
+    flushSave();
     this._emit('change');
   }
 
@@ -536,8 +651,34 @@ class ProjectStore {
     if (joints) patch.joints = joints;
     if (cbts)   patch.cbts = cbts;
 
-    // 3. Assignment records.
+    // 3. Assignment records + physical-plan trust marker (release-audit P0-1).
+    // The port/summary writes above (steps 1–2) are always applied — trusted
+    // logical allocation. The RECORDS are the physical plan and follow the
+    // planner's own verdict for THIS run. Automated validation is NOT human
+    // approval: a run that does not validate always makes the current status
+    // INVALID/UNVERIFIED and clears the physical plan — a previously validated
+    // plan is never silently preserved through a topology change.
+    const runStatus = result.physicalPlanStatus || 'UNVERIFIED';
     patch.fibreAssignments = result.assignments || [];
+    if (runStatus === 'VALIDATED') {
+      patch.physicalAssignments = result.physicalAssignments || [];
+      patch.physicalPlanStatus = 'VALIDATED';
+    } else {
+      // Not validated → nothing physical is authoritative for the current state.
+      patch.physicalAssignments = [];
+      patch.physicalPlanStatus = runStatus;
+    }
+
+    // Stamp the input fingerprint over the RESULTING state (post-writeback) so a
+    // freshly saved plan reads back as current, and any later edit to a planning
+    // input makes stored !== current and closes the export gate. Only meaningful
+    // for a validated plan; cleared otherwise.
+    if (runStatus === 'VALIDATED') {
+      const nextState = { ...this._state, ...patch };
+      patch.physicalPlanInputHash = hashPhysicalPlanInputs(nextState);
+    } else {
+      patch.physicalPlanInputHash = null;
+    }
 
     this._update(patch);
   }
@@ -589,6 +730,7 @@ class ProjectStore {
   //                                                        fsaa.resumeProjectFile(id)
   //   { ok: false }                                     — genuinely could not open
   openProject(id) {
+    flushSave();   // persist the outgoing project's coalesced edits before we switch id
     const prevId = this.activeId();
     if (prevId && prevId !== id) evictBlobIfFileBound(prevId);
 
@@ -629,15 +771,33 @@ class ProjectStore {
   // openProject() but takes a parsed state object instead of a localStorage id.
   // Still writes through to localStorage so the in-browser cache and the project
   // index stay coherent. Emits 'reset' so the map + UI re-sync.
+  // Validates the incoming object first (projectSchema.js) rather than the
+  // previous blind `{ ...DEFAULT_STATE, ...state }` merge — a malformed or
+  // future-schema file is REJECTED (this._state left untouched) instead of
+  // silently becoming the live project. Returns a report instead of
+  // throwing: fsaa.js's loadFromHandle() is mid-way through binding a file
+  // handle when this runs and needs to decide what "invalid" means for that
+  // context itself (compose its own Error, still reset its own in-flight
+  // flags) rather than have control ripped away by an exception here.
   loadExternalState(state) {
-    this._state = { ...DEFAULT_STATE, ...(state || {}) };
+    const result = validateProjectState(state);
+    if (!result.ok) {
+      return { ok: false, errors: result.errors, warnings: [] };
+    }
+    this._state = { ...DEFAULT_STATE, ...result.state };
     backfillFibreFields(this._state);
-    save(this._state);
+    _pendingState = this._state;
+    flushSave();
     this._emit('reset');
+    if (result.migrations && result.migrations.length) {
+      showToast(result.migrations[0], { type: 'warning', duration: 12000 });
+    }
+    return { ok: true, errors: [], warnings: result.warnings, migrations: result.migrations || [] };
   }
 
   // Start a brand-new project. The current project stays saved under its own id.
   newProject() {
+    flushSave();   // persist the outgoing project's coalesced edits before we switch id
     const prevId = this.activeId();
     if (prevId) evictBlobIfFileBound(prevId);
     const id = newId();
@@ -649,6 +809,7 @@ class ProjectStore {
   }
 
   deleteProject(id) {
+    flushSave();   // no queued autosave should fire after we remove the blob below
     try {
       localStorage.removeItem(projectKey(id));
       writeIndex(readIndex().filter(e => e.id !== id));
@@ -662,7 +823,8 @@ class ProjectStore {
   resetProject() {
     // Clears the *current* project in place (keeps it as the active id).
     this._state = { ...DEFAULT_STATE };
-    save(this._state);
+    _pendingState = this._state;
+    flushSave();
     this._emit('reset');
   }
 }

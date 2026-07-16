@@ -90,35 +90,35 @@
     <div class="section-lbl">IDENTITY</div>
 
     <div class="field">
-      <label>Spur Suffix <span class="hint">e.g. a, b, c1 — leave blank for main route</span></label>
-      <input bind:value={spurSuffix} placeholder="blank = main route" maxlength="6" />
+      <label for="a11y-chamberform-1">Spur Suffix <span class="hint">e.g. a, b, c1 — leave blank for main route</span></label>
+      <input id="a11y-chamberform-1" bind:value={spurSuffix} placeholder="blank = main route" maxlength="6" />
     </div>
     <div class="field readonly">
-      <label>Direction from Cabinet</label>
-      <input value={dirLabel} readonly />
+      <label for="a11y-chamberform-2">Direction from Cabinet</label>
+      <input id="a11y-chamberform-2" value={dirLabel} readonly />
     </div>
     <div class="field">
-      <label>Chamber Function</label>
-      <select bind:value={chamberType}>
+      <label for="a11y-chamberform-3">Chamber Function</label>
+      <select id="a11y-chamberform-3" bind:value={chamberType}>
         <option>ACCESS_CHAMBER</option>
         <option>JOINT</option>
         <option>BURIED_JOINT</option>
       </select>
     </div>
     <div class="field">
-      <label>Chamber Size</label>
-      <select bind:value={chamberSize}>
+      <label for="a11y-chamberform-4">Chamber Size</label>
+      <select id="a11y-chamberform-4" bind:value={chamberSize}>
         <option>SMALL</option>
         <option>LARGE</option>
       </select>
     </div>
     <div class="field">
-      <label>Ring Count <span class="hint">STAKKAbox rings, 0 for buried joint</span></label>
-      <input type="number" bind:value={ringCount} min="0" max="10" style="width:80px" />
+      <label for="a11y-chamberform-5">Ring Count <span class="hint">STAKKAbox rings, 0 for buried joint</span></label>
+      <input id="a11y-chamberform-5" type="number" bind:value={ringCount} min="0" max="10" style="width:80px" />
     </div>
     <div class="field">
-      <label>Status</label>
-      <select bind:value={status}>
+      <label for="a11y-chamberform-6">Status</label>
+      <select id="a11y-chamberform-6" bind:value={status}>
         <option>PROPOSED</option>
         <option>SURVEY</option>
         <option>INSTALLED</option>
@@ -129,20 +129,20 @@
     <div class="section-lbl">PHYSICAL</div>
 
     <div class="field">
-      <label>Owner</label>
-      <input bind:value={owner} />
+      <label for="a11y-chamberform-7">Owner</label>
+      <input id="a11y-chamberform-7" bind:value={owner} />
     </div>
     <div class="field">
-      <label>PIA Reference <span class="hint">Openreach, if applicable</span></label>
-      <input bind:value={piaRef} placeholder="e.g. PIA-XXXXXX" />
+      <label for="a11y-chamberform-8">PIA Reference <span class="hint">Openreach, if applicable</span></label>
+      <input id="a11y-chamberform-8" bind:value={piaRef} placeholder="e.g. PIA-XXXXXX" />
     </div>
     <div class="field">
-      <label>Openreach Reference</label>
-      <input bind:value={openreachRef} placeholder="Openreach asset ref (optional)" />
+      <label for="a11y-chamberform-9">Openreach Reference</label>
+      <input id="a11y-chamberform-9" bind:value={openreachRef} placeholder="Openreach asset ref (optional)" />
     </div>
     <div class="field">
-      <label>Lid Type</label>
-      <select bind:value={lidType}>
+      <label for="a11y-chamberform-10">Lid Type</label>
+      <select id="a11y-chamberform-10" bind:value={lidType}>
         <option value="">— not yet set —</option>
         <option>STEEL_CONCRETE</option>
         <option>IRON</option>
@@ -151,12 +151,12 @@
       </select>
     </div>
     <div class="field">
-      <label>Depth (m)</label>
-      <input type="number" bind:value={depthM} min="0" max="5" step="0.1" style="width:80px" />
+      <label for="a11y-chamberform-11">Depth (m)</label>
+      <input id="a11y-chamberform-11" type="number" bind:value={depthM} min="0" max="5" step="0.1" style="width:80px" />
     </div>
     <div class="field">
-      <label>Surface Type</label>
-      <select bind:value={surfaceType}>
+      <label for="a11y-chamberform-12">Surface Type</label>
+      <select id="a11y-chamberform-12" bind:value={surfaceType}>
         <option value="">— not yet set —</option>
         <option>TARMAC</option>
         <option>CONCRETE</option>
@@ -167,8 +167,8 @@
       </select>
     </div>
     <div class="field">
-      <label>PIA Chamber Type</label>
-      <select bind:value={piaChamberType}>
+      <label for="a11y-chamberform-13">PIA Chamber Type</label>
+      <select id="a11y-chamberform-13" bind:value={piaChamberType}>
         <option value="">— not applicable —</option>
         <option>STAKKABOX_FORTRESS</option>
         <option>OPENREACH_STANDARD</option>
@@ -180,12 +180,12 @@
     <div class="section-lbl">NOTES & REFS</div>
 
     <div class="field">
-      <label>Photo Reference</label>
-      <input bind:value={photoRef} placeholder="Photo filename or URL (optional)" />
+      <label for="a11y-chamberform-14">Photo Reference</label>
+      <input id="a11y-chamberform-14" bind:value={photoRef} placeholder="Photo filename or URL (optional)" />
     </div>
     <div class="field">
-      <label>Notes</label>
-      <input bind:value={notes} placeholder="Survey findings, access notes…" />
+      <label for="a11y-chamberform-15">Notes</label>
+      <input id="a11y-chamberform-15" bind:value={notes} placeholder="Survey findings, access notes…" />
     </div>
 
   </div>

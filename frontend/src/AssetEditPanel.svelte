@@ -116,11 +116,25 @@
     return ['chamber','joint','pole','cbt'].includes(selected?.assetType);
   }
 
+  // Branch-classifiable line assets (release-audit §3): cables, aerial spans and
+  // CBT tails can each be a raw PASS_THROUGH branch or a SPLITTER_OUTPUT leg. The
+  // control is always shown for these (even when feed_mode is unset) so an
+  // inferred/unclassified branch can be resolved here without editing JSON.
+  $: isClassifiable = ['cable','span','cbttail'].includes(selected?.assetType);
+
   function onSave() {
+    const props = { ...selected.feature.properties, ...editProps };
+    // Clearing stale optical metadata: when a branch is no longer a
+    // SPLITTER_OUTPUT, its old splitter_id / splitter_port must not linger (a
+    // leftover id with a now-meaningless port would otherwise mislead the plan).
+    if (isClassifiable && props.feed_mode !== 'SPLITTER_OUTPUT') {
+      props.splitter_id = null;
+      props.splitter_port = null;
+    }
     dispatch('saved', {
       collection: selected.collection,
       index:      selected.index,
-      props:      { ...selected.feature.properties, ...editProps },
+      props,
     });
     editMode = false;
   }
@@ -320,23 +334,65 @@
       {#each meta().show as key}
         {#if selected.feature.properties[key] !== undefined}
           <div class="arow-edit">
-            <label class="edit-lbl">{key.replace(/_/g,' ')}</label>
+            <label class="edit-lbl" for={'edit-' + key}>{key.replace(/_/g,' ')}</label>
             {#if !isEditable(key)}
               <span class="av locked">{displayValue(key, selected.feature.properties[key])}</span>
             {:else if fieldType(key) === 'select'}
-              <select class="edit-sel" bind:value={editProps[key]}>
+              <select id={'edit-' + key} class="edit-sel" bind:value={editProps[key]}>
                 {#each enumFor(key) as opt}
                   <option value={opt}>{opt}</option>
                 {/each}
               </select>
             {:else if fieldType(key) === 'textarea'}
-              <textarea class="edit-ta" rows="2" bind:value={editProps[key]}></textarea>
+              <textarea id={'edit-' + key} class="edit-ta" rows="2" bind:value={editProps[key]}></textarea>
             {:else}
-              <input class="edit-inp" type="text" bind:value={editProps[key]} />
+              <input id={'edit-' + key} class="edit-inp" type="text" bind:value={editProps[key]} />
             {/if}
           </div>
         {/if}
       {/each}
+    {/if}
+
+    <!-- Branch classification (feed_mode) for cables, spans, CBT tails -->
+    {#if isClassifiable}
+      <div class="cls-section">
+        <div class="cls-hdr">Branch Classification</div>
+        {#if !editMode}
+          <div class="arow">
+            <span class="ak">feed mode</span>
+            <span class="av">{selected.feature.properties.feed_mode || '— unclassified (inferred)'}</span>
+          </div>
+          {#if selected.feature.properties.feed_mode === 'SPLITTER_OUTPUT'}
+            <div class="arow">
+              <span class="ak">splitter id</span>
+              <span class="av">{displayValue('splitter_id', selected.feature.properties.splitter_id)}</span>
+            </div>
+            <div class="arow">
+              <span class="ak">splitter port</span>
+              <span class="av">{displayValue('splitter_port', selected.feature.properties.splitter_port)}</span>
+            </div>
+          {/if}
+        {:else}
+          <div class="arow-edit">
+            <label class="edit-lbl" for="a11y-asseteditpanel-3">feed mode</label>
+            <select id="a11y-asseteditpanel-3" class="edit-sel" bind:value={editProps.feed_mode} data-testid="edit-feed-mode">
+              <option value="">— unclassified —</option>
+              <option value="PASS_THROUGH">PASS_THROUGH</option>
+              <option value="SPLITTER_OUTPUT">SPLITTER_OUTPUT</option>
+            </select>
+          </div>
+          {#if editProps.feed_mode === 'SPLITTER_OUTPUT'}
+            <div class="arow-edit">
+              <label class="edit-lbl" for="a11y-asseteditpanel-1">splitter id</label>
+              <input id="a11y-asseteditpanel-1" class="edit-inp" type="text" bind:value={editProps.splitter_id} placeholder="e.g. JNT-001-SP" data-testid="edit-splitter-id" />
+            </div>
+            <div class="arow-edit">
+              <label class="edit-lbl" for="a11y-asseteditpanel-2">splitter port</label>
+              <input id="a11y-asseteditpanel-2" class="edit-inp" type="number" min="1" bind:value={editProps.splitter_port} data-testid="edit-splitter-port" />
+            </div>
+          {/if}
+        {/if}
+      </div>
     {/if}
 
     <!-- Terminal splitter port grid (CBT or 1:8 UG joint) -->
@@ -513,4 +569,7 @@
   .act-btn.save        { border-color: #00aaff44; color: #4dc8ff; background: #00aaff0a; }
   .act-btn.save:hover  { background: #00aaff18; }
   .act-btn.cancel:hover { border-color: #ff555544; color: #ff5555; }
+
+  .cls-section { margin-top: 10px; padding-top: 8px; border-top: 1px solid #1a2d40; }
+  .cls-hdr { font-size: 7.5px; color: #3a5a70; letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 6px; }
 </style>

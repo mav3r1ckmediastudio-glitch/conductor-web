@@ -84,20 +84,20 @@
     <div class="section-lbl">IDENTITY</div>
 
     <div class="field">
-      <label>Spur Suffix <span class="hint">leave blank for main route</span></label>
-      <input bind:value={spurSuffix} placeholder="e.g. a, b, c1" maxlength="6" />
+      <label for="a11y-piachamberform-1">Spur Suffix <span class="hint">leave blank for main route</span></label>
+      <input id="a11y-piachamberform-1" bind:value={spurSuffix} placeholder="e.g. a, b, c1" maxlength="6" />
     </div>
     <div class="field readonly">
-      <label>Direction from Cabinet</label>
-      <input value={dirLabel} readonly />
+      <label for="a11y-piachamberform-2">Direction from Cabinet</label>
+      <input id="a11y-piachamberform-2" value={dirLabel} readonly />
     </div>
     <div class="field readonly">
-      <label>Owner</label>
-      <input value="Openreach" readonly />
+      <label for="a11y-piachamberform-3">Owner</label>
+      <input id="a11y-piachamberform-3" value="Openreach" readonly />
     </div>
     <div class="field">
-      <label>Status</label>
-      <select bind:value={status}>
+      <label for="a11y-piachamberform-4">Status</label>
+      <select id="a11y-piachamberform-4" bind:value={status}>
         <option>PROPOSED</option>
         <option>SURVEY</option>
         <option>INSTALLED</option>
@@ -108,16 +108,16 @@
     <div class="section-lbl">PIA REFERENCES</div>
 
     <div class="field">
-      <label>PIA Reference <span class="hint">required — Openreach asset ref</span></label>
-      <input bind:value={piaRef} placeholder="e.g. PIA-XXXXXX" />
+      <label for="a11y-piachamberform-5">PIA Reference <span class="hint">required — Openreach asset ref</span></label>
+      <input id="a11y-piachamberform-5" bind:value={piaRef} placeholder="e.g. PIA-XXXXXX" />
     </div>
     <div class="field">
-      <label>Openreach Reference</label>
-      <input bind:value={openreachRef} placeholder="Additional Openreach ref (optional)" />
+      <label for="a11y-piachamberform-6">Openreach Reference</label>
+      <input id="a11y-piachamberform-6" bind:value={openreachRef} placeholder="Additional Openreach ref (optional)" />
     </div>
     <div class="field">
-      <label>PIA Chamber Type</label>
-      <select bind:value={piaChamberType}>
+      <label for="a11y-piachamberform-7">PIA Chamber Type</label>
+      <select id="a11y-piachamberform-7" bind:value={piaChamberType}>
         <option>STAKKABOX_FORTRESS</option>
         <option>OPENREACH_STANDARD</option>
         <option>BESPOKE</option>
@@ -128,19 +128,19 @@
     <div class="section-lbl">PHYSICAL</div>
 
     <div class="field">
-      <label>Chamber Size</label>
-      <select bind:value={chamberSize}>
+      <label for="a11y-piachamberform-8">Chamber Size</label>
+      <select id="a11y-piachamberform-8" bind:value={chamberSize}>
         <option>SMALL</option>
         <option>LARGE</option>
       </select>
     </div>
     <div class="field">
-      <label>Ring Count <span class="hint">STAKKAbox rings</span></label>
-      <input type="number" bind:value={ringCount} min="0" max="10" style="width:80px" />
+      <label for="a11y-piachamberform-9">Ring Count <span class="hint">STAKKAbox rings</span></label>
+      <input id="a11y-piachamberform-9" type="number" bind:value={ringCount} min="0" max="10" style="width:80px" />
     </div>
     <div class="field">
-      <label>Lid Type</label>
-      <select bind:value={lidType}>
+      <label for="a11y-piachamberform-10">Lid Type</label>
+      <select id="a11y-piachamberform-10" bind:value={lidType}>
         <option>STEEL_CONCRETE</option>
         <option>IRON</option>
         <option>COMPOSITE</option>
@@ -148,12 +148,12 @@
       </select>
     </div>
     <div class="field">
-      <label>Depth (m)</label>
-      <input type="number" bind:value={depthM} min="0" max="5" step="0.1" style="width:80px" />
+      <label for="a11y-piachamberform-11">Depth (m)</label>
+      <input id="a11y-piachamberform-11" type="number" bind:value={depthM} min="0" max="5" step="0.1" style="width:80px" />
     </div>
     <div class="field">
-      <label>Surface Type</label>
-      <select bind:value={surfaceType}>
+      <label for="a11y-piachamberform-12">Surface Type</label>
+      <select id="a11y-piachamberform-12" bind:value={surfaceType}>
         <option value="">— not yet set —</option>
         <option>TARMAC</option>
         <option>CONCRETE</option>
@@ -168,12 +168,12 @@
     <div class="section-lbl">NOTES & REFS</div>
 
     <div class="field">
-      <label>Photo Reference</label>
-      <input bind:value={photoRef} placeholder="Photo filename or URL (optional)" />
+      <label for="a11y-piachamberform-13">Photo Reference</label>
+      <input id="a11y-piachamberform-13" bind:value={photoRef} placeholder="Photo filename or URL (optional)" />
     </div>
     <div class="field">
-      <label>Notes</label>
-      <input bind:value={notes} placeholder="Survey findings, access notes…" />
+      <label for="a11y-piachamberform-14">Notes</label>
+      <input id="a11y-piachamberform-14" bind:value={notes} placeholder="Survey findings, access notes…" />
     </div>
 
   </div>

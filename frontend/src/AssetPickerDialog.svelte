@@ -28,6 +28,7 @@
 
 <svelte:window on:keydown={onKeydown} />
 
+<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 <div class="apd-backdrop" on:click={cancel} role="presentation">
   <div class="apd" on:click|stopPropagation role="dialog" aria-modal="true" tabindex="-1">
     <div class="apd-hdr">

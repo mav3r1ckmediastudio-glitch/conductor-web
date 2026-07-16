@@ -84,8 +84,8 @@
     <div class="section-lbl">CROSSING</div>
 
     <div class="field">
-      <label>Crossing Method</label>
-      <select bind:value={crossingType}>
+      <label for="a11y-roadcrossingform-1">Crossing Method</label>
+      <select id="a11y-roadcrossingform-1" bind:value={crossingType}>
         <option>OPEN_CUT</option>
         <option>MOLE_PLOUGH</option>
         <option>DIRECTIONAL_DRILL</option>
@@ -94,12 +94,12 @@
       </select>
     </div>
     <div class="field">
-      <label>Road Name <span class="hint">for permit application</span></label>
-      <input bind:value={roadName} placeholder="e.g. Main Street" />
+      <label for="a11y-roadcrossingform-2">Road Name <span class="hint">for permit application</span></label>
+      <input id="a11y-roadcrossingform-2" bind:value={roadName} placeholder="e.g. Main Street" />
     </div>
     <div class="field">
-      <label>Duct Type</label>
-      <select bind:value={ductType}>
+      <label for="a11y-roadcrossingform-3">Duct Type</label>
+      <select id="a11y-roadcrossingform-3" bind:value={ductType}>
         <option>HDPE_50_40</option>
         <option>HDPE_63_51</option>
         <option>HDPE_110_94</option>
@@ -109,8 +109,8 @@
       </select>
     </div>
     <div class="field">
-      <label>Status</label>
-      <select bind:value={status}>
+      <label for="a11y-roadcrossingform-4">Status</label>
+      <select id="a11y-roadcrossingform-4" bind:value={status}>
         <option>PROPOSED</option>
         <option>PERMIT_APPLIED</option>
         <option>PERMITTED</option>
@@ -119,24 +119,24 @@
       </select>
     </div>
     <div class="field">
-      <label>Spur Suffix <span class="hint">leave blank for main route</span></label>
-      <input bind:value={spurSuffix} placeholder="e.g. a, b" maxlength="6" />
+      <label for="a11y-roadcrossingform-5">Spur Suffix <span class="hint">leave blank for main route</span></label>
+      <input id="a11y-roadcrossingform-5" bind:value={spurSuffix} placeholder="e.g. a, b" maxlength="6" />
     </div>
 
     <div class="divider"></div>
     <div class="section-lbl">PERMITS & WAYLEAVES</div>
 
     <div class="field">
-      <label>Owner</label>
-      <input bind:value={owner} />
+      <label for="a11y-roadcrossingform-6">Owner</label>
+      <input id="a11y-roadcrossingform-6" bind:value={owner} />
     </div>
     <div class="field">
-      <label>Permit Reference <span class="hint">S50 / S171</span></label>
-      <input bind:value={permitRef} placeholder="Permit reference (optional)" />
+      <label for="a11y-roadcrossingform-7">Permit Reference <span class="hint">S50 / S171</span></label>
+      <input id="a11y-roadcrossingform-7" bind:value={permitRef} placeholder="Permit reference (optional)" />
     </div>
     <div class="field">
-      <label>Permit Expiry</label>
-      <input bind:value={permitExpiry} placeholder="e.g. 2025-12-31" />
+      <label for="a11y-roadcrossingform-8">Permit Expiry</label>
+      <input id="a11y-roadcrossingform-8" bind:value={permitExpiry} placeholder="e.g. 2025-12-31" />
     </div>
     <div class="check-row">
       <input type="checkbox" bind:checked={wayleaveReq} id="rc-wl" />
@@ -144,8 +144,8 @@
     </div>
     {#if wayleaveReq}
     <div class="field">
-      <label>Wayleave ID</label>
-      <input bind:value={wayleaveId} placeholder="Wayleave reference" />
+      <label for="a11y-roadcrossingform-11">Wayleave ID</label>
+      <input id="a11y-roadcrossingform-11" bind:value={wayleaveId} placeholder="Wayleave reference" />
     </div>
     {/if}
 
@@ -153,12 +153,12 @@
     <div class="section-lbl">PIA & OPENREACH</div>
 
     <div class="field">
-      <label>PIA Reference</label>
-      <input bind:value={piaRef} placeholder="Openreach PIA ref (if applicable)" />
+      <label for="a11y-roadcrossingform-9">PIA Reference</label>
+      <input id="a11y-roadcrossingform-9" bind:value={piaRef} placeholder="Openreach PIA ref (if applicable)" />
     </div>
     <div class="field">
-      <label>Openreach Reference</label>
-      <input bind:value={openreachRef} placeholder="Openreach asset ref (optional)" />
+      <label for="a11y-roadcrossingform-10">Openreach Reference</label>
+      <input id="a11y-roadcrossingform-10" bind:value={openreachRef} placeholder="Openreach asset ref (optional)" />
     </div>
 
     <div class="divider"></div>

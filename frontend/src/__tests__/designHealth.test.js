@@ -314,6 +314,45 @@ describe('Design Health — Check 2b stale-declaration drift class', () => {
     const staleFlags = result.issues.filter(i => i.category === 'Stale splitter declaration' && i.assetId === 'JNT-1');
     expect(staleFlags).toHaveLength(0);
   });
+
+  it('does NOT flag a splitter joint fed purely via CBT tails (docs/TODO.md item 2 — JNT-001 shape: a 1:4 feeding two 1:8 CBTs via tails, no bundles or cables)', () => {
+    // Tails are stored from_cbt -> to_joint (the physical lay direction),
+    // but the feed relationship runs the other way: the joint feeds the CBT.
+    // Before this fix, feedsAnotherSplitter never inspected cbtTails at all,
+    // so a splitter fed purely this way (SCOT-PH1 JNT-001) false-positived.
+    const store = chainedStore(1);
+    store.joints.push({
+      properties: { joint_id: 'JNT-TAILFED', has_splitter: true, split_ratio: '1:4' },
+      geometry: { coordinates: [0.6, 0.6] },
+    });
+    store.cbts.push(
+      { properties: { cbt_id: 'CBT-A', split_ratio: '1:8' }, geometry: { coordinates: [0.7, 0.7] } },
+      { properties: { cbt_id: 'CBT-B', split_ratio: '1:8' }, geometry: { coordinates: [0.8, 0.8] } },
+    );
+    store.cbtTails.push(
+      { properties: { tail_id: 'TAIL-A', from_cbt: 'CBT-A', to_joint: 'JNT-TAILFED', length_m: 40 } },
+      { properties: { tail_id: 'TAIL-B', from_cbt: 'CBT-B', to_joint: 'JNT-TAILFED', length_m: 60 } },
+    );
+    const result = runDesignHealth(store);
+    const staleFlags = result.issues.filter(i => i.category === 'Stale splitter declaration' && i.assetId === 'JNT-TAILFED');
+    expect(staleFlags).toHaveLength(0);
+  });
+
+  it('does NOT flag a splitter joint feeding a downstream splitter joint via an aerial span (spans are a separate collection from cables)', () => {
+    const store = chainedStore(1);
+    store.joints.push(
+      { properties: { joint_id: 'JNT-SPANFED', has_splitter: true, split_ratio: '1:4' },
+        geometry: { coordinates: [0.6, 0.6] } },
+      { properties: { joint_id: 'JNT-SPAN-DOWNSTREAM', has_splitter: true, split_ratio: '1:8' },
+        geometry: { coordinates: [0.7, 0.7] } },
+    );
+    store.spans.push({
+      properties: { span_id: 'SPAN-1', from_node: 'JNT-SPANFED', to_node: 'JNT-SPAN-DOWNSTREAM', length_m: 30 },
+    });
+    const result = runDesignHealth(store);
+    const staleFlags = result.issues.filter(i => i.category === 'Stale splitter declaration' && i.assetId === 'JNT-SPANFED');
+    expect(staleFlags).toHaveLength(0);
+  });
 });
 
 describe('Design Health — Check 2d: cable duct_id FK', () => {

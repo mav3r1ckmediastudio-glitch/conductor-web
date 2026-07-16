@@ -1,9 +1,12 @@
 name: Tests
 
 # Runs the test suite automatically on every push and pull request to master,
-# so the 56 tests built up over this session actually protect the codebase
-# rather than relying on someone remembering to run `npm test` before pushing.
-# This was Phase 2's recommendation in the June 2026 audit.
+# so the tests built up over this project actually protect the codebase
+# rather than relying on someone remembering to run `npm test` before
+# pushing. This was Phase 2's recommendation in the June 2026 audit. (Test
+# count intentionally NOT restated here as a number — it drifted out of
+# sync with reality more than once when hardcoded in prose; `npm test`'s
+# own output is the source of truth.)
 on:
   push:
     branches: [master]
@@ -32,10 +35,54 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Run the test suite
         run: npm test
 
       - name: Confirm the production build still compiles
+        # ALLOW_BUILD_WITHOUT_BASIC_AUTH=1: this step only checks the build
+        # compiles, it doesn't publish anything — CI has no
+        # NETLIFY_BASIC_AUTH_CREDENTIALS secret (and shouldn't; that's a
+        # deploy-time secret, see SECURITY_AND_KEYS.md), so
+        # scripts/generate-headers.mjs would otherwise correctly refuse to
+        # run. Do NOT set this for an actual deploy step.
         run: npm run build
+        env:
+          ALLOW_BUILD_WITHOUT_BASIC_AUTH: '1'
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: test   # no point spending E2E time if the fast unit suite is already red
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers (+ OS deps)
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E smoke tests
+        run: npm run test:e2e
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 14

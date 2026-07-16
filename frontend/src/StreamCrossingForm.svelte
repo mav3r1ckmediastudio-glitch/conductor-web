@@ -84,8 +84,8 @@
     <div class="section-lbl">CROSSING</div>
 
     <div class="field">
-      <label>Crossing Method</label>
-      <select bind:value={crossingType}>
+      <label for="a11y-streamcrossingform-1">Crossing Method</label>
+      <select id="a11y-streamcrossingform-1" bind:value={crossingType}>
         <option>DIRECTIONAL_DRILL</option>
         <option>MOLING</option>
         <option>OPEN_CUT</option>
@@ -94,8 +94,8 @@
       </select>
     </div>
     <div class="field">
-      <label>Duct Type</label>
-      <select bind:value={ductType}>
+      <label for="a11y-streamcrossingform-2">Duct Type</label>
+      <select id="a11y-streamcrossingform-2" bind:value={ductType}>
         <option>HDPE_50_40</option>
         <option>HDPE_63_51</option>
         <option>HDPE_110_94</option>
@@ -103,8 +103,8 @@
       </select>
     </div>
     <div class="field">
-      <label>Status</label>
-      <select bind:value={status}>
+      <label for="a11y-streamcrossingform-3">Status</label>
+      <select id="a11y-streamcrossingform-3" bind:value={status}>
         <option>PROPOSED</option>
         <option>PERMIT_APPLIED</option>
         <option>PERMITTED</option>
@@ -113,16 +113,16 @@
       </select>
     </div>
     <div class="field">
-      <label>Spur Suffix <span class="hint">leave blank for main route</span></label>
-      <input bind:value={spurSuffix} placeholder="e.g. a, b" maxlength="6" />
+      <label for="a11y-streamcrossingform-4">Spur Suffix <span class="hint">leave blank for main route</span></label>
+      <input id="a11y-streamcrossingform-4" bind:value={spurSuffix} placeholder="e.g. a, b" maxlength="6" />
     </div>
 
     <div class="divider"></div>
     <div class="section-lbl">WAYLEAVE & ENVIRONMENT</div>
 
     <div class="field">
-      <label>Watercourse ID <span class="hint">OS or EA reference</span></label>
-      <input bind:value={watercourseId} placeholder="e.g. WC-1234567" />
+      <label for="a11y-streamcrossingform-5">Watercourse ID <span class="hint">OS or EA reference</span></label>
+      <input id="a11y-streamcrossingform-5" bind:value={watercourseId} placeholder="e.g. WC-1234567" />
     </div>
     <div class="check-row">
       <input type="checkbox" bind:checked={wayleaveReq} id="sc-wl" />
@@ -130,33 +130,33 @@
     </div>
     {#if wayleaveReq}
     <div class="field">
-      <label>Wayleave ID</label>
-      <input bind:value={wayleaveId} placeholder="Wayleave / consent reference" />
+      <label for="a11y-streamcrossingform-11">Wayleave ID</label>
+      <input id="a11y-streamcrossingform-11" bind:value={wayleaveId} placeholder="Wayleave / consent reference" />
     </div>
     {/if}
     <div class="field">
-      <label>Environmental Permit Ref <span class="hint">EA / NatureScot</span></label>
-      <input bind:value={enviroRef} placeholder="e.g. EPR/AB1234CD/A001" />
+      <label for="a11y-streamcrossingform-6">Environmental Permit Ref <span class="hint">EA / NatureScot</span></label>
+      <input id="a11y-streamcrossingform-6" bind:value={enviroRef} placeholder="e.g. EPR/AB1234CD/A001" />
     </div>
     <div class="field">
-      <label>Consent / Permit Reference</label>
-      <input bind:value={permitRef} placeholder="Planning / S50 ref (optional)" />
+      <label for="a11y-streamcrossingform-7">Consent / Permit Reference</label>
+      <input id="a11y-streamcrossingform-7" bind:value={permitRef} placeholder="Planning / S50 ref (optional)" />
     </div>
     <div class="field">
-      <label>Permit Expiry</label>
-      <input bind:value={permitExpiry} placeholder="e.g. 2025-12-31" />
+      <label for="a11y-streamcrossingform-8">Permit Expiry</label>
+      <input id="a11y-streamcrossingform-8" bind:value={permitExpiry} placeholder="e.g. 2025-12-31" />
     </div>
 
     <div class="divider"></div>
     <div class="section-lbl">OWNER & PIA</div>
 
     <div class="field">
-      <label>Owner</label>
-      <input bind:value={owner} />
+      <label for="a11y-streamcrossingform-9">Owner</label>
+      <input id="a11y-streamcrossingform-9" bind:value={owner} />
     </div>
     <div class="field">
-      <label>PIA Reference</label>
-      <input bind:value={piaRef} placeholder="Openreach PIA ref (if applicable)" />
+      <label for="a11y-streamcrossingform-10">PIA Reference</label>
+      <input id="a11y-streamcrossingform-10" bind:value={piaRef} placeholder="Openreach PIA ref (if applicable)" />
     </div>
 
     <div class="divider"></div>

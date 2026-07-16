@@ -70,6 +70,12 @@
     background: #170d0d;
   }
   .toast-error .toast-msg { color: #ff9b9b; }
+  .toast-warning {
+    border-color: #e6b45566;
+    background: #17130d;
+  }
+  .toast-warning .toast-msg { color: #e6c98a; }
+  .toast-warning .toast-close:hover { color: #e6c98a; }
   .toast-msg { flex: 1; word-break: break-word; }
   .toast-close {
     background: transparent;
