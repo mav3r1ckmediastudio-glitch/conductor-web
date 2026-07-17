@@ -22,36 +22,37 @@ Recommended controls:
 - Monitor usage for abnormal traffic.
 - Do not use a high-privilege account key in the frontend.
 
-## Netlify Basic-Auth credentials
+## Netlify Edge Basic Auth credentials
 
-Access control at the CDN level uses a Netlify Basic-Auth rule. This used
-to be a literal `Basic-Auth: paul:REPLACE_ME_1 colleague2:REPLACE_ME_2
-colleague3:REPLACE_ME_3` line committed straight into
-`frontend/public/_headers` — meaning every clone or shared zip of this
-repo shipped a documented, guessable access gate (flagged P0 in the 15 Jul
-2026 Commercial Readiness Audit).
+Netlify's custom `Basic-Auth` response header is a Pro/Enterprise feature;
+it is not an access gate on the Personal plan. Conductor Web therefore gates
+every deployed path with `frontend/netlify/edge-functions/basic-auth.js`.
+The function runs at Netlify's edge before the app is returned and fails
+closed with HTTP 503 if its secret is missing or malformed.
 
-`frontend/public/_headers` is now permanently credential-free. The real
-Basic-Auth rule is generated at build time by
-`frontend/scripts/generate-headers.mjs` (runs automatically as the second
-step of `npm run build`, after `vite build`) from the
-`NETLIFY_BASIC_AUTH_CREDENTIALS` environment variable, and is written only
-into `dist/_headers` — `dist/` is gitignored and never committed.
+An earlier release generated a `Basic-Auth` line in `dist/_headers`. Netlify
+could report that header as processed while still not enforcing it on a
+Personal-plan site, creating a dangerous false sense of protection. The
+postbuild script now validates the credential configuration only; it does
+not emit that unsupported header. `frontend/public/_headers` remains
+permanently credential-free.
 
-- Set `NETLIFY_BASIC_AUTH_CREDENTIALS` in Netlify: **Site settings →
-  Environment variables** (or your CI's secret store). Format:
+- Set `NETLIFY_BASIC_AUTH_CREDENTIALS` in Netlify's **Environment
+  variables** page. Mark it as a secret and include at least the **Builds**
+  and **Functions** scopes. Format:
   `"user1:pass1 user2:pass2"` — space-separated `user:pass` pairs, each
-  password at least 12 characters. The generator refuses to build if the
-  variable is unset, contains a leftover `REPLACE_ME` value, or any
-  password is under 12 characters.
+  password at least 12 characters. Both the build validator and runtime gate
+  reject a missing value, a leftover `REPLACE_ME`, or a password under 12
+  characters.
 - This is deliberately **not** a `VITE_`-prefixed variable — Vite inlines
   `VITE_*` vars into the client bundle, which would leak the password to
-  every visitor before they've authenticated. Keep it a build/CI-only
-  variable.
-- For a genuinely local/throwaway build where no gate is needed, run
-  `npm run build:no-auth-gate` instead — this explicitly ships without
-  Basic-Auth and prints a warning. Never deploy that build to a shared or
-  public URL.
+  every visitor before they have authenticated. Keep it server-side only.
+- For local tests or CI where the Netlify secret is unavailable, run
+  `npm run build:no-auth-gate`. This skips only the build-time validation;
+  the deployed Edge Function still fails closed without its runtime secret.
+- After every production or preview deploy, open its URL in a new private/
+  incognito browser window. A username/password prompt must appear before
+  any app content. Treat a direct app load as a failed release gate.
 - Treat these as real secrets: unique per deployment, rotated on staff
   change, never re-used across customer deployments, never pasted into
   chat/email/tickets in plaintext, never included in a shared zip of this
@@ -88,8 +89,8 @@ Clerk shipping a feature surface the app never called.
 At the time this was reviewed, the decision was to leave the dependency
 as-is rather than force an unvalidated fix — see repo history
 (`ab4bd5a`) for the original reasoning. Clerk was subsequently removed
-from the project entirely on 1 Jul 2026 in favour of Netlify Basic Auth
-as the access gate (see `docs/conductor-web-context.md`), which resolves
+from the project entirely on 1 Jul 2026 in favour of an edge-level Basic
+Auth gate (see `docs/conductor-web-context.md`), which resolves
 this finding by elimination rather than deferral. `@clerk/clerk-js` is no
 longer a dependency anywhere in this repo.
 

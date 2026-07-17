@@ -13,8 +13,10 @@ Use this before pushing the repo to GitHub, sharing a customer demo, or preparin
 - [ ] `THIRD_PARTY_NOTICES.md` is present.
 - [ ] `ATTRIBUTION.md` is present.
 - [ ] `COMMERCIAL_EULA_TEMPLATE.md` has been reviewed before being sent to customers.
-- [ ] `NETLIFY_BASIC_AUTH_CREDENTIALS` is set in the deploy platform's environment variables (unique per deployment, 12+ char passwords) — see SECURITY_AND_KEYS.md. `frontend/public/_headers` itself must never contain real credentials.
-- [ ] Build was run via `npm run build` (not `build:no-auth-gate`) for anything reachable outside your own machine, and `dist/_headers` was spot-checked to contain a real Basic-Auth rule before deploy.
+- [ ] `NETLIFY_BASIC_AUTH_CREDENTIALS` is stored as a Netlify secret with Builds and Functions scope (unique per deployment, 12+ character passwords) — see SECURITY_AND_KEYS.md.
+- [ ] `frontend/netlify/edge-functions/basic-auth.js` is included in the deploy and the Netlify deploy log reports the Edge Function.
+- [ ] Build was run via `npm run build` (not `build:no-auth-gate`) for the release deployment so credential configuration was validated.
+- [ ] Both the Deploy Preview and production URL show a username/password prompt in a new incognito window before any app content. A direct app load blocks release.
 
 ## Mapping
 

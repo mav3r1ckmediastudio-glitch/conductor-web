@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
 
-  // No real auth here — Basic Auth (frontend/public/_headers) is the
+  // No real auth here — the Netlify Edge Basic Auth function is the
   // actual gate, enforced before any of this app's JS ever loads. This
   // screen is branding + a deliberate "continue" step, not a login.
   let { onContinue } = $props();
