@@ -9,15 +9,15 @@
 // Readiness Audit, P0: "Remove placeholder credentials from release
 // configuration and maintain secrets only in deployment secret stores.").
 //
-// This script runs AFTER `vite build` and writes the real Basic-Auth rule
-// directly into dist/_headers (gitignored, never committed) using
-// credentials read from an environment variable at build time. The
-// source-controlled public/_headers stays permanently credential-free.
+// Netlify only enforces that custom Basic-Auth header on Pro/Enterprise.
+// Personal-plan access control is therefore implemented by
+// netlify/edge-functions/basic-auth.js. This postbuild step validates that
+// the same runtime secret exists and is well formed, while keeping
+// public/_headers permanently credential-free.
 //
 // Required env var: NETLIFY_BASIC_AUTH_CREDENTIALS
 //   Format: "user1:pass1 user2:pass2 user3:pass3"
-//   (Netlify's own _headers Basic-Auth syntax — space-separated
-//   user:pass pairs, no surrounding quotes needed in the value itself.)
+//   (space-separated user:pass pairs, no surrounding quotes needed.)
 //
 // Set this in Netlify: Site settings -> Environment variables (or your
 // CI's secret store). NEVER put real values in .env files, NEVER put real
@@ -53,22 +53,21 @@ if (!existsSync(distDir)) {
 if (!creds) {
   if (process.env.ALLOW_BUILD_WITHOUT_BASIC_AUTH === '1') {
     console.warn(
-      '[generate-headers] NETLIFY_BASIC_AUTH_CREDENTIALS not set — ' +
-      'ALLOW_BUILD_WITHOUT_BASIC_AUTH=1 was passed, so this build ships ' +
-      'with NO access gate. Do not deploy this build anywhere reachable ' +
-      'by anyone outside your own machine.'
+      '[generate-headers] Build-time credential validation was skipped because ' +
+      'ALLOW_BUILD_WITHOUT_BASIC_AUTH=1 was passed. The deployed Edge Function ' +
+      'will still fail closed unless NETLIFY_BASIC_AUTH_CREDENTIALS is available at runtime.'
     );
     mkdirSync(distDir, { recursive: true });
     writeFileSync(
       headersPath,
-      '# No access gate configured for this build (ALLOW_BUILD_WITHOUT_BASIC_AUTH=1 was set).\n' +
-      '# Do not deploy this build to a shared or public URL.\n'
+      '# Access is enforced at runtime by netlify/edge-functions/basic-auth.js.\n' +
+      '# Build-time credential validation was skipped (ALLOW_BUILD_WITHOUT_BASIC_AUTH=1).\n'
     );
     process.exit(0);
   }
   fail(
-    'NETLIFY_BASIC_AUTH_CREDENTIALS is not set. Refusing to produce an ' +
-    'unprotected (or placeholder-protected) build.\n' +
+    'NETLIFY_BASIC_AUTH_CREDENTIALS is not set. Refusing to produce a ' +
+    'build without validated access-gate configuration.\n' +
     '  Set it in your deploy platform\'s environment variables, format:\n' +
     '    "user1:pass1 user2:pass2"\n' +
     '  For a genuinely local/throwaway build with no gate needed, set\n' +
@@ -90,5 +89,9 @@ if (badPair) {
   );
 }
 
-writeFileSync(headersPath, `/*\n  Basic-Auth: ${pairs.join(' ')}\n`);
-console.log(`[generate-headers] Wrote Basic-Auth rule for ${pairs.length} user(s) to dist/_headers.`);
+writeFileSync(
+  headersPath,
+  '# Access is enforced at runtime by netlify/edge-functions/basic-auth.js.\n' +
+  `# Build-time credential configuration validated for ${pairs.length} user(s).\n`
+);
+console.log(`[generate-headers] Edge access-gate configuration validated for ${pairs.length} user(s).`);

@@ -208,8 +208,10 @@ issues found.
   `package.json` hygiene, `cabinetCost.test.js`, HTML-escaping helper (2
   real injection bugs fixed), `SECURITY_AND_KEYS.md`, `shpjs` dynamic
   import. Commit `2842bd6`.
-- **1 Jul 2026** — Clerk OAuth removed entirely; Netlify Basic Auth via
-  `_headers` is now the access gate. Commit `cc82370`.
+- **1 Jul 2026** — Clerk OAuth removed entirely; an edge-level Basic Auth
+  gate now protects the deployment. The original `_headers` implementation
+  was later replaced because Netlify Personal does not enforce that header.
+  Commit `cc82370`, then the beta.5 Personal-plan hotfix.
 
 ---
 
