@@ -10,6 +10,13 @@
 - Added automated coverage for missing, malformed, wrong, and valid
   credentials, including multiple configured users and cache prevention.
 
+## Radial-wheel focus-ring hotfix
+
+- Removed Chrome's rectangular native SVG focus outline after a tool wedge is
+  clicked.
+- Preserved keyboard accessibility with a deliberate focus highlight that
+  follows the wedge or hub instead of drawing a white bounding box.
+
 ## Splitter-output port consistency fix
 
 An explicitly selected `SPLITTER_OUTPUT` port is now the canonical input to the

@@ -528,6 +528,22 @@
     transform: scale(1);
   }
 
+  /* Chrome draws a rectangular native focus ring around an SVG <g> after a
+     mouse click. Remove that box, but retain a deliberate wedge-shaped focus
+     indicator for people navigating the wheel with the keyboard. */
+  .spoke:focus,
+  .hub-layer path:focus {
+    outline: none;
+  }
+  .spoke:focus-visible > path {
+    stroke: #ffffff;
+    stroke-width: 2.2;
+  }
+  .hub-layer path:focus-visible {
+    stroke: #ffffff;
+    stroke-width: 2;
+  }
+
   /* ── HTML label overlay ──
      Left padding extends the hit area back toward the wedge, overlapping the
      angle-test band so the handoff has no dead zone. */
