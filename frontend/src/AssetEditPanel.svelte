@@ -9,6 +9,7 @@
 
   import { createEventDispatcher } from 'svelte';
   import { projectStore } from './projectStore.js';
+  import { splitterIdFor } from './splitterId.js';
   const dispatch = createEventDispatcher();
 
   // asset descriptor set by App.svelte when a pick succeeds:
@@ -267,8 +268,8 @@
 
     const records = projectStore.fibreAssignments || [];
     // Build port→childId from SPLITTER_OUTPUT records for this feeder joint
-    // (the splitter_id for a feeder = jointId + '-SP')
-    const spid = jointId + '-SP';
+    // (the splitter_id for a feeder = splitterIdFor(jointId))
+    const spid = splitterIdFor(jointId);
     const portMap = {}; // port (int) → childId (string)
     for (const rec of records) {
       if (rec.splitter_id === spid && rec.fibre_role === 'SPLITTER_OUTPUT' && rec.downstream) {

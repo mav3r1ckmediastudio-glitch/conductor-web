@@ -19,6 +19,8 @@
 //     SPLITTER_OUTPUT — e.g. a POP feeder marked optical — otherwise suppresses
 //     the raw-input requirement and validates an unbuildable plan (release blocker).
 
+import { splitterIdFor } from './splitterId.js';
+
 const FPT = 12;
 function absOf(r) {
   if (r.abs != null) return r.abs;
@@ -129,7 +131,7 @@ export function validatePhysicalPlan(network, demandPlan, records) {
       add('OUTPUT_WITHOUT_SPLITTER', `Segment ${e.id} is classified SPLITTER_OUTPUT but its upstream node ${e.from} has no splitter — an optical output leg must leave a splitter.`, e.id);
       continue;
     }
-    const expectId = `${e.from}-SP`;
+    const expectId = splitterIdFor(e.from);
     if (!e.splitterId || e.splitterId !== expectId) {
       add('OUTPUT_SPLITTER_MISMATCH', `Segment ${e.id}: SPLITTER_OUTPUT splitter_id ${e.splitterId ?? '(none)'} does not identify the upstream splitter ${expectId}.`, e.id);
     }

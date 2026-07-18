@@ -1,5 +1,6 @@
 <script>
   import { createEventDispatcher } from 'svelte';
+  import { splitterIdFor } from './splitterId.js';
   const dispatch = createEventDispatcher();
 
   // pending: { coordinates, tail_id, area_id, pop_id,
@@ -28,7 +29,7 @@
   let splitterConfirmed = false;
 
   // Proposed default splitter id: the upstream joint the tail terminates on.
-  $: proposedSplitterId = pending && pending.to_joint ? `${pending.to_joint}-SP` : '';
+  $: proposedSplitterId = (pending && splitterIdFor(pending.to_joint)) || '';
   // Save is blocked until a proposed SPLITTER_OUTPUT is explicitly confirmed.
   $: needsConfirm = feedMode === 'SPLITTER_OUTPUT' && !splitterConfirmed;
 

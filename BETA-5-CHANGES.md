@@ -45,7 +45,7 @@ segment port wins and is written back on successful assignment.
 
 ## Verification
 
-- `npm test`: 331 passing tests across 23 files.
+- `npm test`: 337 passing tests across 24 test files.
 - Production build: 347 modules transformed successfully.
 - Exact regression: selecting port 3 produces segment port 3, logical output
   port 3, child feeder port 3, and a `VALIDATED` physical plan.

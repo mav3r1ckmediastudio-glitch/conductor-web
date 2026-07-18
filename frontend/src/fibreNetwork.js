@@ -21,6 +21,8 @@
 // default is recorded on the edge as `feedModeInferred: true` so callers/UI can
 // surface "assumed" branches for engineer confirmation.
 
+import { splitterIdFor } from './splitterId.js';
+
 const STD_MODULES = [2, 4, 8, 16, 32];
 function S(v) { return (v === null || v === undefined || v === '') ? null : String(v); }
 function roundup(n) { for (const s of STD_MODULES) if (n <= s) return s; return n; }
@@ -34,10 +36,19 @@ function truthy(v) { return v === true || v === 1 || v === 'true'; }
 export const FEED_PASS_THROUGH = 'PASS_THROUGH';
 export const FEED_SPLITTER_OUTPUT = 'SPLITTER_OUTPUT';
 
+// The segment id for a CBT tail. Tails may carry tail_id or the legacy
+// cbttail_id; failing both we synthesise one from the CBT it leaves.
+// Review 17 Jul 2026 (item 3): this rule was previously expressed twice, in two
+// subtly different forms (one without the null guard). One derivation only.
+function tailSegmentId(t) {
+  const p = t.properties || {};
+  return S(p.tail_id) || S(p.cbttail_id) || (S(p.from_cbt) ? `TAIL-${S(p.from_cbt)}` : null);
+}
+
 // ── Build ─────────────────────────────────────────────────────────────────────
 // Returns:
 //   {
-//     ok, errors: [{code,message,id?}],
+//     errors: [{code,message,id?}],
 //     root,                         // POP id
 //     nodes: Map<id, { id, type, hasSplitter, ratio, cap, consumers }>,
 //     edges: [ edge ],             // oriented from→to (downstream)
@@ -46,7 +57,7 @@ export const FEED_SPLITTER_OUTPUT = 'SPLITTER_OUTPUT';
 //     dist: Map<id, number>,
 //   }
 // edge = { id, collection, from, to, capacity, feedMode, feedModeInferred,
-//          splitterId, splitterPort }
+//          rawFeed, splitterId, splitterPort }
 export function buildFibreNetwork(store) {
   const errors = [];
   const cabinet = store.cabinet;
@@ -104,9 +115,8 @@ export function buildFibreNetwork(store) {
   for (const s of store.spans || [])  pushSeg(s.properties.span_id,  'spans',  s.properties.from_node, s.properties.to_node, intCap(s.properties.fibre_count), s.properties);
   for (const t of store.cbtTails || []) {
     // A CBT tail feeds a CBT's splitter input from a joint. Default 1 fibre.
-    const cap = Number.isFinite(intCap(t.props?.fibre_count)) ? intCap(t.props?.fibre_count) : (Number.isFinite(intCap(t.properties?.fibre_count)) ? intCap(t.properties.fibre_count) : 1);
-    const tid = S(t.properties.tail_id) || S(t.properties.cbttail_id) || (t.properties.from_cbt ? `TAIL-${S(t.properties.from_cbt)}` : null);
-    pushSeg(tid, 'cbtTails', t.properties.from_cbt, t.properties.to_joint, cap || 1, t.properties);
+    const cap = intCap(t.properties?.fibre_count);
+    pushSeg(tailSegmentId(t), 'cbtTails', t.properties.from_cbt, t.properties.to_joint, Number.isFinite(cap) && cap > 0 ? cap : 1, t.properties);
   }
 
   // Structural-only connectivity (risers/bridges) — for orientation reachability
@@ -146,6 +156,7 @@ export function buildFibreNetwork(store) {
     const edge = {
       id: s.id, collection: s.collection, from, to, capacity: s.capacity,
       feedMode: null, feedModeInferred: false,
+      rawFeed: S(s.props?.feed_mode),
       splitterId: S(s.props?.splitter_id) || null,
       splitterPort: s.props?.splitter_port != null ? parseInt(s.props.splitter_port, 10) : null,
     };
@@ -156,28 +167,26 @@ export function buildFibreNetwork(store) {
   for (const [id, ins] of inEdges) if (ins.length > 1) errors.push({ code: 'MULTI_FEEDER', message: `Node ${id} has ${ins.length} upstream feeders — ambiguous. Exactly one is required.`, id });
 
   // ── Resolve feed_mode for each edge (explicit metadata, else default) ─────────
+  // Review 17 Jul 2026 (item 3): feed_mode is read straight off the props the
+  // segment already carries. This previously went through a dead `__rawFeed`
+  // branch (never written anywhere) into a resolveExplicitFeed() that did a
+  // linear .find() back through store.cables/spans/cbtTails to re-locate the
+  // very props object in hand — O(E×N) for data already available, and a second
+  // copy of the tail-id rule that had already drifted from the first.
   for (const e of edges) {
-    const explicit = S(e.__rawFeed) || resolveExplicitFeed(store, e);
-    if (explicit === FEED_PASS_THROUGH || explicit === FEED_SPLITTER_OUTPUT) { e.feedMode = explicit; }
+    if (e.rawFeed === FEED_PASS_THROUGH || e.rawFeed === FEED_SPLITTER_OUTPUT) { e.feedMode = e.rawFeed; }
     else { e.feedMode = defaultFeedMode(nodes, e); e.feedModeInferred = true; }
   }
 
-  return {
-    ok: errors.filter(x => x.code !== 'SEG_NO_ID').length === 0 || errors.length === 0,
-    errors, root, nodes, edges, outEdges, inEdges, dist,
-  };
-}
-
-// Explicit feed_mode written on the segment properties (spec §5).
-function resolveExplicitFeed(store, edge) {
-  const findProps = () => {
-    if (edge.collection === 'cables') return (store.cables || []).find(c => S(c.properties.cable_id) === edge.id)?.properties;
-    if (edge.collection === 'spans')  return (store.spans  || []).find(s => S(s.properties.span_id)  === edge.id)?.properties;
-    if (edge.collection === 'cbtTails') return (store.cbtTails || []).find(t => (S(t.properties.tail_id) || S(t.properties.cbttail_id) || `TAIL-${S(t.properties.from_cbt)}`) === edge.id)?.properties;
-    return null;
-  };
-  const p = findProps();
-  return p ? S(p.feed_mode) : null;
+  // NOTE (review 17 Jul 2026, item 1): this deliberately returns no `ok`.
+  // It previously returned one, computed as
+  //   errors.filter(x => x.code !== 'SEG_NO_ID').length === 0 || errors.length === 0
+  // — a redundant second clause, and a first clause that exempted SEG_NO_ID and
+  // so reported ok:true for a graph that had silently DROPPED a real segment.
+  // Nothing read it. fibrePlanner.js is the sole owner of that judgement and
+  // aggregates errors across all four passes. Do not reintroduce an `ok` here:
+  // callers must consult errors, or the planner's status.
+  return { errors, root, nodes, edges, outEdges, inEdges, dist };
 }
 
 // Default when feed_mode is absent. Conservative and matches the worked examples:
@@ -186,12 +195,12 @@ function resolveExplicitFeed(store, edge) {
 // splitter_id/splitter_port that belongs to the upstream node's splitter).
 function defaultFeedMode(nodes, edge) {
   const up = nodes.get(edge.from);
-  if (up && up.hasSplitter && edge.splitterId && edge.splitterId === `${edge.from}-SP`) return FEED_SPLITTER_OUTPUT;
+  if (up && up.hasSplitter && edge.splitterId && edge.splitterId === splitterIdFor(edge.from)) return FEED_SPLITTER_OUTPUT;
   return FEED_PASS_THROUGH;
 }
 
 function emptyNetwork(errors) {
-  return { ok: false, errors, root: null, nodes: new Map(), edges: [], outEdges: new Map(), inEdges: new Map(), dist: new Map() };
+  return { errors, root: null, nodes: new Map(), edges: [], outEdges: new Map(), inEdges: new Map(), dist: new Map() };
 }
 
 export function isSplitterNode(node) { return !!(node && node.hasSplitter); }

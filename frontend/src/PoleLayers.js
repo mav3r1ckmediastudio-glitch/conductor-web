@@ -84,9 +84,29 @@ const ADROP_PREMISE_H = 0.3; // land the drop slightly above ground for a clean 
 const TAIL_COLOR     = 0x7ab8d4; // muted cyan — reads as fibre, distinct from span
 const TAIL_RADIUS_M  = 0.06;
 
-// Scene origin — central Perthshire (matches map center [-3.77, 56.71]).
-// All pole positions are computed as metre-offsets from this point.
-// Elevation kept at 0; per-pole ground elevation is baked into mesh Y.
+// Scene origin — central Perthshire. All pole positions are computed as
+// metre-offsets from this point, and `_mpu` (metres->mercator) is derived from
+// THIS LATITUDE, once.
+//
+// The comment here used to read "matches map center [-3.77, 56.71]", which was
+// true when the map always opened on that fixed centre. It is no longer true —
+// the camera now fits to project bounds — and that stale assumption is what hid
+// the elevation bug fixed in _elevAt() on 17 Jul 2026: designing near this
+// latitude gives ~zero error, so nothing looked wrong until a project (Dunning,
+// 56.31N) sat away from it.
+//
+// _elevAt() now converts terrain elevation into scene metres per point, so pole
+// GROUNDING is exact at any latitude regardless of where this origin sits.
+//
+// STILL APPROXIMATE (cosmetic, OPEN — PW's call): because the scene scale is
+// fixed at this latitude, scene-metre CONSTANTS below (POLE_HEIGHT_M, radii,
+// hologram sizes) render at cos(56.71)/cos(designLat) of their nominal size —
+// a 6m pole draws as ~5.4m in Shetland and ~7.0m at the Lizard. Horizontal
+// positions are unaffected (they round-trip through _mpu and cancel exactly),
+// so this is a vertical-vs-horizontal aspect distortion only, and the stored
+// design data is untouched — the 3D layer is pure visualisation. Fixing it
+// properly means deriving the origin from the project (build-area centroid) and
+// recomputing the origin matrix on load, rather than this constant.
 const SCENE_ORIGIN = { lng: -3.77, lat: 56.71 };
 
 // ── Barber pole GLSL ──────────────────────────────────────────────────────────
@@ -358,14 +378,43 @@ class PoleLayer {
     return { east, north };
   }
 
-  // Read ground elevation at a coordinate. Returns a number, or null if terrain
-  // isn't ready for that point yet.
+  // Read ground elevation at a coordinate, returned in SCENE metres (not true
+  // metres). Returns a number, or null if terrain isn't ready for that point yet.
+  //
+  // ── WHY THE CONVERSION (fix 17 Jul 2026) ─────────────────────────────────────
+  // queryTerrainElevation returns TRUE metres above sea level (exaggeration
+  // already applied — Terrain.getElevation() returns getDEMElevation()*exaggeration,
+  // so the 1.5x from mapLayers.js is baked in and needs no handling here).
+  //
+  // But scene Y is scaled to mercator by `this._mpu`, which is computed ONCE at
+  // SCENE_ORIGIN's latitude — and MapLibre's metre->mercator scale is
+  // latitude-dependent: mpu = 1 / (earthCircumference * cos(lat)). The terrain
+  // surface, meanwhile, converts each point's elevation using THAT POINT's own
+  // latitude. Feeding a true-metre value into a scene scaled for a different
+  // latitude left every pole off the ground by:
+  //     groundElev * (cos(poleLat) / cos(SCENE_ORIGIN.lat) - 1)
+  // South of the origin poles floated; north of it they sank and were occluded.
+  // At Dunning (56.31N, ~60m ASL) that was ~+0.95m — the reported symptom. At
+  // Chester it was +7.6m, and in Snowdonia at 600m ASL, +85m.
+  //
+  // east/north are immune because they round-trip: _metresFromOrigin DIVIDES a
+  // mercator delta by _mpu and the origin matrix MULTIPLIES it back, so the
+  // scale cancels exactly. Only Y mixed in an external true-metre quantity.
+  //
+  // Converting here makes the pole's mercator Z algebraically identical to the
+  // terrain's, at any latitude, regardless of where SCENE_ORIGIN sits:
+  //     Zpole = e * (mpuHere / _mpu) * _mpu = e * mpuHere = Zterrain
+  //
+  // NOTE: this is NOT the same bug as the coarse-DEM refresh documented at the
+  // top of this file. That one is about WHEN elevation is read; this is about
+  // what a metre MEANS. Same symptom, unrelated cause — both fixes are needed.
   _elevAt(lng, lat) {
-    if (this._map && typeof this._map.queryTerrainElevation === 'function') {
-      const e = this._map.queryTerrainElevation([lng, lat]);
-      return (e == null) ? null : e;
-    }
-    return null;
+    if (!this._map || typeof this._map.queryTerrainElevation !== 'function') return null;
+    if (!this._mpu) return null;   // onAdd hasn't run yet — no scene scale to convert into
+    const e = this._map.queryTerrainElevation([lng, lat]);
+    if (e == null) return null;
+    const mpuHere = maplibregl.MercatorCoordinate.fromLngLat({ lng, lat }, 0).meterInMercatorCoordinateUnits();
+    return e * (mpuHere / this._mpu);
   }
 
   // Canvas-drawn text texture for a split-ratio hologram ("1:8", "1:4", ...).
@@ -727,7 +776,12 @@ class PoleLayer {
 
     this._scene.add(this._group);
 
-    const elevRange = (elevMin === Infinity) ? 'n/a' : `${elevMin.toFixed(1)}–${elevMax.toFixed(1)}m`;
+    // elevMin/elevMax come from the poleElev cache, which _elevAt() returns in
+    // SCENE metres, not true metres above sea level. At the design latitudes this
+    // differs from the real figure by cos(designLat)/cos(SCENE_ORIGIN.lat) — ~1%
+    // at Dunning, ~9% at Chester. Labelled so this debug line isn't read as an
+    // OS height and quietly trusted.
+    const elevRange = (elevMin === Infinity) ? 'n/a' : `${elevMin.toFixed(1)}–${elevMax.toFixed(1)}m scene`;
     console.log('[PoleLayer] rebuilt', poles.length, 'poles', cbts.length, 'cbts',
       spans.length, 'spans', adrops.length, 'adrops', tails.length, 'tails',
       this._hologramMeshes.length, 'splitter holograms · ground elev', elevRange);

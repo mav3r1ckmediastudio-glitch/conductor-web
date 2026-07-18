@@ -35,6 +35,7 @@
 // confirms.
 
 import { getAssetId } from './assetSchema.js';
+import { isSplitterId } from './splitterId.js';
 
 // Build the set of currently-existing IDs for a collection.
 function idSet(state, collection) {
@@ -140,7 +141,7 @@ function repairPass(work, tally) {
   // downstream joint/CBT bundle_ids are NOT dangling).
   remove('fibreAssignments', p => {
     if (isSet(p.joint_id) && !has(jointIds, p.joint_id) && !has(cbtIds, p.joint_id)) return true;
-    if (isSet(p.cable_id) && !String(p.cable_id).endsWith('-SP') && !has(cableOrSpanIds, p.cable_id)) return true;
+    if (isSet(p.cable_id) && !isSplitterId(p.cable_id) && !has(cableOrSpanIds, p.cable_id)) return true;
     if (isSet(p.bundle_id)
         && !has(jointIds, p.bundle_id) && !has(cbtIds, p.bundle_id)
         && !has(bundleIds, p.bundle_id) && !has(dropIds, p.bundle_id)) return true;

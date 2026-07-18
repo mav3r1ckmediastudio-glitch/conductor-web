@@ -19,6 +19,7 @@
   import { projectStore } from './projectStore.js';
   import { buildFibreNetwork } from './fibreNetwork.js';
   import { physicalPlanReady } from './splicePlan.js';
+  import { splitterIdFor } from './splitterId.js';
 
   const dispatch = createEventDispatcher();
 
@@ -60,7 +61,7 @@
       if (!e.feedModeInferred) continue;                 // explicitly classified → done
       const up = network.nodes.get(e.from);
       const upIsSplitter = !!(up && up.hasSplitter);     // == validator INFERRED_CLASSIFICATION
-      const splitterId = upIsSplitter ? `${e.from}-SP` : null;
+      const splitterId = upIsSplitter ? splitterIdFor(e.from) : null;
       const cap = upIsSplitter && Number.isFinite(up.cap) ? up.cap : 0;
       const occupied = upIsSplitter ? occupiedPorts(network, splitterId) : new Set();
       const available = [];

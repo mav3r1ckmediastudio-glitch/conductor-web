@@ -19,6 +19,8 @@
 // (by segment id) and fibres are always drawn lowest-first, so repeat runs are
 // identical. Installed/frozen fibres are pinned first and never renumbered.
 
+import { splitterIdFor } from './splitterId.js';
+
 const FPT = 12; // fibres per tube (IEC)
 function tubeForFibre(n) { return Math.floor((n - 1) / FPT) + 1; }
 function posInTube(n) { return ((n - 1) % FPT) + 1; }
@@ -117,7 +119,7 @@ export function allocatePhysicalFibres(network, demandPlan, opts = {}) {
     // 1) local splitter input (tap)
     if (node && node.hasSplitter) {
       const [tap] = take(1, [...segPins.tap]);
-      if (tap != null) rec({ cable_id: incomingEdge.id, joint_id: nodeId, fibre_role: 'SPLITTER_INPUT', tube_number: tubeForFibre(tap), fibre_number: posInTube(tap), splitter_id: nodeId + '-SP', abs: tap });
+      if (tap != null) rec({ cable_id: incomingEdge.id, joint_id: nodeId, fibre_role: 'SPLITTER_INPUT', tube_number: tubeForFibre(tap), fibre_number: posInTube(tap), splitter_id: splitterIdFor(nodeId), abs: tap });
       else errors.push({ code: 'NO_INPUT_FIBRE', message: `Splitter ${nodeId} has no free input fibre on ${incomingEdge.id}.`, id: nodeId });
     }
 

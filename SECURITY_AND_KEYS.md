@@ -73,6 +73,35 @@ Before pushing or sharing the repo, confirm that these are not included:
 - `__pycache__/` files.
 - Customer data, real premises data, live network data, credentials, tokens, or API logs.
 
+## Beta access gate — credential format constraints (review 17 Jul 2026, item 9)
+
+`NETLIFY_BASIC_AUTH_CREDENTIALS` is parsed by `parseCredentialList()` in
+`frontend/netlify/edge-functions/basic-auth.js`. The format is
+space-separated `user:password` pairs, validated against:
+
+    /^[^:\s]+:[^:\s]{12,}$/
+
+This means a password **may not contain a colon or any whitespace**, and must be
+**at least 12 characters**. The username may not contain a colon or whitespace
+either.
+
+**Why this matters:** validation is all-or-nothing. If any single pair fails the
+regex, `parseCredentialList()` returns null and the Edge Function returns **503
+for every request to every path** — the whole site, including for you. This is
+deliberate (fail closed rather than fail open), but the only signal is a
+`console.error` in the Netlify function log:
+
+    [basic-auth] Access gate credential configuration is missing or invalid.
+
+So: **if the beta site returns "Access gate unavailable" after a credential
+rotation, check for a colon or a space in the new password first.** The literal
+`REPLACE_ME` (any case) is also rejected by design.
+
+**Not implemented:** there is no brute-force throttle or lockout on the gate.
+Acceptable for a private beta behind a 12+ character secret and not a gap worth
+closing at this stage, but it is a conscious omission rather than an oversight.
+Revisit if the gate is ever used for anything beyond the closed beta.
+
 ## Build/deployment recommendation
 
 For commercial deployments, prefer environment variables managed by the host/platform rather than committed config files.

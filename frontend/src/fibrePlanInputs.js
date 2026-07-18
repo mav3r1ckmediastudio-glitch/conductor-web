@@ -9,10 +9,29 @@
 // the hash, which closes the gate until the plan is recomputed and re-validated.
 //
 // IMPORTANT: only RAW planning inputs are fingerprinted (topology, capacities,
-// ratios, feed modes, allocation profile, frozen physical fibres). Derived
+// ratios, feed modes, frozen physical fibres). Derived
 // allocation outputs written back by applyFibreAssignment (feeder_port /
 // splitter_port on assets, fibre_in / fibre_out summaries) are deliberately
 // EXCLUDED so that persisting a fresh plan does not immediately invalidate it.
+//
+// ── ALLOCATION PROFILE IS NOT FINGERPRINTED (review 17 Jul 2026, item 2) ──────
+// This previously hashed `store.allocationProfile`, a field that exists NOWHERE
+// else in the codebase — nothing writes it, and it is not a projectStore getter.
+// The term always evaluated to the literal 'COLOUR_PRESERVING' and contributed
+// nothing, while the header claimed the fingerprint covered it. The dead term is
+// gone and the claim withdrawn.
+//
+// The profile is currently a CALL-TIME option (fibreAssign.js -> opts.profile ->
+// fibrePlanner.js), not project state. That is why omitting it is safe TODAY:
+// profile can only enter at compute time, so changing it forces a recompute,
+// which stores a fresh hash. The staleness this gate exists to catch cannot
+// arise for a value that is not persisted.
+//
+// >>> IF ALLOCATION PROFILE EVER BECOMES A PERSISTED PROJECT SETTING, IT MUST BE
+// >>> ADDED BACK TO canonicalPlanInputs() AND THE HASH PREFIX BUMPED. Without
+// >>> that, a plan validated under COLOUR_PRESERVING stays exportable after a
+// >>> switch to COMPACT_OUTBOUND — exactly the P0-1 class this module closes.
+// Decision on whether to promote profile to a store field is OPEN — PW's call.
 
 function P(x) { return x && x.properties ? x.properties : (x || {}); }
 function field(o, k) { const v = P(o)[k]; return v === undefined || v === null ? '' : String(v); }
@@ -34,7 +53,6 @@ export function canonicalPlanInputs(store) {
   if (!store) return '';
   const parts = [];
   parts.push('POP\x1e' + field(store.cabinet, 'pop_id'));
-  parts.push('PROFILE\x1e' + String(store.allocationProfile || 'COLOUR_PRESERVING'));
   parts.push('JOINTS\x1e' + rows(store.joints, ['joint_id', 'has_splitter', 'split_ratio', 'joint_type', 'chamber_id']).join('\x1d'));
   parts.push('CBTS\x1e' + rows(store.cbts, ['cbt_id', 'split_ratio', 'parent_pole_id']).join('\x1d'));
   parts.push('CABLES\x1e' + rows(store.cables, ['cable_id', 'from_node', 'to_node', 'fibre_count', 'feed_mode', 'splitter_id', 'splitter_port']).join('\x1d'));
@@ -52,7 +70,13 @@ export function canonicalPlanInputs(store) {
 function djb2(s) { let h = 5381; for (let i = 0; i < s.length; i++) h = (((h << 5) + h) + s.charCodeAt(i)) >>> 0; return h; }
 function fnv1a(s) { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0; } return h >>> 0; }
 
+// Prefix is a FORMAT version for the canonical string, not the app version.
+// Bump it whenever canonicalPlanInputs() changes shape, so an old stored hash
+// can never accidentally equal a new computed one. p2 -> p3: dropped the dead
+// PROFILE term (review 17 Jul 2026, item 2). Consequence, and it is the correct
+// direction: any project saved with a p2- hash mismatches on load, so its export
+// gate closes until Fibre Assign is re-run. Fail-closed, by design.
 export function hashPhysicalPlanInputs(store) {
   const s = canonicalPlanInputs(store);
-  return 'p2-' + djb2(s).toString(16).padStart(8, '0') + fnv1a(s).toString(16).padStart(8, '0') + '-' + s.length.toString(16);
+  return 'p3-' + djb2(s).toString(16).padStart(8, '0') + fnv1a(s).toString(16).padStart(8, '0') + '-' + s.length.toString(16);
 }

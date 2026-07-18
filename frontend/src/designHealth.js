@@ -20,6 +20,7 @@
 // Check 3  — Design completeness (INFO only)
 
 import { traceFibre } from './fibreTrace.js';
+import { isSplitterId } from './splitterId.js';
 
 export const VERDICT = { GO: 'GO', CAUTION: 'CAUTION', NOGO: 'NO-GO' };
 
@@ -484,7 +485,7 @@ export function runDesignHealth(store) {
           aid, 'fibreAssignments');
       }
 
-      if (p.cable_id && !String(p.cable_id).endsWith('-SP') && !cableIds.has(String(p.cable_id))) {
+      if (p.cable_id && !isSplitterId(p.cable_id) && !cableIds.has(String(p.cable_id))) {
         add(issues, 'error', 'Broken connectivity',
           `Fibre assignment ${aid}: cable_id "${p.cable_id}" not found — was the cable deleted after fibres were assigned?`,
           aid, 'fibreAssignments');

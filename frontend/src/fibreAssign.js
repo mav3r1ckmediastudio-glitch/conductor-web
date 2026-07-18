@@ -33,6 +33,7 @@
 import { buildFibreGraph } from './fibreTrace.js';
 import { buildFibreNetwork } from './fibreNetwork.js';
 import { planPhysicalFibres } from './fibrePlanner.js';
+import { splitterIdFor } from './splitterId.js';
 
 const FROZEN_STATES = new Set(['INSTALLED', 'LIVE']);
 const STD_MODULES = [2, 4, 8, 16, 32];
@@ -308,7 +309,7 @@ export function assignFibres(store, opts = {}) {
     }
     const { occupied, portOf, flags: f } = stickyAllocate(kids, cap);
     f.forEach(fl => { flags.push(`${p}: ${fl}`); });
-    const spid = p + '-SP';
+    const spid = splitterIdFor(p);
 
     // Resolve the feeder cable arriving at this joint from the cabinet side.
     const feederCable = feederCableInto(store, p, dist);
@@ -382,7 +383,7 @@ export function assignFibres(store, opts = {}) {
     const { occupied, portOf, flags: f } = stickyAllocate(cons, cap);
     f.forEach(fl => { flags.push(`${sp}: ${fl}`); if (fl.startsWith('OVERCAP')) overcap++; });
 
-    const spid = sp + '-SP';
+    const spid = splitterIdFor(sp);
     rec({ splitter_id: spid, joint_id: sp, fibre_role: 'SPLITTER_INPUT', port: 1 });
 
     for (let p = 1; p <= cap; p++) {
@@ -478,7 +479,7 @@ function splitterOutputForChild(network, parentId, childId) {
   const matches = [];
   for (const edge of (network.outEdges.get(parentId) || [])) {
     if (edge.feedMode !== 'SPLITTER_OUTPUT' || edge.feedModeInferred) continue;
-    if (edge.splitterId !== `${parentId}-SP`) continue;
+    if (edge.splitterId !== splitterIdFor(parentId)) continue;
     const children = firstDownstreamSplitters(network, edge.to);
     if (children.has(childId)) matches.push({ edgeId: edge.id, port: edge.splitterPort });
   }

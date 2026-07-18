@@ -1,5 +1,6 @@
 <script>
   import { createEventDispatcher } from 'svelte';
+  import { splitterIdFor } from './splitterId.js';
   const dispatch = createEventDispatcher();
 
   // pending: { coordinates, cable_id, area_id, pop_id,
@@ -153,7 +154,7 @@
     {#if feedMode === 'SPLITTER_OUTPUT'}
       <div class="field">
         <label for="a11y-cableform-10">Splitter ID <span class="hint">upstream splitter, e.g. JNT-001-SP</span></label>
-        <input id="a11y-cableform-10" bind:value={splitterId} placeholder="{pending.from_node ? pending.from_node + '-SP' : 'e.g. JNT-001-SP'}" data-testid="cable-splitter-id" />
+        <input id="a11y-cableform-10" bind:value={splitterId} placeholder="{splitterIdFor(pending.from_node) || 'e.g. JNT-001-SP'}" data-testid="cable-splitter-id" />
       </div>
       <div class="field">
         <label for="a11y-cableform-11">Splitter Port <span class="hint">optical output number</span></label>
