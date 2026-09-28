@@ -1,0 +1,174 @@
+// wirelessLayers.js
+// MapLibre sources/layers for the wireless layer + the coverage image overlay.
+// Owns NO project state: everything is derived from a state snapshot handed in
+// by syncToMap(), so the map can never disagree with the store.
+
+import { emptyFC } from './mapGeom.js';
+import { destinationPoint } from './wirelessGeo.js';
+import { globalPixelToLngLat } from './wirelessTerrain.js';
+import { hashWirelessInputs } from './wirelessInputs.js';
+import { num } from './wirelessAnalysis.js';
+
+export const WL = {
+  linksSrc: 'wireless-links-src', sitesSrc: 'wireless-sites-src', fansSrc: 'wireless-fans-src',
+  rubberSrc: 'wireless-rubber-src', coverageSrc: 'wireless-coverage-src',
+  coverageLayer: 'wireless-coverage-layer', fansFill: 'wireless-fans-fill', fansLine: 'wireless-fans-line',
+  linksGlow: 'wireless-links-glow', linksLayer: 'wireless-links-layer', rubberLayer: 'wireless-rubber-layer',
+  sitesLayer: 'wireless-sites-layer', sitesLabel: 'wireless-sites-label',
+};
+
+const COLOURS = { pass: '#3ddc97', fail: '#ff5c5c', unverified: '#4dc8ff' };
+
+// ── Coverage colour ramp (absolute dBm, weak -> strong) ─────────────────────
+export const COVERAGE_STOPS = [
+  [-95, [31, 59, 115]], [-85, [31, 154, 201]], [-75, [63, 208, 165]],
+  [-65, [197, 232, 108]], [-55, [255, 176, 59]], [-45, [255, 77, 77]],
+];
+export function colourForDbm(dbm) {
+  const s = COVERAGE_STOPS;
+  if (dbm <= s[0][0]) return s[0][1];
+  if (dbm >= s[s.length - 1][0]) return s[s.length - 1][1];
+  for (let i = 1; i < s.length; i++) {
+    if (dbm <= s[i][0]) {
+      const [d0, c0] = s[i - 1], [d1, c1] = s[i], t = (dbm - d0) / (d1 - d0);
+      return [0, 1, 2].map(k => Math.round(c0[k] + (c1[k] - c0[k]) * t));
+    }
+  }
+  return s[s.length - 1][1];
+}
+
+/** Sector wedge polygon (display only). Radius is capped so wedges stay readable at map scale. */
+export function sectorFanPolygon(center, azimuthDeg, beamwidthDeg, radiusM) {
+  const half = beamwidthDeg / 2, steps = Math.max(2, Math.ceil(beamwidthDeg / 6));
+  const ring = [[center.lng, center.lat]];
+  for (let i = 0; i <= steps; i++) {
+    const p = destinationPoint(center, azimuthDeg - half + (beamwidthDeg * i) / steps, radiusM);
+    ring.push([p.lng, p.lat]);
+  }
+  ring.push([center.lng, center.lat]);
+  return { type: 'Polygon', coordinates: [ring] };
+}
+
+/** Per-link display state from the stored analysis, only if it is fresh. */
+export function linkDisplayStates(state) {
+  const a = state.wirelessAnalysis;
+  const fresh = !!a && a.inputHash === hashWirelessInputs(state);
+  const byId = new Map(fresh ? a.links.map(l => [l.link_id, l.verdict]) : []);
+  return (id) => (byId.get(id) === 'PASS' ? 'pass' : byId.get(id) === 'FAIL' ? 'fail' : 'unverified');
+}
+
+export function buildDisplayCollections(state) {
+  const stateOf = linkDisplayStates(state);
+  const links = (state.wirelessLinks || []).map(f => ({ ...f, properties: { ...f.properties, _state: stateOf(f.properties?.link_id) } }));
+  const fans = [];
+  const sitesById = new Map((state.wirelessSites || []).map(s => [s.properties?.site_id, s]));
+  for (const sec of state.wirelessSectors || []) {
+    const p = sec.properties || {}, site = sitesById.get(p.site_id), c = (site || sec).geometry?.coordinates;
+    // num() maps '' / null / junk to null — never to 0 — so an incomplete sector is not drawn pointing north.
+    const az = num(p.azimuth_deg), bw = num(p.beamwidth_deg);
+    if (!c || az == null || bw == null || bw <= 0) continue;
+    const r = Math.min(num(p.range_m) ?? 1000, 1200);
+    fans.push({ type: 'Feature', properties: { sector_id: p.sector_id }, geometry: sectorFanPolygon({ lng: c[0], lat: c[1] }, az, Math.min(bw, 359), r) });
+  }
+  return { sites: state.wirelessSites || [], links, fans };
+}
+
+// ── Coverage overlay state (survives basemap switches) ──────────────────────
+let _coverage = null;   // { url, coordinates }
+let _last = {};
+
+export function ensureWirelessLayers(map) {
+  _last = {};
+  const add = (id, spec) => { if (!map.getSource(id)) map.addSource(id, spec); };
+  add(WL.fansSrc,   { type: 'geojson', data: emptyFC() });
+  add(WL.linksSrc,  { type: 'geojson', data: emptyFC() });
+  add(WL.sitesSrc,  { type: 'geojson', data: emptyFC() });
+  add(WL.rubberSrc, { type: 'geojson', data: emptyFC() });
+
+  if (_coverage && !map.getSource(WL.coverageSrc)) {
+    map.addSource(WL.coverageSrc, { type: 'image', url: _coverage.url, coordinates: _coverage.coordinates });
+  }
+  const anchor = map.getLayer('addresses-clusters') ? 'addresses-clusters' : undefined;
+  if (map.getSource(WL.coverageSrc) && !map.getLayer(WL.coverageLayer)) {
+    map.addLayer({ id: WL.coverageLayer, type: 'raster', source: WL.coverageSrc, paint: { 'raster-opacity': 0.75, 'raster-fade-duration': 0 } }, anchor);
+  }
+  if (!map.getLayer(WL.fansFill)) {
+    map.addLayer({ id: WL.fansFill, type: 'fill', source: WL.fansSrc, paint: { 'fill-color': '#4dc8ff', 'fill-opacity': 0.10 } });
+    map.addLayer({ id: WL.fansLine, type: 'line', source: WL.fansSrc, paint: { 'line-color': '#4dc8ff', 'line-width': 1, 'line-opacity': 0.6 } });
+  }
+  if (!map.getLayer(WL.linksLayer)) {
+    map.addLayer({ id: WL.linksGlow, type: 'line', source: WL.linksSrc, layout: { 'line-cap': 'round' },
+      paint: { 'line-color': ['match', ['get', '_state'], 'pass', COLOURS.pass, 'fail', COLOURS.fail, COLOURS.unverified], 'line-width': 8, 'line-opacity': 0.18, 'line-blur': 4 } });
+    map.addLayer({ id: WL.linksLayer, type: 'line', source: WL.linksSrc, layout: { 'line-cap': 'round' },
+      paint: { 'line-color': ['match', ['get', '_state'], 'pass', COLOURS.pass, 'fail', COLOURS.fail, COLOURS.unverified],
+               'line-width': 2.5, 'line-dasharray': ['match', ['get', '_state'], 'unverified', ['literal', [3, 2]], ['literal', [1, 0]]] } });
+    map.addLayer({ id: WL.rubberLayer, type: 'line', source: WL.rubberSrc, paint: { 'line-color': '#ffffff', 'line-width': 1.5, 'line-dasharray': [2, 2], 'line-opacity': 0.8 } });
+  }
+  if (!map.getLayer(WL.sitesLayer)) {
+    map.addLayer({ id: WL.sitesLayer, type: 'circle', source: WL.sitesSrc,
+      paint: { 'circle-radius': 7, 'circle-color': '#0d1520', 'circle-stroke-color': '#4dc8ff', 'circle-stroke-width': 2.5 } });
+    map.addLayer({ id: WL.sitesLabel, type: 'symbol', source: WL.sitesSrc,
+      layout: { 'text-field': ['get', 'site_id'], 'text-font': ['Noto Sans Regular'], 'text-size': 9, 'text-offset': [0, 1.2], 'text-anchor': 'top', 'text-allow-overlap': true },
+      paint: { 'text-color': '#a0c4d8', 'text-halo-color': '#0a0f14', 'text-halo-width': 0.4 } });
+  }
+}
+
+/** Push wireless state to the map. Skips work when nothing relevant changed by reference. */
+export function syncWireless(map, state) {
+  const key = [state.wirelessSites, state.wirelessLinks, state.wirelessSectors, state.wirelessSettings, state.wirelessAnalysis];
+  if (_last.key && key.every((v, i) => v === _last.key[i])) return;
+  const c = buildDisplayCollections(state);
+  const put = (id, features) => { const src = map.getSource(id); if (src) src.setData({ type: 'FeatureCollection', features }); };
+  put(WL.sitesSrc, c.sites); put(WL.linksSrc, c.links); put(WL.fansSrc, c.fans);
+  _last.key = key;
+}
+
+/** Draws a rubber-band segment while the link tool is choosing its second site. */
+export function setWirelessRubber(map, coords) {
+  const src = map.getSource(WL.rubberSrc);
+  if (!src) return;
+  src.setData(coords ? { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } }] } : emptyFC());
+}
+
+// ── Coverage overlay ────────────────────────────────────────────────────────
+
+/** Corner coordinates [TL, TR, BR, BL] of a grid, for a MapLibre image source. */
+export function gridCorners(grid) {
+  const p = (gx, gy) => { const { lng, lat } = globalPixelToLngLat(gx, gy, grid.z); return [lng, lat]; };
+  return [p(grid.gxMin, grid.gyMin), p(grid.gxMin + grid.w, grid.gyMin), p(grid.gxMin + grid.w, grid.gyMin + grid.h), p(grid.gxMin, grid.gyMin + grid.h)];
+}
+
+/**
+ * RGBA pixel buffer for a coverage grid whose values are best-server MARGIN (dB
+ * above the sector's CPE minimum Rx). Transparent where there is no data or the
+ * margin is below `thresholdDb`; otherwise coloured on the 50 dB ramp
+ * (threshold = weakest colour, threshold + 50 dB = strongest).
+ */
+export function coverageRgba(grid, thresholdDb) {
+  const out = new Uint8ClampedArray(grid.w * grid.h * 4);
+  const span = COVERAGE_STOPS[COVERAGE_STOPS.length - 1][0] - COVERAGE_STOPS[0][0];
+  for (let i = 0; i < grid.rxDbm.length; i++) {
+    const v = grid.rxDbm[i];
+    if (Number.isNaN(v) || v < thresholdDb) continue;
+    const [r, g, b] = colourForDbm(COVERAGE_STOPS[0][0] + Math.min(v - thresholdDb, span));
+    out[i * 4] = r; out[i * 4 + 1] = g; out[i * 4 + 2] = b; out[i * 4 + 3] = 255;
+  }
+  return out;
+}
+
+export function setCoverageOverlay(map, grid, thresholdDb) {
+  if (!grid) {
+    _coverage = null;
+    if (map.getLayer(WL.coverageLayer)) map.removeLayer(WL.coverageLayer);
+    if (map.getSource(WL.coverageSrc)) map.removeSource(WL.coverageSrc);
+    return;
+  }
+  const cv = document.createElement('canvas');
+  cv.width = grid.w; cv.height = grid.h;
+  const ctx = cv.getContext('2d');
+  ctx.putImageData(new ImageData(coverageRgba(grid, thresholdDb), grid.w, grid.h), 0, 0);
+  _coverage = { url: cv.toDataURL('image/png'), coordinates: gridCorners(grid) };
+  const src = map.getSource(WL.coverageSrc);
+  if (src) src.updateImage(_coverage);
+  else ensureWirelessLayers(map);
+}

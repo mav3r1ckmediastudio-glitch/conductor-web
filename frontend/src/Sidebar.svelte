@@ -36,6 +36,7 @@
     <button class="cat-pill" class:on={activeCat==='fibre'}  on:click={() => dispatch('selectCat', 'fibre')}>⌁ Fibre</button>
     <button class="cat-pill" class:on={activeCat==='aerial'} on:click={() => dispatch('selectCat', 'aerial')}>⌒ Aerial &amp; Poles</button>
     <button class="cat-pill" class:on={activeCat==='pia'}    on:click={() => dispatch('selectCat', 'pia')}>⬛ PIA Underground</button>
+    <button class="cat-pill" class:on={activeCat==='wireless'} on:click={() => dispatch('selectCat', 'wireless')}>◉ Wireless</button>
     <div class="sid-div"></div>
     <div class="sid-lbl">Asset Tools</div>
     <button class="asset-btn" on:click={() => dispatch('editAsset')}>✎ Edit Asset</button>

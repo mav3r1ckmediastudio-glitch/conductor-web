@@ -6,6 +6,41 @@
 export const DOCS_BASE = 'https://conductor-web-manual.netlify.app/';
 
 export const TOOL_DOCS = {
+  "wireless-site": {
+    title:    "Place Wireless Site",
+    purpose:  "Places a wireless site (mast, tower or building mounting point). Sectors and point-to-point links attach to sites.",
+    howTo:    "1. Click Place Wireless Site.\n2. Click the map where the structure is.\n3. Enter the structure height above ground (required). Optionally enter a surveyed ground elevation to override the terrain model.\n4. Save. The tool stays armed for the next site; Esc exits.",
+    mistakes: "Leaving the height blank (the site then blocks the analysis), or entering height above sea level instead of above ground.",
+    related:  ["wireless-sector", "wireless-link"],
+  },
+  "wireless-sector": {
+    title:    "Add Sector",
+    purpose:  "Adds a sector antenna to an existing site for point-to-multipoint coverage estimates.",
+    howTo:    "1. Click Add Sector.\n2. Click a wireless site.\n3. Enter azimuth, beamwidth, radio and CPE parameters (all required) and save.\n4. Run Coverage estimate from Analyse & Coverage.",
+    mistakes: "Treating the coverage overlay as a guarantee: it models bare terrain only (no trees or buildings) and is an estimate.",
+    related:  ["wireless-site", "wireless-panel"],
+  },
+  "wireless-link": {
+    title:    "Draw PtP Link",
+    purpose:  "Draws a point-to-point link between two wireless sites and records its radio parameters for the path and budget checks.",
+    howTo:    "1. Click Draw PtP Link.\n2. Click the first site, then the second.\n3. Enter frequency and both ends' radio parameters and save.\n4. Run Analyse links to check clearance and fade margin.",
+    mistakes: "Marking line of sight as surveyed to get a pass: that waives only the modelled clearance check, requires a note, and never waives the link budget.",
+    related:  ["wireless-site", "wireless-panel"],
+  },
+  "wireless-move": {
+    title:    "Move Wireless Site",
+    purpose:  "Moves a wireless site. Its sectors and the ends of its links move with it.",
+    howTo:    "1. Click Move Wireless Site.\n2. Click the site.\n3. Click its new position.",
+    mistakes: "Forgetting that moving a site makes the current analysis stale — re-run Analyse links.",
+    related:  ["wireless-panel"],
+  },
+  "wireless-panel": {
+    title:    "Analyse & Coverage",
+    purpose:  "Opens the wireless workspace: analyse every link (terrain profile, Fresnel clearance, fade margin), estimate sector coverage, review issues and export a bill of quantities.",
+    howTo:    "1. Click Analyse & Coverage.\n2. Analyse links to check every link.\n3. Select a link to see its path profile.\n4. Coverage estimate shades the map and counts served premises.",
+    mistakes: "Treating VALIDATED as engineering approval. It means the automated checks passed; a qualified wireless engineer must still review the design. Editing any wireless input makes the result stale.",
+    related:  ["wireless-link", "wireless-sector"],
+  },
   "civil-edit-cabinet": {
     title:    "Edit Cabinet / POP",
     purpose:  "Edits the attributes of an existing cabinet/POP — ID, equipment counts (DUX/Calix shelves, GPON cards), splitter configuration and other details — without moving it. Feeds the Bill of Materials and Cabinet Cost Calculator.",

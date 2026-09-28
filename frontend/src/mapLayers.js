@@ -34,7 +34,8 @@ export const HILLSHADE_LAYER_ID = 'terrain-hillshade';
 export function ensureHillshadeLayer(map, visible = false) {
   if (!map.getSource('terrain') || map.getLayer(HILLSHADE_LAYER_ID)) return;
   // Insert beneath our first custom layer so hillshade never covers assets.
-  const before = map.getLayer('addresses-clusters') ? 'addresses-clusters' : undefined;
+  const before = map.getLayer('wireless-coverage-layer') ? 'wireless-coverage-layer'
+    : map.getLayer('addresses-clusters') ? 'addresses-clusters' : undefined;
   map.addLayer({
     id: HILLSHADE_LAYER_ID,
     type: 'hillshade',

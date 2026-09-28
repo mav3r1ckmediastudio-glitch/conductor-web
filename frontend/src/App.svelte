@@ -9,6 +9,18 @@
   import JointForm from './JointForm.svelte';
   import CableForm from './CableForm.svelte';
   import PlacePoleForm from './PlacePoleForm.svelte';
+  import WirelessForm from './WirelessForm.svelte';
+  import WirelessPanel from './WirelessPanel.svelte';
+  import {
+    activateWirelessSiteTool, activateWirelessSectorTool, activateWirelessLinkTool, activateWirelessMoveTool,
+  } from './wirelessTools.js';
+  import { runWirelessAnalysis, runWirelessCoverage } from './wirelessController.js';
+  import { setCoverageOverlay } from './wirelessLayers.js';
+  import { wirelessPlanState } from './wirelessAnalysis.js';
+  import { hashWirelessInputs } from './wirelessInputs.js';
+  import { resolveWirelessSettings } from './wirelessSettings.js';
+  import { generateWirelessBomCsv, generateWirelessBomHtml } from './wirelessBom.js';
+  import { carryDefaults } from './wirelessFields.js';
   import CBTForm from './CBTForm.svelte';
   import CBTTailForm from './CBTTailForm.svelte';
   import EditCabinetForm from './EditCabinetForm.svelte';
@@ -72,6 +84,8 @@
   } from './mapTools.js';
 
   const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY;
+  // Key for wireless terrain requests. E2E may substitute one (guarded seam below).
+  const wirelessKey = () => (import.meta.env.VITE_TEST_MODE === '1' && window.__conductorMaptilerKey) || MAPTILER_KEY;
 
   // Playwright/E2E only: swaps every basemap for a local, source-less style
   // spec instead of a live MapTiler URL. MapLibre still fires 'load' and
@@ -289,6 +303,10 @@
       window.__conductorSeed = (state) => { projectStore.restoreState(state); };
       window.__conductorOpenPanel = (mode) => { rpMode = mode; };
       window.__conductorStore = projectStore;
+      // Lets the wireless spec exercise the REAL tile fetcher against intercepted
+      // requests without putting a key in the environment (which would make the
+      // basemap layers try to load real terrain). Absent from production builds.
+      window.__conductorMaptilerKey = null;
     }
 
     map.on('load', () => {
@@ -461,6 +479,167 @@
     autoArmedStage = stage;
     if (stage === 'build-area') onDrawBuildArea();
     else onPlaceCabinet();
+  }
+
+  // ── Wireless layer ─────────────────────────────────────────────────────
+  // Store mutations go through projectStore (see wireless* methods); analysis
+  // and coverage are pure engines driven by wirelessController.js. Only the
+  // stored analysis is persisted — path profiles and the coverage grid live in
+  // memory for the session, and coverage is hidden the moment any wireless
+  // input changes (never shown stale).
+  let wPending = null;          // { kind, data } — create form open
+  let wEdit = null;             // { kind, id }    — edit form open
+  let wProfiles = new Map();
+  let wCoverage = null;
+  let wBusy = '';
+  let wWarning = '';
+  let wSelectedLink = '';
+  $: wState = (storeVersion, projectStore.state);
+  $: wPlanState = wirelessPlanState(wState);
+  $: wSettings = resolveWirelessSettings(wState.wirelessSettings);
+  $: wCoverageStale = !!wCoverage && wCoverage.inputHash !== hashWirelessInputs(wState);
+  $: if (map && wCoverageStale) setCoverageOverlay(map, null);
+
+  const W_KIND_ACTIVATE = {
+    site: activateWirelessSiteTool, sector: activateWirelessSectorTool, link: activateWirelessLinkTool,
+  };
+  const W_LABEL = {
+    site: 'Place Wireless Site — click the map',
+    sector: 'Add Sector — click a wireless site',
+    link: 'Draw PtP Link — click one site, then the other',
+  };
+
+  function armWireless(kind) {
+    const err = W_KIND_ACTIVATE[kind](map, (data) => {
+      wPending = { kind, data };
+      wEdit = null;
+      rpMode = 'wireless-form';
+      activeToolLabel = '';
+    });
+    if (err) { showToast(err.error); activeToolLabel = ''; }
+  }
+  function onPlaceWireless(kind) {
+    clearTool(map);
+    activeToolLabel = W_LABEL[kind];
+    armWireless(kind);
+  }
+  function onWirelessMove() {
+    clearTool(map);
+    activeToolLabel = 'Move Wireless Site — click a site, then its new position';
+    const err = activateWirelessMoveTool(map, () => { activeToolLabel = ''; syncToMap(map); showToast('Site moved. Re-run Analyse links.'); });
+    if (err) { showToast(err.error); activeToolLabel = ''; }
+  }
+  function onOpenWirelessPanel() {
+    clearTool(map);
+    activeToolLabel = '';
+    rpMode = 'wireless-panel';
+  }
+
+  function onWirelessFormSaved(e) {
+    const props = e.detail;
+    if (wEdit) {
+      projectStore.updateWirelessProps(wEdit.kind, wEdit.id, props);
+      wEdit = null;
+      syncToMap(map);
+      rpMode = 'wireless-panel';
+      return;
+    }
+    const { kind, data } = wPending;
+    let ok = false;
+    if (kind === 'site') {
+      ok = projectStore.addWirelessSite({ type: 'Feature', geometry: { type: 'Point', coordinates: [data.lng, data.lat] }, properties: { site_id: data.site_id, area_id: data.area_id, ...props } });
+    } else if (kind === 'sector') {
+      ok = projectStore.addWirelessSector({ type: 'Feature', geometry: { type: 'Point', coordinates: [data.lng, data.lat] }, properties: { sector_id: data.sector_id, site_id: data.site_id, ...props } });
+    } else {
+      ok = projectStore.addWirelessLink({ type: 'Feature', geometry: { type: 'LineString', coordinates: data.coordinates }, properties: { link_id: data.link_id, site_a: data.site_a, site_b: data.site_b, ...props } });
+    }
+    if (!ok) showToast('That ID already exists — nothing was added.');
+    wPending = null;
+    syncToMap(map);
+    rpMode = 'wireless-panel';
+    // Sites are usually placed in runs: keep the tool armed for the next one.
+    if (kind === 'site' && ok) { activeToolLabel = W_LABEL.site; armWireless('site'); }
+  }
+  function onWirelessFormCancelled() {
+    wPending = null; wEdit = null;
+    clearTool(map);
+    activeToolLabel = '';
+    rpMode = 'wireless-panel';
+  }
+
+  const W_COLL = { site: 'wirelessSites', sector: 'wirelessSectors', link: 'wirelessLinks' };
+  const W_ID = { site: 'site_id', sector: 'sector_id', link: 'link_id' };
+  const wFind = (kind, id) => projectStore.state[W_COLL[kind]]?.find(f => f.properties?.[W_ID[kind]] === id);
+
+  function onWirelessEdit(e) {
+    const { kind, id } = e.detail;
+    if (!wFind(kind, id)) return;
+    clearTool(map); activeToolLabel = '';
+    wPending = null; wEdit = { kind, id };
+    rpMode = 'wireless-form';
+  }
+  function onWirelessRemove(e) {
+    const { kind, id } = e.detail;
+    if (kind === 'site') {
+      const r = projectStore.deleteWirelessSite(id);
+      if (r) showToast(`Deleted ${id}${r.removed.wirelessSectors || r.removed.wirelessLinks ? ` (also removed ${r.removed.wirelessSectors} sector(s) and ${r.removed.wirelessLinks} link(s))` : ''}.`);
+    } else if (kind === 'link') projectStore.deleteWirelessLink(id);
+    else projectStore.deleteWirelessSector(id);
+    if (!wFind('link', wSelectedLink)) wSelectedLink = '';
+    syncToMap(map);
+  }
+  function onWirelessZoom(e) {
+    const { kind, id } = e.detail;
+    const f = wFind(kind, id);
+    if (!f || !map) return;
+    if (kind === 'link') {
+      const c = f.geometry.coordinates;
+      const lngs = c.map(p => p[0]), lats = c.map(p => p[1]);
+      map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 120, duration: 600 });
+    } else {
+      map.easeTo({ center: f.geometry.coordinates, zoom: Math.max(map.getZoom(), 15), duration: 600 });
+    }
+  }
+
+  async function onWirelessAnalyse() {
+    if (wBusy) return;
+    wBusy = 'analysis'; wWarning = '';
+    try {
+      const r = await runWirelessAnalysis(projectStore.state, { maptilerKey: wirelessKey() });
+      projectStore.applyWirelessAnalysis(r.analysis);
+      wProfiles = r.profiles;
+      wWarning = r.warning || '';
+      if (!wSelectedLink && r.analysis.links[0]) wSelectedLink = r.analysis.links[0].link_id;
+      syncToMap(map);
+    } catch (err) {
+      console.error('[wireless] analysis failed:', err);
+      showError('The wireless analysis could not be completed. Nothing has been validated.');
+    } finally { wBusy = ''; }
+  }
+  async function onWirelessCoverage() {
+    if (wBusy) return;
+    wBusy = 'coverage'; wWarning = '';
+    try {
+      const r = await runWirelessCoverage(projectStore.state, { maptilerKey: wirelessKey() });
+      if (!r.ok) { wCoverage = null; setCoverageOverlay(map, null); wWarning = r.error; return; }
+      wCoverage = r;
+      wWarning = r.warning || '';
+      setCoverageOverlay(map, r.grid, r.settings.coverageMarginDb);
+    } catch (err) {
+      console.error('[wireless] coverage failed:', err);
+      wCoverage = null; setCoverageOverlay(map, null);
+      showError('The coverage estimate could not be completed.');
+    } finally { wBusy = ''; }
+  }
+  function onWirelessClearCoverage() { wCoverage = null; setCoverageOverlay(map, null); }
+  function onWirelessSettings(e) { projectStore.updateWirelessSettings(e.detail); }
+  function onWirelessBom(e) {
+    const isCsv = e.detail === 'csv';
+    const text = isCsv ? generateWirelessBomCsv(projectStore.state) : generateWirelessBomHtml(projectStore.state);
+    const name = `${(projectStore.project?.areaId || 'wireless')}-wireless-bom.${isCsv ? 'csv' : 'html'}`;
+    const url = URL.createObjectURL(new Blob([text], { type: isCsv ? 'text/csv' : 'text/html' }));
+    const a = document.createElement('a'); a.href = url; a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   // ── Asset placement registry ───────────────────────────────────────────
@@ -1198,6 +1377,12 @@
     if (toolId === 'fibre-assign')        onFibreAssign();
     if (toolId === 'fibre-count')         onFibreCount();
     if (toolId === 'branch-classify')     onBranchClassify();
+    // Wireless
+    if (toolId === 'wireless-site')       onPlaceWireless('site');
+    if (toolId === 'wireless-sector')     onPlaceWireless('sector');
+    if (toolId === 'wireless-link')       onPlaceWireless('link');
+    if (toolId === 'wireless-move')       onWirelessMove();
+    if (toolId === 'wireless-panel')      { onOpenWirelessPanel(); activeToolLabel = ''; activeToolId = ''; }
   }
 
   // ✕ on the active-tool chip — full tool teardown. Extracted from the chip's
@@ -1508,6 +1693,30 @@
 
       {:else if rpMode === 'cable-form'}
         <CableForm pending={pendingCable} on:save={onCableSaved} on:cancel={onCableCancelled} />
+
+      {:else if rpMode === 'wireless-form'}
+        {#if wEdit}
+          {@const f = wFind(wEdit.kind, wEdit.id)}
+          <WirelessForm kind={wEdit.kind} mode="edit" assetId={wEdit.id} existing={f?.properties}
+            on:save={onWirelessFormSaved} on:cancel={onWirelessFormCancelled} />
+        {:else if wPending}
+          <WirelessForm kind={wPending.kind} mode="create" assetId={wPending.data[W_ID[wPending.kind]]}
+            subtitle={wPending.kind === 'link' ? `${wPending.data.site_a} ↔ ${wPending.data.site_b}` : wPending.kind === 'sector' ? `on site ${wPending.data.site_id}` : ''}
+            defaults={carryDefaults(wPending.kind, projectStore.state[W_COLL[wPending.kind]])}
+            on:save={onWirelessFormSaved} on:cancel={onWirelessFormCancelled} />
+        {/if}
+
+      {:else if rpMode === 'wireless-panel'}
+        <WirelessPanel
+          sites={wState.wirelessSites || []} links={wState.wirelessLinks || []} sectors={wState.wirelessSectors || []}
+          settings={wSettings} analysis={wState.wirelessAnalysis} planState={wPlanState}
+          profiles={wProfiles} coverage={wCoverage} coverageStale={wCoverageStale}
+          busy={wBusy} warning={wWarning} selectedLinkId={wSelectedLink}
+          on:analyse={onWirelessAnalyse} on:coverage={onWirelessCoverage} on:clearCoverage={onWirelessClearCoverage}
+          on:zoom={onWirelessZoom} on:edit={onWirelessEdit} on:remove={onWirelessRemove}
+          on:settings={onWirelessSettings} on:bom={onWirelessBom}
+          on:selectLink={(e) => wSelectedLink = e.detail}
+          on:close={() => rpMode = 'default'} />
 
       {:else if rpMode === 'pole-form'}
         <PlacePoleForm pending={pendingPole} on:save={onPoleSaved} on:cancel={onPoleCancelled} />

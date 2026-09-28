@@ -3,6 +3,7 @@
 
 import { projectStore } from './projectStore.js';
 import { emptyFC } from './mapGeom.js';
+import { ensureWirelessLayers, syncWireless } from './wirelessLayers.js';
 
 // ── SOURCE / LAYER SETUP ─────────────────────────────────────────────────────
 
@@ -407,6 +408,9 @@ export function ensureSources(map) {
       },
     });
   }
+
+  // ── Wireless layer (sites / links / sector fans / coverage overlay) ─────
+  ensureWirelessLayers(map);
 }
 
 // ── TERRAIN-DEPENDENT LAYERS ─────────────────────────────────────────────────
@@ -656,4 +660,6 @@ export function syncToMap(map) {
     src.setData(feat ? { type: 'FeatureCollection', features: [feat] } : emptyFC());
     _lastSynced[srcId] = feat;
   }
+
+  syncWireless(map, s);
 }
