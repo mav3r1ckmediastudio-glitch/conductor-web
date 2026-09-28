@@ -166,7 +166,7 @@ test.describe('wireless planning journey', () => {
     await expect(page.getByTestId('wp-issue')).toHaveCount(0);           // and nothing is left blocking
   });
 
-  test('a link full of impossible values is repaired with "Fill with preset values" and then validates', async ({ page }) => {
+  test('a link full of impossible values is repaired from the preset menu; the default airFiber-class preset is honest about a 10 km hop, the 11 GHz one passes', async ({ page }) => {
     const seed = SEED();
     Object.assign(seed.wirelessLinks[0].properties, { freq_ghz: 200, tx_power_a_dbm: 200, tx_power_b_dbm: 200, gain_a_dbi: 200,
       gain_b_dbi: 200, rx_sensitivity_a_dbm: 200, rx_sensitivity_b_dbm: 200 });
@@ -174,14 +174,29 @@ test.describe('wireless planning journey', () => {
     await page.getByTestId('wp-analyse').click();
     await expect(page.locator('[data-testid="wp-issue"][data-code="LINK_PARAMS_IMPLAUSIBLE"]')).toBeVisible();
 
+    // Default preset = airFiber 60 LR class (mirrors the UISP reference design). Its note says where the numbers come from.
     await page.getByTestId('wp-edit-link').first().click();
-    await expect(page.getByText('Gigabit backhaul (11 GHz licensed PtP)')).toBeVisible();
+    await expect(page.getByTestId('wf-preset-select')).toContainText('60 GHz PtP (airFiber 60 LR class)');
+    await expect(page.getByTestId('wf-preset-note')).toContainText('FCC');
     await page.getByTestId('wf-apply-preset').click();
+    await expect(page.getByTestId('wf-input-freq_ghz')).toHaveValue('69.12');
     await expect(page.getByTestId('wf-input-gain_a_dbi')).toHaveValue('38');
+    await expect(page.getByTestId('wf-input-rx_sensitivity_b_dbm')).toHaveValue('-70');
+    await page.getByTestId('wf-save').click();
+    await expect(page.getByTestId('wp-state')).toHaveText('STALE');
+    await page.getByTestId('wp-analyse').click();
+    // ~10 km at 69.12 GHz leaves ~12 dB of spare signal: below the 15 dB reserve, so it fails and says why.
+    await expect(page.getByTestId('wp-state')).toHaveText('INVALID');
+    await expect(page.locator('[data-testid="wp-issue"][data-code="LINK_MARGIN_LOW"]')).toContainText('fade margin');
+
+    // Switch the preset menu to the 11 GHz licensed link and fill: it passes.
+    await page.getByTestId('wp-edit-link').first().click();
+    await page.getByTestId('wf-preset-select').selectOption('ptp11');
+    await expect(page.getByTestId('wf-preset-note')).toContainText('Ofcom link licence');
+    await page.getByTestId('wf-apply-preset').click();
+    await expect(page.getByTestId('wf-input-freq_ghz')).toHaveValue('11');
     await expect(page.getByTestId('wf-input-rx_sensitivity_b_dbm')).toHaveValue('-58');
     await page.getByTestId('wf-save').click();
-
-    await expect(page.getByTestId('wp-state')).toHaveText('STALE');
     await page.getByTestId('wp-analyse').click();
     await expect(page.getByTestId('wp-state')).toHaveText('VALIDATED');
     await expect(page.getByTestId('wp-verdict')).toHaveText('PASS');
@@ -209,7 +224,7 @@ test.describe('wireless planning journey', () => {
     await expect(page.getByTestId('wf-note')).toContainText('Pointing at 10 premises');
     const az = Number(await page.getByTestId('wf-input-azimuth_deg').inputValue());
     expect(Math.abs(az - 315)).toBeLessThanOrEqual(10);
-    await expect(page.getByTestId('wf-input-freq_ghz')).toHaveValue('60');   // preset still applied
+    await expect(page.getByTestId('wf-input-freq_ghz')).toHaveValue('5.8');   // default access preset (5.8 GHz LTU class) applied
     await page.getByTestId('wf-save').click();
     await expect.poll(() => page.evaluate(() => window.__conductorStore.wirelessSectors.length)).toBe(1);
     expect(await page.evaluate(() => window.__conductorStore.wirelessSectors[0].properties.azimuth_deg)).toBe(az);

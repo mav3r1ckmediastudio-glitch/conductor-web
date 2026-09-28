@@ -21,7 +21,7 @@
   import { resolveWirelessSettings } from './wirelessSettings.js';
   import { generateWirelessBomCsv, generateWirelessBomHtml } from './wirelessBom.js';
   import { carryDefaults } from './wirelessFields.js';
-  import { presetFor } from './wirelessPresets.js';
+  import { presetOptions } from './wirelessPresets.js';
   import { suggestAzimuth, countPremisesInBeam } from './wirelessAim.js';
   import { installSectorAiming } from './wirelessTools.js';
   import { setSectorPreview, setAimHandlesHidden } from './wirelessLayers.js';
@@ -1766,7 +1766,7 @@
       {:else if rpMode === 'wireless-form'}
         {#if wEdit}
           {@const f = wFind(wEdit.kind, wEdit.id)}
-          <WirelessForm kind={wEdit.kind} mode="edit" assetId={wEdit.id} existing={f?.properties} preset={presetFor(wEdit.kind)}
+          <WirelessForm kind={wEdit.kind} mode="edit" assetId={wEdit.id} existing={f?.properties} presets={presetOptions(wEdit.kind)}
             note={wEdit.kind === 'sector' ? wAimNote : ''} aimSet={wAimSet} on:preview={onSectorPreview}
             on:save={onWirelessFormSaved} on:cancel={onWirelessFormCancelled} />
         {:else if wPending}
@@ -1774,7 +1774,7 @@
             subtitle={wPending.kind === 'link' ? `${wPending.data.site_a} ↔ ${wPending.data.site_b}` : wPending.kind === 'sector' ? `on site ${wPending.data.site_id}` : ''}
             defaults={{ ...carryDefaults(wPending.kind, projectStore.state[W_COLL[wPending.kind]]),
                         ...(wPending.data.aim?.azimuth != null ? { azimuth_deg: wPending.data.aim.azimuth } : {}) }}
-            preset={presetFor(wPending.kind)}
+            presets={presetOptions(wPending.kind)}
             note={wPending.kind === 'sector' ? wAimNote : ''} aimSet={wAimSet} on:preview={onSectorPreview}
             on:save={onWirelessFormSaved} on:cancel={onWirelessFormCancelled} />
         {/if}

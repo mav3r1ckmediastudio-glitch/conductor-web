@@ -93,7 +93,7 @@ export function checkSector(sector, sitesById, settings = resolveWirelessSetting
   if (bad.length) issues.push(issue('SECTOR_PARAMS_IMPLAUSIBLE', `Sector ${id}: ${bad.join('; ')}. ${LIMITS_HINT}`, 'sector', id));
   const f = num(p.freq_ghz);
   if (f != null && f > S.absorptionAboveGhz && !absorptionModelled(f, S)) {
-    issues.push(issue('SECTOR_ABSORPTION_UNMODELLED', `Sector ${id}: ${f} GHz is above ${S.absorptionAboveGhz} GHz, where atmospheric absorption is significant and the coverage model does not include it.`, 'sector', id));
+    issues.push(issue('SECTOR_ABSORPTION_UNMODELLED', `Sector ${id}: ${f} GHz is above ${S.absorptionAboveGhz} GHz, where atmospheric absorption is significant and the gas absorption model is switched off (Engineering thresholds).`, 'sector', id));
   }
   return issues;
 }
@@ -149,12 +149,12 @@ function analyseLink(link, sitesById, terrain, settings) {
   }
 
   const freq = num(p.freq_ghz);
-  // Free-space + declared extra loss only. Above the absorption threshold that
-  // model is badly optimistic, so an explicit allowance is required. This is
+  // Free-space + gas absorption + declared extra loss. With the gas model off,
+  // frequencies above the absorption threshold need an explicit allowance. This is
   // not waivable by a line-of-sight survey (it is a budget issue, not LOS).
-  // Inside the modelled oxygen band the absorption is applied automatically.
+  // With the gas model on (default) the absorption is applied automatically at this frequency.
   if (freq > S.absorptionAboveGhz && !absorptionModelled(freq, S) && !((num(p.extra_loss_db) ?? 0) > 0)) {
-    issues.push(issue('LINK_ABSORPTION_UNMODELLED', `Link ${id}: ${freq} GHz is above ${S.absorptionAboveGhz} GHz, where atmospheric absorption is significant and is only modelled between ${S.oxygenBandMinGhz} and ${S.oxygenBandMaxGhz} GHz. Enter an extra path loss allowance for this link.`, 'link', id));
+    issues.push(issue('LINK_ABSORPTION_UNMODELLED', `Link ${id}: ${freq} GHz is above ${S.absorptionAboveGhz} GHz, where atmospheric absorption is significant and the gas absorption model is switched off (Engineering thresholds). Switch it on, or enter an extra path loss allowance for this link.`, 'link', id));
   }
   const profile = buildProfile(
     terrain,

@@ -49,7 +49,7 @@ describe('coercion & validation', () => {
     expect(d).not.toHaveProperty('link_id');
     expect(d).not.toHaveProperty('survey_los_confirmed');
     expect(d).not.toHaveProperty('survey_note');
-    // A first link starts from the gigabit backhaul preset (was: blank).
-    expect(carryDefaults('link', [])).toMatchObject({ freq_ghz: 11, gain_a_dbi: 38 });
+    // A first link starts from the default (airFiber-60-LR-class) preset (was: blank).
+    expect(carryDefaults('link', [])).toMatchObject({ freq_ghz: 69.12, gain_a_dbi: 38 });
   });
 });

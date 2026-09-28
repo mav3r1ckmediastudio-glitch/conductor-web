@@ -13,7 +13,10 @@
   export let subtitle = '';           // e.g. "S1 → S2"
   export let existing = null;         // properties when editing
   export let defaults = {};           // carried values when creating
-  export let preset = null;           // { name, values } — see wirelessPresets.js
+  export let presets = [];            // selectable presets, default first — see wirelessPresets.js
+  let presetId = '';
+  $: if (!presetId && presets.length) presetId = presets[0].id;
+  $: preset = presets.find(p => p.id === presetId) || presets[0] || null;
   export let note = '';               // live hint for sectors: what the current azimuth points at
   export let aimSet = null;           // { deg, n } — the map handle was dragged; n increases on every move
 
@@ -76,8 +79,12 @@
   {#if note}<div class="note" data-testid="wf-note">{note}</div>{/if}
   {#if preset}
     <div class="preset">
-      <div class="preset-t">{mode === 'create' ? 'Pre-filled from' : 'Preset available'}: <b>{preset.name}</b></div>
-      <div class="preset-h">Typical values for this class of equipment. Edit any field to match the equipment you choose.</div>
+      <div class="preset-t">{mode === 'create' ? 'Pre-filled from' : 'Preset'}:
+        {#if presets.length > 1}
+          <select data-testid="wf-preset-select" bind:value={presetId}>{#each presets as p}<option value={p.id}>{p.name}</option>{/each}</select>
+        {:else}<b>{preset.name}</b>{/if}
+      </div>
+      <div class="preset-h" data-testid="wf-preset-note">{preset.note}</div>
       <button class="btn-preset" data-testid="wf-apply-preset" on:click={applyPreset}>{mode === 'create' ? 'Reset to preset values' : 'Fill with preset values'}</button>
     </div>
   {/if}
@@ -125,6 +132,7 @@
   .note { padding: 8px 16px; font-size: 11px; line-height: 1.4; color: #9adfc0; border-bottom: 1px solid #1a2d40; }
   .preset { padding: 8px 16px; border-bottom: 1px solid #1a2d40; display: flex; flex-direction: column; gap: 4px; }
   .preset-t { font-size: 11px; color: #7ab8d4; } .preset-t b { color: #4dc8ff; }
+  .preset-t select { display: block; width: 100%; margin-top: 4px; padding: 4px 6px; background: #1a2d40; color: #a0c4d8; border: 1px solid #2a4a5e; border-radius: 2px; font-size: 11px; }
   .preset-h { font-size: 10px; color: #2f5068; line-height: 1.4; }
   .btn-preset { align-self: flex-start; padding: 4px 10px; font-size: 11px; background: #1a2d40; color: #7ab8d4; border: 1px solid #2a4a5e; border-radius: 2px; cursor: pointer; }
   .btn-preset:hover { background: #2a4a5e; color: #a0c4d8; }

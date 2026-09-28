@@ -3,7 +3,7 @@
 // place and can be tested against the analysis rules (see wirelessFields.test.js).
 
 import { LINK_REQUIRED, SECTOR_REQUIRED } from './wirelessAnalysis.js';
-import { PRESETS } from './wirelessPresets.js';
+import { presetFor } from './wirelessPresets.js';
 import { DEFAULT_WIRELESS_SETTINGS as D } from './wirelessSettings.js';
 
 const n = (key, label, extra = {}) => ({ key, label, type: 'number', ...extra });
@@ -106,7 +106,7 @@ const plausible = (k, v) => { const r = CARRY_RANGE[k]; const n = Number(v); ret
  * so a run of links stays consistent with whatever equipment was last entered.
  */
 export function carryDefaults(kind, existing) {
-  const preset = PRESETS[kind]?.values || {};
+  const preset = presetFor(kind)?.values || {};
   const last = existing?.[existing.length - 1]?.properties;
   if (!last) return { ...preset };
   const keys = kind === 'link' ? LINK_CARRY_KEYS

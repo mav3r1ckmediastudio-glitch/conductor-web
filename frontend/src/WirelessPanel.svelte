@@ -63,10 +63,10 @@
     ['rxSensMinDbm', 'Best (lowest) Rx sensitivity (dBm)', ''],
     ['rxSensMaxDbm', 'Worst (highest) Rx sensitivity (dBm)', ''],
     ['maxLossDb', 'Largest cable or extra loss (dB)', 'Losses can never be negative'],
-    ['absorptionAboveGhz', 'Require an extra-loss allowance above (GHz)', 'Except inside the modelled oxygen band below'],
-    ['oxygenBandMinGhz', 'Modelled oxygen band from (GHz)', ''],
-    ['oxygenBandMaxGhz', 'Modelled oxygen band to (GHz)', ''],
-    ['oxygenLossDbPerKm', 'Oxygen absorption in that band (dB/km)', '~15 dB/km at sea level near 60 GHz (ITU-R P.676)'],
+    ['gasModel', 'Apply atmospheric gas absorption (1 = yes, 0 = no)', 'ITU-R P.676 oxygen + water vapour at each link\'s own frequency. Rain is NOT modelled.'],
+    ['gasTemperatureC', 'Air temperature for gas absorption (°C)', 'Standard atmosphere is 15'],
+    ['gasWaterVapourGm3', 'Water vapour density (g/m³)', 'Standard atmosphere is 7.5; humid Scottish air is close to it'],
+    ['absorptionAboveGhz', 'With the gas model off, require an extra-loss allowance above (GHz)', ''],
   ];
   function commitSetting(key, raw) {
     const v = Number(raw);
