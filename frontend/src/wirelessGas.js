@@ -7,8 +7,8 @@
 // more per km than the same radio on 69 GHz. A flat "60 GHz" figure is wrong
 // for most of the 57-71 GHz band.
 //
-// NOT included: rain and cloud attenuation (severe at 60-70 GHz in wet
-// climates), foliage, multipath. Local altitude is ignored (sea level).
+// NOT included here: rain (see wirelessRain.js), cloud, foliage, multipath.
+// Local altitude is ignored (sea level).
 
 import { OXYGEN_LINES, WATER_VAPOUR_LINES } from './wirelessGasData.js';
 

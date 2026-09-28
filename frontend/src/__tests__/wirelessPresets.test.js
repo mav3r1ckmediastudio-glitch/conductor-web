@@ -62,17 +62,50 @@ describe('60 GHz-band backhaul preset (airFiber 60 LR class) on a clear path', (
     expect(a.status).toBe('VALIDATED');
     expect(a.links[0].fadeMarginDb).toBeGreaterThan(15);
   });
-  it('~10 km: only ~12 dB spare at 69.12 GHz, below the 15 dB reserve, so it fails LINK_MARGIN_LOW (and says so)', () => {
+  it('~10 km: ~12 dB spare gives only ~99.6% rain availability (about 33 h/year) against the 99.9% target, so it fails and says by how much', () => {
     const a = analyseWireless(state(linkWith(linkVals('af60lr'))), flat);
-    expect(a.links[0].distanceKm).toBeGreaterThan(10);
-    expect(a.links[0].fadeMarginDb).toBeGreaterThan(11);
-    expect(a.links[0].fadeMarginDb).toBeLessThan(12.5);
-    expect(codes(a)).toEqual(['LINK_MARGIN_LOW']);
-    expect(a.links[0].atmosLossDb).toBeCloseTo(0.587 * a.links[0].distanceKm, 1);
+    const r = a.links[0];
+    expect(r.distanceKm).toBeGreaterThan(10);
+    expect(r.fadeMarginDb).toBeGreaterThan(11);
+    expect(r.fadeMarginDb).toBeLessThan(12.5);
+    expect(codes(a)).toEqual(['LINK_RAIN_AVAILABILITY_LOW']);
+    expect(r.rain.availabilityPct).toBeGreaterThan(99.5);
+    expect(r.rain.availabilityPct).toBeLessThan(99.7);
+    expect(r.rain.shortfallDb).toBeGreaterThan(12);
+    expect(r.rain.shortfallDb).toBeLessThan(14);
+    expect(a.issues[0].message).toMatch(/rain would limit availability/);
+    expect(a.issues[0].message).toMatch(/13\.\d dB more/);
+    expect(r.atmosLossDb).toBeCloseTo(0.587 * r.distanceKm, 1);
   });
-  it('the reserve is an editable threshold: at 10 dB the same 10 km link passes', () => {
-    const a = analyseWireless(state(linkWith(linkVals('af60lr')), LNG_10KM, { minFadeMarginDb: 10 }), flat);
-    expect(a.status).toBe('VALIDATED');
+  it('~6 km passes the 99.9% rain target', () => {
+    const a = analyseWireless(state(linkWith(linkVals('af60lr'), LNG_6KM), LNG_6KM), flat);
+    expect(a.links[0].rain.availabilityPct).toBeGreaterThan(99.9);
+  });
+  it('even at the lowest data rate (-78 dBm) 10 km on 69 GHz cannot reach 99.9% in Loch Tay rain', () => {
+    const a = analyseWireless(state(linkWith({ ...linkVals('af60lr'), rx_sensitivity_a_dbm: -78, rx_sensitivity_b_dbm: -78 })), flat);
+    expect(codes(a)).toEqual(['LINK_RAIN_AVAILABILITY_LOW']);
+    expect(a.links[0].rain.availabilityPct).toBeGreaterThan(99.8);
+  });
+  it('the availability target and the design rain rate are editable thresholds', () => {
+    const at = (settings) => analyseWireless(state(linkWith(linkVals('af60lr')), LNG_10KM, settings), flat);
+    expect(at({ minAvailabilityPct: 99.5 }).status).toBe('VALIDATED');
+    expect(at({ rainRate001Mmh: 12 }).status).toBe('INVALID');            // even a moderately wet climate (99.86%) is not enough
+    expect(at({ rainRate001Mmh: 8 }).status).toBe('VALIDATED');           // a far drier climate is
+    expect(at({ rainRate001Mmh: 45 }).links[0].rain.availabilityPct).toBeLessThan(at(null).links[0].rain.availabilityPct);
+  });
+  it('a clear-sky floor still applies: below 6 dB of margin the link fails LINK_MARGIN_LOW even before rain', () => {
+    const a = analyseWireless(state(linkWith({ ...linkVals('af60lr'), freq_ghz: 66.96 })), flat);      // ~5.5 dB at 10 km
+    expect(codes(a)).toEqual(['LINK_MARGIN_LOW']);
+    expect(a.issues[0].message).toMatch(/clear-sky/);
+  });
+  it('below the rain threshold (10 GHz) the flat fade margin is used and no rain assessment is made', () => {
+    const l = { ...linkVals('ptp11'), freq_ghz: 5.8, channel_width_mhz: 40, tx_power_a_dbm: 25, tx_power_b_dbm: 25, gain_a_dbi: 30, gain_b_dbi: 30, rx_sensitivity_a_dbm: -80, rx_sensitivity_b_dbm: -80 };
+    const a = analyseWireless(state(linkWith(l)), flat);
+    expect(a.links[0].rain).toBeNull();
+    expect(codes(a)).not.toContain('LINK_RAIN_AVAILABILITY_LOW');
+    const b = analyseWireless(state(linkWith({ ...l, gain_a_dbi: 15, gain_b_dbi: 15 })), flat);      // ~7 dB: under the flat 15 dB
+    expect(codes(b)).toEqual(['LINK_MARGIN_LOW']);
+    expect(b.issues[0].message).toMatch(/dB more/);
   });
   it('channel choice matters enormously: on 66.96 GHz the same path has ~5 dB and on 64.8 GHz it is hopeless', () => {
     const at = (f) => analyseWireless(state(linkWith({ ...linkVals('af60lr'), freq_ghz: f })), flat).links[0];
@@ -87,6 +120,8 @@ describe('11 GHz backhaul preset', () => {
     expect(a.status).toBe('VALIDATED');
     expect(a.links[0].fadeMarginDb).toBeGreaterThan(20);
     expect(a.links[0].atmosLossDb).toBeLessThan(0.5);
+    expect(a.links[0].rain.availabilityPct).toBeGreaterThan(99.99);    // 11 GHz rain fade is mild
+    expect(a.links[0].rain.a001Db).toBeLessThan(10);
   });
 });
 

@@ -15,6 +15,7 @@
 // w3: radio plausibility limits and the absorption threshold added to SETTINGS.
 // w4: modelled oxygen-band absorption settings added.
 // w5: replaced by ITU-R P.676 gas model settings (gasModel, temperature, humidity).
+// w6: rain settings (design rain rate, availability target, clear-sky margin) added.
 
 import { resolveWirelessSettings } from './wirelessSettings.js';
 
@@ -31,7 +32,8 @@ const rows = (list, keys, withCoord) =>
 export const SETTING_KEYS = ['kFactor', 'minFresnelClearancePct', 'minFadeMarginDb', 'coverageMarginDb', 'profileStepM',
                              'terrainZoom', 'terrainSourceId', 'freqMinGhz', 'freqMaxGhz', 'txPowerMinDbm', 'txPowerMaxDbm',
                              'gainMinDbi', 'gainMaxDbi', 'rxSensMinDbm', 'rxSensMaxDbm', 'maxLossDb', 'absorptionAboveGhz',
-                             'gasModel', 'gasTemperatureC', 'gasWaterVapourGm3'];
+                             'gasModel', 'gasTemperatureC', 'gasWaterVapourGm3',
+                             'rainAssessAboveGhz', 'rainRate001Mmh', 'minAvailabilityPct', 'minClearSkyMarginDb'];
 export const SITE_KEYS   = ['site_id', 'mast_height_m', 'ground_override_m'];
 export const SECTOR_KEYS = ['sector_id', 'site_id', 'azimuth_deg', 'beamwidth_deg', 'freq_ghz', 'tx_power_dbm',
                             'gain_dbi', 'cable_loss_db', 'antenna_height_m', 'range_m',
@@ -58,5 +60,5 @@ function fnv1a(s) { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^
 /** Change-detection fingerprint (not a security hash). */
 export function hashWirelessInputs(state) {
   const s = canonicalWirelessInputs(state);
-  return 'w5-' + djb2(s).toString(16).padStart(8, '0') + fnv1a(s).toString(16).padStart(8, '0') + '-' + s.length.toString(16);
+  return 'w6-' + djb2(s).toString(16).padStart(8, '0') + fnv1a(s).toString(16).padStart(8, '0') + '-' + s.length.toString(16);
 }

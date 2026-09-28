@@ -167,6 +167,7 @@ test.describe('wireless planning journey', () => {
   });
 
   test('a link full of impossible values is repaired from the preset menu; the default airFiber-class preset is honest about a 10 km hop, the 11 GHz one passes', async ({ page }) => {
+    test.setTimeout(90000);      // repair, analyse twice, edit a threshold twice, switch preset
     const seed = SEED();
     Object.assign(seed.wirelessLinks[0].properties, { freq_ghz: 200, tx_power_a_dbm: 200, tx_power_b_dbm: 200, gain_a_dbi: 200,
       gain_b_dbi: 200, rx_sensitivity_a_dbm: 200, rx_sensitivity_b_dbm: 200 });
@@ -185,9 +186,30 @@ test.describe('wireless planning journey', () => {
     await page.getByTestId('wf-save').click();
     await expect(page.getByTestId('wp-state')).toHaveText('STALE');
     await page.getByTestId('wp-analyse').click();
-    // ~10 km at 69.12 GHz leaves ~12 dB of spare signal: below the 15 dB reserve, so it fails and says why.
+    // ~10 km at 69.12 GHz leaves ~12 dB of spare signal. Rain would keep it up only ~99.6% of the time
+    // (about 33 h a year) against the 99.9% target, so it fails, says so, and says by how much.
     await expect(page.getByTestId('wp-state')).toHaveText('INVALID');
-    await expect(page.locator('[data-testid="wp-issue"][data-code="LINK_MARGIN_LOW"]')).toContainText('fade margin');
+    await expect(page.locator('[data-testid="wp-issue"][data-code="LINK_RAIN_AVAILABILITY_LOW"]')).toContainText('rain would limit availability');
+    await expect(page.locator('[data-testid="wp-issue"][data-code="LINK_RAIN_AVAILABILITY_LOW"]')).toContainText('dB more');
+    await expect(page.getByTestId('wp-rain-avail')).toContainText(/99\.[67]/);
+    await expect(page.getByTestId('wp-rain')).toContainText('30 mm/h');
+
+    // The design rain rate is an editable, fingerprinted threshold: a far drier climate (8 mm/h) passes it.
+    await page.locator('button.fold', { hasText: 'Engineering thresholds' }).click();
+    const rain = page.getByTestId('ws-rainRate001Mmh');
+    await expect(rain).toHaveValue('30');
+    await rain.fill('8');
+    await rain.press('Enter');
+    await rain.blur();
+    await expect(page.getByTestId('wp-state')).toHaveText('STALE');
+    await page.getByTestId('wp-analyse').click();
+    await expect(page.getByTestId('wp-state')).toHaveText('VALIDATED');
+    await rain.fill('30');
+    await rain.press('Enter');
+    await rain.blur();
+    await expect(page.getByTestId('wp-state')).toHaveText('STALE');
+    await page.getByTestId('wp-analyse').click();
+    await expect(page.getByTestId('wp-state')).toHaveText('INVALID');
 
     // Switch the preset menu to the 11 GHz licensed link and fill: it passes.
     await page.getByTestId('wp-edit-link').first().click();
@@ -200,6 +222,7 @@ test.describe('wireless planning journey', () => {
     await page.getByTestId('wp-analyse').click();
     await expect(page.getByTestId('wp-state')).toHaveText('VALIDATED');
     await expect(page.getByTestId('wp-verdict')).toHaveText('PASS');
+    await expect(page.getByTestId('wp-rain-avail')).toContainText('> 99.999');      // 11 GHz rain fade is mild: shown as a bound, never rounded up to 100%
   });
 
   test('Add Sector through the tool wheel: the form arrives with azimuth aimed at the premises, and saves', async ({ page }) => {

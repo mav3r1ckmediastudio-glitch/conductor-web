@@ -7,7 +7,7 @@
 export const DEFAULT_WIRELESS_SETTINGS = Object.freeze({
   kFactor: 4 / 3,                 // effective earth radius factor (standard atmosphere)
   minFresnelClearancePct: 60,     // required clearance of the 1st Fresnel zone, % of radius
-  minFadeMarginDb: 15,            // required fade margin per direction
+  minFadeMarginDb: 15,            // required fade margin per direction, for links below rainAssessAboveGhz
   coverageMarginDb: 10,           // a premises counts as covered at >= this many dB above the CPE minimum Rx
   profileStepM: 25,               // ground spacing of terrain samples along a link
   terrainZoom: 12,                // Terrain-RGB tile zoom used for sampling
@@ -39,6 +39,17 @@ export const DEFAULT_WIRELESS_SETTINGS = Object.freeze({
   gasModel: 1,
   gasTemperatureC: 15,
   gasWaterVapourGm3: 7.5,
+  // Rain (ITU-R P.838 / P.530, see wirelessRain.js). At and above
+  // rainAssessAboveGhz a link is judged on how often rain would take it below
+  // its receiver sensitivity, not on a flat fade margin: it must reach
+  // minAvailabilityPct at the site's 0.01%-of-time rain rate, and still have
+  // minClearSkyMarginDb in clear weather (alignment, ageing, mount sway).
+  // rainRate001Mmh is the ITU-R P.837-7 value for Loch Tay (27-30 mm/h at the
+  // three project sites); change it for anywhere else.
+  rainAssessAboveGhz: 10,
+  rainRate001Mmh: 30,
+  minAvailabilityPct: 99.9,
+  minClearSkyMarginDb: 6,
 });
 
 import { gaseousAttenuationDbPerKm } from './wirelessGas.js';
@@ -60,6 +71,10 @@ const RANGES = {
   rxSensMaxDbm:           [-80, 0],
   maxLossDb:              [1, 300],
   absorptionAboveGhz:     [1, 300],
+  rainAssessAboveGhz:     [1, 100],
+  rainRate001Mmh:         [1, 200],
+  minAvailabilityPct:     [99, 99.999],
+  minClearSkyMarginDb:    [0, 40],
   gasModel:               [0, 1],
   gasTemperatureC:        [-40, 50],
   gasWaterVapourGm3:      [0, 30],

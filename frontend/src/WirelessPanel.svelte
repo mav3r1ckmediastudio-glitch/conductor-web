@@ -63,10 +63,14 @@
     ['rxSensMinDbm', 'Best (lowest) Rx sensitivity (dBm)', ''],
     ['rxSensMaxDbm', 'Worst (highest) Rx sensitivity (dBm)', ''],
     ['maxLossDb', 'Largest cable or extra loss (dB)', 'Losses can never be negative'],
-    ['gasModel', 'Apply atmospheric gas absorption (1 = yes, 0 = no)', 'ITU-R P.676 oxygen + water vapour at each link\'s own frequency. Rain is NOT modelled.'],
+    ['gasModel', 'Apply atmospheric gas absorption (1 = yes, 0 = no)', 'ITU-R P.676 oxygen + water vapour at each link\'s own frequency.'],
     ['gasTemperatureC', 'Air temperature for gas absorption (°C)', 'Standard atmosphere is 15'],
     ['gasWaterVapourGm3', 'Water vapour density (g/m³)', 'Standard atmosphere is 7.5; humid Scottish air is close to it'],
     ['absorptionAboveGhz', 'With the gas model off, require an extra-loss allowance above (GHz)', ''],
+    ['rainAssessAboveGhz', 'Judge links on rain availability from (GHz)', 'Below this, the flat fade margin above is used instead'],
+    ['rainRate001Mmh', 'Rain rate exceeded 0.01% of the time (mm/h)', 'ITU-R P.837-7 gives 27-30 for the three Loch Tay sites. Change it for anywhere else.'],
+    ['minAvailabilityPct', 'Required availability against rain (%)', 'A design target. 99.9 is about 9 hours of rain outage a year'],
+    ['minClearSkyMarginDb', 'Required clear-sky margin for rain-assessed links (dB)', 'Allowance for alignment, ageing and mount sway'],
   ];
   function commitSetting(key, raw) {
     const v = Number(raw);
@@ -152,6 +156,10 @@
             <tr><td>Rx B→A</td><td>{fmt(selResult.rxBtoADbm)} dBm</td><td>fade margin</td><td>{fmt(selResult.fadeBtoADb)} dB</td></tr>
             <tr><td>Free-space loss</td><td>{fmt(selResult.fsplDb)} dB</td><td>terrain</td><td>{selResult.terrainStatus}</td></tr>
             <tr><td>Atmospheric loss</td><td>{fmt(selResult.atmosLossDb)} dB</td><td></td><td></td></tr>
+            {#if selResult.rain}
+              <tr data-testid="wp-rain"><td>Rain fade (0.01%)</td><td>{fmt(selResult.rain.a001Db)} dB</td><td>at</td><td>{selResult.rain.r001Mmh} mm/h</td></tr>
+              <tr data-testid="wp-rain-avail"><td>Rain availability</td><td>{selResult.rain.availabilityBound === 'below' ? '< 99' : selResult.rain.availabilityBound === 'above' ? '> 99.999' : selResult.rain.availabilityPct.toFixed(selResult.rain.availabilityPct >= 99.9 ? 2 : 1)} %</td><td>target</td><td>{selResult.rain.targetPct} %</td></tr>
+            {/if}
             <tr><td>Worst clearance</td><td>{fmt(selResult.clearanceWorstM)} m ({fmt(selResult.fresnelWorstPct, 0)}% F1)</td><td>at</td><td>{fmt(selResult.worstAtKm, 2)} km</td></tr>
           </tbody></table>
           {#if selResult.surveyed}<div class="hint warn">Line of sight recorded as surveyed — modelled clearance is waived for this link.</div>{/if}

@@ -36,7 +36,7 @@ export const PRESETS = Object.freeze({
         name: '60 GHz PtP (airFiber 60 LR class)',
         note: 'Channel 69.12 GHz is the top channel, where oxygen absorption is lowest (about 0.6 dB/km; at 64.8 GHz it is 4.4 and at 60.5 GHz about 15). '
           + '38 dBi dish and 21 dBm Tx are published (FCC report, reseller specs). Rx sensitivity -70 dBm is a planning value for a mid data rate, not a datasheet figure: use the value for the rate you need. '
-          + 'Rain fade is severe at 60-70 GHz and is NOT modelled. Check UK licensing with Ofcom.',
+          + 'Rain fade is severe at 60-70 GHz: links are judged on rain availability (ITU-R P.530/P.838, Engineering thresholds). Check UK licensing with Ofcom.',
         values: {
           freq_ghz: 69.12, channel_width_mhz: 2160,
           tx_power_a_dbm: 21, gain_a_dbi: 38, rx_sensitivity_a_dbm: -70, cable_loss_a_db: 0,

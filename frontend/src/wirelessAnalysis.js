@@ -10,12 +10,14 @@
 //   SITE_PARAMS_INCOMPLETE  SITE_DUPLICATE_ID
 //   LINK_ENDPOINT_MISSING   LINK_SAME_SITE        LINK_PARAMS_INCOMPLETE
 //   LINK_NO_TERRAIN         LINK_TERRAIN_PARTIAL  LINK_OBSTRUCTED
-//   LINK_FRESNEL_FAIL       LINK_MARGIN_LOW       LINK_SURVEYED_LOS (warning)
+//   LINK_FRESNEL_FAIL       LINK_MARGIN_LOW       LINK_RAIN_AVAILABILITY_LOW
+//   LINK_SURVEYED_LOS (warning)
 //   SECTOR_SITE_MISSING     SECTOR_PARAMS_INCOMPLETE
 //   LINK_PARAMS_IMPLAUSIBLE SECTOR_PARAMS_IMPLAUSIBLE  (outside the editable radio limits)
 //   LINK_ABSORPTION_UNMODELLED SECTOR_ABSORPTION_UNMODELLED
 
 import { resolveWirelessSettings, atmosLossDbPerKm, absorptionModelled } from './wirelessSettings.js';
+import { rainAvailability, marginNeededDb } from './wirelessRain.js';
 import { hashWirelessInputs } from './wirelessInputs.js';
 import { buildProfile } from './wirelessProfile.js';
 import { computeLinkBudget } from './wirelessLinkBudget.js';
@@ -198,8 +200,22 @@ function analyseLink(link, sitesById, terrain, settings) {
   res.fadeAtoBDb = ab.fadeMarginDb; res.fadeBtoADb = ba.fadeMarginDb;
   res.fadeMarginDb = Math.min(ab.fadeMarginDb, ba.fadeMarginDb);
   res.fsplDb = ab.fsplDb;
-  if (res.fadeMarginDb < settings.minFadeMarginDb) {
-    issues.push(issue('LINK_MARGIN_LOW', `Link ${id}: fade margin is ${res.fadeMarginDb.toFixed(1)} dB (worst direction); ${settings.minFadeMarginDb} dB required.`, 'link', id));
+  res.rain = null;
+  if (freq >= S.rainAssessAboveGhz) {
+    // Rain-limited band: judged on availability against rain, not a flat margin.
+    const rain = rainAvailability({ fGHz: freq, dKm: profile.distanceKm, r001Mmh: S.rainRate001Mmh, marginDb: res.fadeMarginDb });
+    const needed = marginNeededDb({ fGHz: freq, dKm: profile.distanceKm, r001Mmh: S.rainRate001Mmh, targetAvailabilityPct: S.minAvailabilityPct });
+    res.rain = { r001Mmh: S.rainRate001Mmh, gammaDbPerKm: rain.gammaDbPerKm, a001Db: rain.a001Db, availabilityPct: rain.availabilityPct,
+      availabilityBound: rain.bound, outageHoursPerYear: rain.outageHoursPerYear, targetPct: S.minAvailabilityPct,
+      neededMarginDb: needed, shortfallDb: Math.max(0, needed - res.fadeMarginDb) };
+    if (res.fadeMarginDb < S.minClearSkyMarginDb) {
+      issues.push(issue('LINK_MARGIN_LOW', `Link ${id}: clear-sky fade margin is ${res.fadeMarginDb.toFixed(1)} dB (worst direction); ${S.minClearSkyMarginDb} dB required even before rain. It needs ${(S.minClearSkyMarginDb - res.fadeMarginDb).toFixed(1)} dB more.`, 'link', id));
+    } else if (rain.availabilityPct < S.minAvailabilityPct) {
+      const shown = rain.bound === 'below' ? 'below 99' : rain.availabilityPct.toFixed(rain.availabilityPct >= 99.9 ? 2 : 1);
+      issues.push(issue('LINK_RAIN_AVAILABILITY_LOW', `Link ${id}: rain would limit availability to ${shown}% (about ${Math.round(rain.outageHoursPerYear)} h of outage a year) against a ${S.minAvailabilityPct}% target, at a rain rate of ${S.rainRate001Mmh} mm/h for 0.01% of the time and the receiver sensitivity entered. Fade margin is ${res.fadeMarginDb.toFixed(1)} dB and it needs about ${needed.toFixed(1)} dB: ${res.rain.shortfallDb.toFixed(1)} dB more, from a lower sensitivity figure (a slower data rate), a shorter hop or larger dishes.`, 'link', id));
+    }
+  } else if (res.fadeMarginDb < settings.minFadeMarginDb) {
+    issues.push(issue('LINK_MARGIN_LOW', `Link ${id}: fade margin is ${res.fadeMarginDb.toFixed(1)} dB (worst direction); ${settings.minFadeMarginDb} dB required. It needs ${(settings.minFadeMarginDb - res.fadeMarginDb).toFixed(1)} dB more.`, 'link', id));
   }
 
   const blocking = issues.filter(i => i.severity === 'error');
