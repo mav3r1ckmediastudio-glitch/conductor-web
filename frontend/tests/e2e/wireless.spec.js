@@ -33,13 +33,17 @@ function png(rgba, w = 256, h = 256) {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 // Terrain-RGB v2 encoding: height = -10000 + (R*65536 + G*256 + B) * 0.1
+// Served at 512 px, like MapTiler's v2 tiles can be, so the downsampling path
+// is exercised. heightAt() takes 256-px tile coordinates.
+const TILE_PX = 512;
 function tilePng(heightAt) {
-  const rgba = Buffer.alloc(256 * 256 * 4);
-  for (let y = 0; y < 256; y++) for (let x = 0; x < 256; x++) {
-    const v = Math.round((heightAt(x, y) + 10000) * 10), i = (y * 256 + x) * 4;
+  const n = TILE_PX, k = TILE_PX / 256;
+  const rgba = Buffer.alloc(n * n * 4);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const v = Math.round((heightAt(x / k, y / k) + 10000) * 10), i = (y * n + x) * 4;
     rgba[i] = Math.floor(v / 65536); rgba[i + 1] = Math.floor((v % 65536) / 256); rgba[i + 2] = v % 256; rgba[i + 3] = 255;
   }
-  return png(rgba);
+  return png(rgba, n, n);
 }
 const Z = 12;
 const gxOfLng = (lng) => ((lng + 180) / 360) * 256 * 2 ** Z;
@@ -64,7 +68,17 @@ async function open(page, seed, terrain) {
   await gotoApp(page);
   await page.route('**/api.maptiler.com/tiles/terrain-rgb-v2/**', async (route) => {
     if (terrain === 'fail') return route.abort();
-    const m = route.request().url().match(/terrain-rgb-v2\/(\d+)\/(\d+)\/(\d+)\.png/);
+    const url = route.request().url();
+    // Real MapTiler behaviour: the tile address comes from the TileJSON and is
+    // WebP. A fetcher that guesses the URL (e.g. ".png") gets a 404, as it
+    // would in production.
+    if (url.includes('/tiles.json')) {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        tilejson: '2.0.0', minzoom: 0, maxzoom: 12, tileSize: TILE_PX,
+        tiles: ['https://api.maptiler.com/tiles/terrain-rgb-v2/{z}/{x}/{y}.webp?key=e2e-key'] }) });
+    }
+    const m = url.match(/terrain-rgb-v2\/(\d+)\/(\d+)\/(\d+)\.webp/);
+    if (!m) return route.fulfill({ status: 404, body: 'not found' });
     const tx = Number(m[2]);
     const h = terrain === 'ridge'
       ? (x) => (Math.abs(tx * 256 + x - gxOfLng((A.lng + B.lng) / 2)) <= 2 ? 400 : 100)

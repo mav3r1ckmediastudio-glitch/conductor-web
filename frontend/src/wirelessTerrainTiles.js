@@ -114,17 +114,62 @@ export function buildDemGrid(source, gxMin, gyMin, w, h) {
   return { z: source.z, gxMin, gyMin, w, h, data };
 }
 
-/** Browser tile fetcher for MapTiler Terrain-RGB v2. Returns null on any failure. */
-export function maptilerTileFetcher(apiKey) {
+/** MapTiler's TileJSON for Terrain-RGB v2 — the same entry point the map itself uses. */
+export const MAPTILER_TERRAIN_TILEJSON = 'https://api.maptiler.com/tiles/terrain-rgb-v2/tiles.json';
+
+/** Fill an XYZ template ("…/{z}/{x}/{y}.webp?key=…"). */
+export function tileUrlFromTemplate(template, z, x, y) {
+  return template.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y));
+}
+
+/**
+ * Reduce a square RGBA tile of size n*256 to 256x256 by taking every n-th
+ * pixel. Terrain-RGB packs a height across three channels, so blending
+ * neighbouring pixels (canvas scaling, averaging) would produce heights that
+ * never existed; nearest-neighbour keeps every value genuine.
+ * @returns Uint8ClampedArray(256*256*4) or null if the size is not a multiple of 256.
+ */
+export function downsampleTileRgba(rgba, size) {
+  if (size === TILE_SIZE) return rgba;
+  if (!(size > TILE_SIZE) || size % TILE_SIZE !== 0 || rgba.length !== size * size * 4) return null;
+  const step = size / TILE_SIZE;
+  const out = new Uint8ClampedArray(TILE_SIZE * TILE_SIZE * 4);
+  for (let j = 0; j < TILE_SIZE; j++) for (let i = 0; i < TILE_SIZE; i++) {
+    const src = ((j * step) * size + i * step) * 4, dst = (j * TILE_SIZE + i) * 4;
+    out[dst] = rgba[src]; out[dst + 1] = rgba[src + 1]; out[dst + 2] = rgba[src + 2]; out[dst + 3] = rgba[src + 3];
+  }
+  return out;
+}
+
+/**
+ * Browser tile fetcher for MapTiler Terrain-RGB v2. Returns null on any failure.
+ *
+ * The tile URL (format, host, key handling) and the maximum zoom are read from
+ * MapTiler's TileJSON rather than assumed: the dataset is served as WebP, and a
+ * hard-coded ".png" address fails every request. Zoom levels above the
+ * TileJSON's maxzoom are refused (null -> the analysis fails closed) rather
+ * than silently substituted.
+ */
+export function maptilerTileFetcher(apiKey, { tileJsonUrl = MAPTILER_TERRAIN_TILEJSON } = {}) {
+  let tileJson = null;
+  const loadTileJson = () => (tileJson ??= (async () => {
+    const res = await fetch(`${tileJsonUrl}?key=${encodeURIComponent(apiKey)}`);
+    if (!res.ok) throw new Error(`TileJSON request failed (${res.status})`);
+    const tj = await res.json();
+    if (!Array.isArray(tj?.tiles) || typeof tj.tiles[0] !== 'string') throw new Error('TileJSON has no tile URL');
+    return { template: tj.tiles[0], maxzoom: Number.isFinite(tj.maxzoom) ? tj.maxzoom : Infinity };
+  })().catch((err) => { tileJson = null; throw err; }));
+
   return async (z, x, y) => {
-    const url = `https://api.maptiler.com/tiles/terrain-rgb-v2/${z}/${x}/${y}.png?key=${encodeURIComponent(apiKey)}`;
-    const res = await fetch(url);
+    const { template, maxzoom } = await loadTileJson();
+    if (z > maxzoom) return null;
+    const res = await fetch(tileUrlFromTemplate(template, z, x, y));
     if (!res.ok) return null;
     const bmp = await createImageBitmap(await res.blob(), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
-    if (bmp.width !== TILE_SIZE || bmp.height !== TILE_SIZE) return null;
-    const cv = new OffscreenCanvas(TILE_SIZE, TILE_SIZE);
+    if (bmp.width !== bmp.height) return null;
+    const cv = new OffscreenCanvas(bmp.width, bmp.height);
     const ctx = cv.getContext('2d', { willReadFrequently: true });
     ctx.drawImage(bmp, 0, 0);
-    return ctx.getImageData(0, 0, TILE_SIZE, TILE_SIZE).data;
+    return downsampleTileRgba(ctx.getImageData(0, 0, bmp.width, bmp.height).data, bmp.width);
   };
 }
