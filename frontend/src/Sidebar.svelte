@@ -11,6 +11,7 @@
   export let activeCat = 'civil';
   export let showBuildings = true;
   export let showRoads = true;
+  export let showHillshade = false;
   export let basemaps = [];          // [{ id, label }] — style URLs stay in App.svelte
   export let currentBasemap = 'dark';
   export let basemapSwitching = false;
@@ -42,6 +43,7 @@
     <button class="asset-btn" on:click={() => dispatch('moveAsset')}>⇄ Move Asset</button>
     <button class="asset-btn" class:on={showBuildings} on:click={() => dispatch('toggleBuildings')}>⌂ Buildings</button>
     <button class="asset-btn" class:on={showRoads} on:click={() => dispatch('toggleRoads')}>▬ Roads</button>
+    <button class="asset-btn" class:on={showHillshade} on:click={() => dispatch('toggleHillshade')}>⛰ Terrain relief</button>
     <div class="sid-basemap-dock">
       <div class="sid-div"></div>
       <div class="sid-lbl">Basemap</div>

@@ -24,13 +24,14 @@ import { ensureSources, ensureTerrainLayers, syncToMap } from './mapTools.js';
  * @param options.maptilerKey   API key for the terrain DEM tile URL.
  * @param options.showBuildings current buildings-toggle state to restore.
  * @param options.showRoads     current roads-toggle state to restore.
+ * @param options.showHillshade current terrain-relief toggle state to restore.
  */
 // Terrain relief for wireless planning. Reuses the existing 'terrain' DEM
 // source (no extra tile requests). Hidden by default so the established dark
 // visual language is unchanged; toggled via setHillshadeVisible().
 export const HILLSHADE_LAYER_ID = 'terrain-hillshade';
 
-export function ensureHillshadeLayer(map) {
+export function ensureHillshadeLayer(map, visible = false) {
   if (!map.getSource('terrain') || map.getLayer(HILLSHADE_LAYER_ID)) return;
   // Insert beneath our first custom layer so hillshade never covers assets.
   const before = map.getLayer('addresses-clusters') ? 'addresses-clusters' : undefined;
@@ -38,7 +39,7 @@ export function ensureHillshadeLayer(map) {
     id: HILLSHADE_LAYER_ID,
     type: 'hillshade',
     source: 'terrain',
-    layout: { visibility: 'none' },
+    layout: { visibility: visible ? 'visible' : 'none' },
     paint: {
       'hillshade-exaggeration': 0.5,
       'hillshade-shadow-color': '#000814',
@@ -53,7 +54,7 @@ export function setHillshadeVisible(map, visible) {
   map.setLayoutProperty(HILLSHADE_LAYER_ID, 'visibility', visible ? 'visible' : 'none');
 }
 
-export function setupMapLayers(map, { maptilerKey, showBuildings, showRoads }) {
+export function setupMapLayers(map, { maptilerKey, showBuildings, showRoads, showHillshade = false }) {
   // 1. GeoJSON sources + non-terrain symbol layers (chambers, joints, labels etc.)
   ensureSources(map);
 
@@ -73,7 +74,7 @@ export function setupMapLayers(map, { maptilerKey, showBuildings, showRoads }) {
       });
     }
     map.setTerrain({ source: 'terrain', exaggeration: 1.5 });
-    ensureHillshadeLayer(map);
+    ensureHillshadeLayer(map, showHillshade);
   }
 
   // 3. Terrain-dependent line layers + 3D pole CustomLayerInterface

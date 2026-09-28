@@ -41,7 +41,7 @@
     resumeProjectFile as fsaaResumeProjectFile,
   } from './fsaa.js';
   import { exportSheet } from './mapExport.js';
-  import { setupMapLayers } from './mapLayers.js';
+  import { setupMapLayers, setHillshadeVisible } from './mapLayers.js';
   import { searchAndZoom, fitToProject as fitToProjectExtent } from './mapSearch.js';
   import { exportCadSheet } from './cadExport.js';
   import { assignFibres } from './fibreAssign.js';
@@ -99,6 +99,7 @@
   let is3D = false;   // Conductor opens in 2D by default (agreed 15 Jul 2026)
   let showBuildings = true;
   let showRoads = true;
+  let showHillshade = false;   // terrain relief (wireless planning aid); off by default
   let currentBasemap = 'dark';
   let basemapSwitching = false; // prevents double-clicks during style reload
 
@@ -264,7 +265,7 @@
   // Map-layer (re)build lives in mapLayers.js — see setupMapLayers() there.
   // Called on first load AND after every basemap switch, with the current
   // toggle state passed explicitly.
-  const layerOpts = () => ({ maptilerKey: MAPTILER_KEY, showBuildings, showRoads });
+  const layerOpts = () => ({ maptilerKey: MAPTILER_KEY, showBuildings, showRoads, showHillshade });
 
   onMount(() => {
     map = new maplibregl.Map({
@@ -1247,6 +1248,11 @@
     }
   }
 
+  function toggleHillshade() {
+    showHillshade = !showHillshade;
+    if (map) setHillshadeVisible(map, showHillshade);
+  }
+
   function toggleRoads() {
     showRoads = !showRoads;
     if (!map) return;
@@ -1438,6 +1444,7 @@
       {activeCat}
       {showBuildings}
       {showRoads}
+      {showHillshade}
       basemaps={BASEMAPS}
       {currentBasemap}
       {basemapSwitching}
@@ -1450,6 +1457,7 @@
       on:moveAsset={onMoveAsset}
       on:toggleBuildings={toggleBuildings}
       on:toggleRoads={toggleRoads}
+      on:toggleHillshade={toggleHillshade}
       on:changeBasemap={(e) => changeBasemap(e.detail)}
     />
 
