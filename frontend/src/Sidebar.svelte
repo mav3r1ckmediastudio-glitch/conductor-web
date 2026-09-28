@@ -15,6 +15,11 @@
   export let basemaps = [];          // [{ id, label }] — style URLs stay in App.svelte
   export let currentBasemap = 'dark';
   export let basemapSwitching = false;
+
+  // Which build is this tab running? Commit + build time, so a stale tab or deploy is obvious.
+  const VERSION = typeof __APP_VERSION__ !== 'undefined' ? String(__APP_VERSION__) : 'dev';
+  const BUILT = typeof __BUILD_TIME__ !== 'undefined' ? String(__BUILD_TIME__) : '';
+  const buildLabel = `${(VERSION.split('+')[1] || VERSION).slice(0, 7)}${BUILT ? ' · ' + BUILT.slice(5) : ''}`;
 </script>
 
 <div class="sidebar">
@@ -58,6 +63,7 @@
           >{bm.label}</button>
         {/each}
       </div>
+      <div class="build-stamp" data-testid="build-stamp" title={VERSION + (BUILT ? ' — built ' + BUILT : '')}>build {buildLabel}</div>
     </div>
   {/if}
 </div>
@@ -95,4 +101,5 @@
   .basemap-btn:hover:not(:disabled) { background: #0f1c28; color: #a0c4d8; border-color: #2a4a5e; }
   .basemap-btn.on { background: #00aaff0d; border-color: #00aaff44; color: #4dc8ff; }
   .basemap-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .build-stamp { padding: 0 10px 4px; font-size: 7px; letter-spacing: 0.04em; color: #2f5068; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>

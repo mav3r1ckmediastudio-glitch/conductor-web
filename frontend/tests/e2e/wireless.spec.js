@@ -316,6 +316,14 @@ test.describe('wireless planning journey', () => {
     await expect(page.getByTestId('wp-state')).toHaveText('STALE');
   });
 
+  test('the app shows which build it is running (commit and build time), so a stale tab is obvious', async ({ page }) => {
+    await open(page, SEED(), 'flat');
+    const stamp = page.getByTestId('build-stamp');
+    await expect(stamp).toBeVisible();
+    await expect(stamp).toContainText(/^build \S+/);
+    await expect(stamp).toHaveAttribute('title', /\d+\.\d+\.\d+/);   // full version in the tooltip
+  });
+
   test('editing a site through the form: required field blocks save; a valid save makes the plan stale', async ({ page }) => {
     await open(page, SEED(), 'flat');
     await page.getByTestId('wp-analyse').click();
