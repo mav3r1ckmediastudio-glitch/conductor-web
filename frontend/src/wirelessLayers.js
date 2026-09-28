@@ -22,8 +22,10 @@ export const WL = {
   previewAim: 'wireless-aim-preview-aim', previewHandle: 'wireless-aim-preview-handle',
 };
 
-/** Longest fan radius drawn on the map (m); the handle sits at the fan's tip. */
-export const FAN_MAX_M = 1200;
+/** Longest fan radius drawn on the map (m): the analysis range limit. The fan shows the sector's true range. */
+export const FAN_MAX_M = 30000;
+/** The aiming handle sits on the boresight at most this far (m) from the mast, so it stays reachable when zoomed in. */
+export const HANDLE_MAX_M = 1200;
 
 const COLOURS = { pass: '#3ddc97', fail: '#ff5c5c', unverified: '#4dc8ff' };
 
@@ -58,12 +60,12 @@ export function sectorFanPolygon(center, azimuthDeg, beamwidthDeg, radiusM) {
 }
 
 /**
- * The aiming line (site -> tip of the boresight) and its drag handle for one
+ * The aiming line (site -> handle on the boresight) and its drag handle for one
  * sector. `props` ride on both so a drag knows which sector, site and beam it is.
  */
 export function sectorAimFeatures(center, azimuthDeg, beamwidthDeg, rangeM, props = {}) {
-  const r = Math.min(rangeM, FAN_MAX_M), tip = destinationPoint(center, azimuthDeg, r);
-  const meta = { ...props, lng: center.lng, lat: center.lat, bw: beamwidthDeg, r };
+  const r = Math.min(rangeM, FAN_MAX_M), tip = destinationPoint(center, azimuthDeg, Math.min(r, HANDLE_MAX_M));
+  const meta = { ...props, lng: center.lng, lat: center.lat, bw: beamwidthDeg, r };   // r = the sector's range, for redrawing the fan
   return [
     { type: 'Feature', properties: meta, geometry: { type: 'LineString', coordinates: [[center.lng, center.lat], [tip.lng, tip.lat]] } },
     { type: 'Feature', properties: meta, geometry: { type: 'Point', coordinates: [tip.lng, tip.lat] } },

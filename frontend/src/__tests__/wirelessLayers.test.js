@@ -40,13 +40,15 @@ describe('sector fans', () => {
     expect(ring[0]).toEqual(ring[ring.length - 1]);
     for (const [lng, lat] of ring.slice(1, -1)) expect(groundDistanceM(A, { lng, lat })).toBeCloseTo(1000, -1);
   });
-  it('skips sectors with unusable geometry parameters and caps the display radius', () => {
+  it('skips sectors with unusable geometry parameters; the fan is drawn at the true range (9 km here)', () => {
     const s = { ...base(), wirelessSectors: [
       { geometry: { type: 'Point', coordinates: [A.lng, A.lat] }, properties: { sector_id: 'OK', site_id: 'S1', azimuth_deg: 0, beamwidth_deg: 90, range_m: 9000 } },
       { geometry: { type: 'Point', coordinates: [A.lng, A.lat] }, properties: { sector_id: 'BAD', site_id: 'S1', azimuth_deg: '', beamwidth_deg: 90 } }] };
     const fans = buildDisplayCollections(s).fans;
     expect(fans).toHaveLength(1);
-    expect(groundDistanceM(A, { lng: fans[0].geometry.coordinates[0][1][0], lat: fans[0].geometry.coordinates[0][1][1] })).toBeLessThanOrEqual(1201);
+    const d = groundDistanceM(A, { lng: fans[0].geometry.coordinates[0][1][0], lat: fans[0].geometry.coordinates[0][1][1] });
+    expect(d).toBeGreaterThan(8900);
+    expect(d).toBeLessThan(9100);
   });
 });
 

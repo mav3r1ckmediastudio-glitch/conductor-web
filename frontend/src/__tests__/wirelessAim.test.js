@@ -44,7 +44,7 @@ describe('suggestAzimuth', () => {
 });
 
 import { azimuthFromPoint, countPremisesInBeam } from '../wirelessAim.js';
-import { sectorAimFeatures, buildDisplayCollections, FAN_MAX_M } from '../wirelessLayers.js';
+import { sectorAimFeatures, buildDisplayCollections, FAN_MAX_M, HANDLE_MAX_M } from '../wirelessLayers.js';
 import { groundDistanceM, bearingDeg } from '../wirelessGeo.js';
 
 describe('azimuthFromPoint (drag -> compass bearing)', () => {
@@ -96,9 +96,21 @@ describe('aiming handle geometry', () => {
     expect(line.geometry.coordinates[1]).toEqual(handle.geometry.coordinates);
     expect(handle.properties).toMatchObject({ sector_id: 'S1', bw: 90, r: 800, lng: SITE.lng, lat: SITE.lat });
   });
-  it('a long-range sector\'s handle is at the drawn fan tip, not off-screen at 30 km', () => {
-    const [, handle] = sectorAimFeatures(SITE, 0, 90, 30000);
-    expect(handle.properties.r).toBe(FAN_MAX_M);
+  it('a long-range sector keeps its handle within reach (1.2 km) but remembers its true range', () => {
+    const [, handle] = sectorAimFeatures(SITE, 0, 90, 5000);
+    expect(groundDistanceM(SITE, { lng: handle.geometry.coordinates[0], lat: handle.geometry.coordinates[1] })).toBeCloseTo(HANDLE_MAX_M, -1);
+    expect(handle.properties.r).toBe(5000);
+    expect(sectorAimFeatures(SITE, 0, 90, 90000)[1].properties.r).toBe(FAN_MAX_M);
+  });
+  it('the fan drawn for a sector reaches its real range, not a fixed 1.2 km', () => {
+    const site = { type: 'Feature', geometry: { type: 'Point', coordinates: [SITE.lng, SITE.lat] }, properties: { site_id: 'A' } };
+    const mk = (range_m) => buildDisplayCollections({ wirelessSites: [site], wirelessLinks: [],
+      wirelessSectors: [{ type: 'Feature', geometry: site.geometry, properties: { sector_id: 'X', site_id: 'A', azimuth_deg: 90, beamwidth_deg: 90, range_m } }] });
+    const farthest = (c) => Math.max(...c.fans[0].geometry.coordinates[0].map(([lng, lat]) => groundDistanceM(SITE, { lng, lat })));
+    expect(farthest(mk(5000))).toBeGreaterThan(4900);
+    expect(farthest(mk(5000))).toBeLessThan(5100);
+    expect(farthest(mk(800))).toBeLessThan(900);
+    expect(farthest(mk(100000))).toBeLessThan(30100);                    // capped at the analysis limit
   });
   it('stored sectors get a handle; incomplete ones (no azimuth) do not', () => {
     const site = { type: 'Feature', geometry: { type: 'Point', coordinates: [SITE.lng, SITE.lat] }, properties: { site_id: 'A' } };
