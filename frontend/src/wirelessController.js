@@ -3,7 +3,7 @@
 // state and touches NO DOM; the caller stores the result via projectStore.
 // Network and worker access are injectable, so the whole flow is testable.
 
-import { resolveWirelessSettings } from './wirelessSettings.js';
+import { resolveWirelessSettings, atmosLossDbPerKm } from './wirelessSettings.js';
 import { hashWirelessInputs } from './wirelessInputs.js';
 import { analyseWirelessDetailed, checkSector, num } from './wirelessAnalysis.js';
 import {
@@ -113,7 +113,8 @@ export async function runWirelessCoverage(state, { maptilerKey, fetchTile, runJo
     const g = await runJob({
       site: { ...geo[i], groundM: ground, antennaAglM: Number(p.antenna_height_m) },
       sector: { azimuthDeg: Number(p.azimuth_deg), beamwidthDeg: Number(p.beamwidth_deg), txPowerDbm: Number(p.tx_power_dbm), gainDbi: Number(p.gain_dbi),
-                cableLossDb: num(p.cable_loss_db) ?? 0, freqGHz: Number(p.freq_ghz), cpeHeightM: Number(p.cpe_height_m), cpeGainDbi: Number(p.cpe_gain_dbi) },
+                cableLossDb: num(p.cable_loss_db) ?? 0, freqGHz: Number(p.freq_ghz), cpeHeightM: Number(p.cpe_height_m), cpeGainDbi: Number(p.cpe_gain_dbi),
+                atmosDbPerKm: atmosLossDbPerKm(Number(p.freq_ghz), settings) },
       radiusM: Number(p.range_m), dem, kFactor: settings.kFactor,
     });
     const min = Number(p.cpe_min_rx_dbm);

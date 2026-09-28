@@ -31,6 +31,13 @@ export const DEFAULT_WIRELESS_SETTINGS = Object.freeze({
   // (~15 dB/km around 60 GHz) and the free-space model does not include it:
   // links must carry an explicit extra-loss allowance or they fail.
   absorptionAboveGhz: 50,
+  // Modelled atmospheric absorption: the oxygen band around 60 GHz. Inside
+  // this band the loss is applied automatically (dB per km of path, ITU-R
+  // P.676 sea-level peak is ~15 dB/km); outside it, frequencies above
+  // absorptionAboveGhz still need an explicit extra-loss allowance.
+  oxygenBandMinGhz: 57,
+  oxygenBandMaxGhz: 66,
+  oxygenLossDbPerKm: 15,
 });
 
 const RANGES = {
@@ -50,6 +57,9 @@ const RANGES = {
   rxSensMaxDbm:           [-80, 0],
   maxLossDb:              [1, 300],
   absorptionAboveGhz:     [1, 300],
+  oxygenBandMinGhz:       [40, 70],
+  oxygenBandMaxGhz:       [50, 80],
+  oxygenLossDbPerKm:      [0, 30],
 };
 
 /** Merge user settings over defaults, dropping anything invalid back to default. */
@@ -62,4 +72,15 @@ export function resolveWirelessSettings(raw) {
   }
   if (typeof raw.terrainSourceId === 'string' && raw.terrainSourceId) out.terrainSourceId = raw.terrainSourceId;
   return out;
+}
+
+/** Modelled atmospheric absorption rate (dB/km) at a frequency, or 0 outside the modelled band. */
+export function atmosLossDbPerKm(freqGHz, settings) {
+  const s = settings || DEFAULT_WIRELESS_SETTINGS;
+  return freqGHz >= s.oxygenBandMinGhz && freqGHz <= s.oxygenBandMaxGhz ? s.oxygenLossDbPerKm : 0;
+}
+/** True when absorption at this frequency is modelled (so no manual allowance is needed). */
+export function absorptionModelled(freqGHz, settings) {
+  const s = settings || DEFAULT_WIRELESS_SETTINGS;
+  return freqGHz >= s.oxygenBandMinGhz && freqGHz <= s.oxygenBandMaxGhz;
 }

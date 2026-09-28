@@ -45,7 +45,11 @@ describe('coercion & validation', () => {
   });
   it('carries radio parameters (not ids or survey overrides) from the previous item', () => {
     const d = carryDefaults('link', [{ properties: { link_id: 'L1', freq_ghz: 5, tx_power_a_dbm: 25, survey_los_confirmed: true, survey_note: 'x' } }]);
-    expect(d).toEqual({ freq_ghz: 5, tx_power_a_dbm: 25 });
-    expect(carryDefaults('link', [])).toEqual({});
+    expect(d).toMatchObject({ freq_ghz: 5, tx_power_a_dbm: 25 });
+    expect(d).not.toHaveProperty('link_id');
+    expect(d).not.toHaveProperty('survey_los_confirmed');
+    expect(d).not.toHaveProperty('survey_note');
+    // A first link starts from the gigabit backhaul preset (was: blank).
+    expect(carryDefaults('link', [])).toMatchObject({ freq_ghz: 11, gain_a_dbi: 38 });
   });
 });

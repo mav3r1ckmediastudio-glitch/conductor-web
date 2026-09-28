@@ -21,6 +21,7 @@
   import { resolveWirelessSettings } from './wirelessSettings.js';
   import { generateWirelessBomCsv, generateWirelessBomHtml } from './wirelessBom.js';
   import { carryDefaults } from './wirelessFields.js';
+  import { presetFor } from './wirelessPresets.js';
   import CBTForm from './CBTForm.svelte';
   import CBTTailForm from './CBTTailForm.svelte';
   import EditCabinetForm from './EditCabinetForm.svelte';
@@ -1697,12 +1698,13 @@
       {:else if rpMode === 'wireless-form'}
         {#if wEdit}
           {@const f = wFind(wEdit.kind, wEdit.id)}
-          <WirelessForm kind={wEdit.kind} mode="edit" assetId={wEdit.id} existing={f?.properties}
+          <WirelessForm kind={wEdit.kind} mode="edit" assetId={wEdit.id} existing={f?.properties} preset={presetFor(wEdit.kind)}
             on:save={onWirelessFormSaved} on:cancel={onWirelessFormCancelled} />
         {:else if wPending}
           <WirelessForm kind={wPending.kind} mode="create" assetId={wPending.data[W_ID[wPending.kind]]}
             subtitle={wPending.kind === 'link' ? `${wPending.data.site_a} ↔ ${wPending.data.site_b}` : wPending.kind === 'sector' ? `on site ${wPending.data.site_id}` : ''}
             defaults={carryDefaults(wPending.kind, projectStore.state[W_COLL[wPending.kind]])}
+            preset={presetFor(wPending.kind)}
             on:save={onWirelessFormSaved} on:cancel={onWirelessFormCancelled} />
         {/if}
 

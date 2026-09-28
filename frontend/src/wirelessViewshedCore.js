@@ -10,7 +10,8 @@
 //     pattern or downtilt.
 //   * One dominant knife-edge (highest elevation angle along the ray), not
 //     Deygout/Epstein-Peterson multiple-edge diffraction.
-//   * Free-space loss + diffraction only: no rain, foliage or atmospheric loss.
+//   * Free-space loss + diffraction + modelled oxygen-band absorption only:
+//     no rain or foliage loss.
 //   * Local isotropic scale: metres-per-pixel taken at the site latitude.
 // Unknown terrain (NaN) truncates a ray: everything beyond it is "no data",
 // never "covered".
@@ -55,7 +56,7 @@ function bilinear(dem, x, y) {
 
 /**
  * @param p.site    { lng, lat, groundM, antennaAglM }
- * @param p.sector  { azimuthDeg, beamwidthDeg, txPowerDbm, gainDbi, cableLossDb?, freqGHz, cpeHeightM, cpeGainDbi, frontToBackDb? }
+ * @param p.sector  { azimuthDeg, beamwidthDeg, txPowerDbm, gainDbi, cableLossDb?, freqGHz, cpeHeightM, cpeGainDbi, frontToBackDb?, atmosDbPerKm? }
  * @param p.radiusM analysis radius
  * @param p.dem     { z, gxMin, gyMin, w, h, data:Float32Array } heights in metres, NaN = no data
  * @param p.kFactor effective earth radius factor
@@ -105,7 +106,8 @@ export function computeSectorCoverage(p) {
         if (d2 > 0) diffLoss = knifeEdgeLossDb(hObs * Math.sqrt((2 * (d1 + d2)) / (lambda * d1 * d2)));
       }
       const fspl = 92.45 + 20 * Math.log10(sector.freqGHz) + 20 * Math.log10(d / 1000);
-      const rx = eirp - fspl - diffLoss - patternLoss + sector.cpeGainDbi;
+      const atmos = (sector.atmosDbPerKm ?? 0) * (d / 1000);   // modelled gaseous absorption
+      const rx = eirp - fspl - atmos - diffLoss - patternLoss + sector.cpeGainDbi;
       const ix = Math.round(px), iy = Math.round(py);
       if (ix >= 0 && iy >= 0 && ix < dem.w && iy < dem.h) {
         const idx = iy * dem.w + ix;

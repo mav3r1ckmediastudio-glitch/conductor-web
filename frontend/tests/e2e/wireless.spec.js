@@ -166,6 +166,27 @@ test.describe('wireless planning journey', () => {
     await expect(page.getByTestId('wp-issue')).toHaveCount(0);           // and nothing is left blocking
   });
 
+  test('a link full of impossible values is repaired with "Fill with preset values" and then validates', async ({ page }) => {
+    const seed = SEED();
+    Object.assign(seed.wirelessLinks[0].properties, { freq_ghz: 200, tx_power_a_dbm: 200, tx_power_b_dbm: 200, gain_a_dbi: 200,
+      gain_b_dbi: 200, rx_sensitivity_a_dbm: 200, rx_sensitivity_b_dbm: 200 });
+    await open(page, seed, 'flat');
+    await page.getByTestId('wp-analyse').click();
+    await expect(page.locator('[data-testid="wp-issue"][data-code="LINK_PARAMS_IMPLAUSIBLE"]')).toBeVisible();
+
+    await page.getByTestId('wp-edit-link').first().click();
+    await expect(page.getByText('Gigabit backhaul (11 GHz licensed PtP)')).toBeVisible();
+    await page.getByTestId('wf-apply-preset').click();
+    await expect(page.getByTestId('wf-input-gain_a_dbi')).toHaveValue('38');
+    await expect(page.getByTestId('wf-input-rx_sensitivity_b_dbm')).toHaveValue('-58');
+    await page.getByTestId('wf-save').click();
+
+    await expect(page.getByTestId('wp-state')).toHaveText('STALE');
+    await page.getByTestId('wp-analyse').click();
+    await expect(page.getByTestId('wp-state')).toHaveText('VALIDATED');
+    await expect(page.getByTestId('wp-verdict')).toHaveText('PASS');
+  });
+
   test('editing a site through the form: required field blocks save; a valid save makes the plan stale', async ({ page }) => {
     await open(page, SEED(), 'flat');
     await page.getByTestId('wp-analyse').click();

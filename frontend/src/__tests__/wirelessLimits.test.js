@@ -52,22 +52,22 @@ describe('radio plausibility limits', () => {
 });
 
 describe('atmospheric absorption above the threshold', () => {
-  it('a 60 GHz link without an extra-loss allowance fails', () => {
-    const a = analyseWireless(state(link({ freq_ghz: 60 })), flat);
+  it('an 80 GHz (E-band, unmodelled) link without an extra-loss allowance fails', () => {
+    const a = analyseWireless(state(link({ freq_ghz: 80 })), flat);
     expect(a.status).toBe('INVALID');
     expect(codes(a)).toContain('LINK_ABSORPTION_UNMODELLED');
   });
 
   it('a recorded LOS survey does not waive it', () => {
-    const a = analyseWireless(state(link({ freq_ghz: 60, survey_los_confirmed: true, survey_note: 'surveyed' })), flat);
+    const a = analyseWireless(state(link({ freq_ghz: 80, survey_los_confirmed: true, survey_note: 'surveyed' })), flat);
     expect(codes(a)).toContain('LINK_ABSORPTION_UNMODELLED');
     expect(a.status).toBe('INVALID');
   });
 
   it('with an explicit allowance the absorption check is satisfied and the loss is applied', () => {
-    const a = analyseWireless(state(link({ freq_ghz: 60, extra_loss_db: 20 })), flat);
+    const a = analyseWireless(state(link({ freq_ghz: 80, extra_loss_db: 20 })), flat);
     expect(codes(a)).not.toContain('LINK_ABSORPTION_UNMODELLED');
-    const b = analyseWireless(state(link({ freq_ghz: 60, extra_loss_db: 40 })), flat);
+    const b = analyseWireless(state(link({ freq_ghz: 80, extra_loss_db: 40 })), flat);
     expect(a.links[0].rxAtoBDbm - b.links[0].rxAtoBDbm).toBeCloseTo(20, 6);
   });
 });
@@ -83,7 +83,8 @@ describe('sectors', () => {
   it('an impossible CPE gain is flagged (so coverage skips the sector)', () => {
     expect(checkSector(sector({ cpe_gain_dbi: 230 }), sites, S).map(i => i.code)).toContain('SECTOR_PARAMS_IMPLAUSIBLE');
   });
-  it('a 60 GHz sector is flagged as absorption-unmodelled', () => {
-    expect(checkSector(sector({ freq_ghz: 60 }), sites, S).map(i => i.code)).toContain('SECTOR_ABSORPTION_UNMODELLED');
+  it('an 80 GHz sector is flagged as absorption-unmodelled; 60 GHz is modelled and accepted', () => {
+    expect(checkSector(sector({ freq_ghz: 80 }), sites, S).map(i => i.code)).toContain('SECTOR_ABSORPTION_UNMODELLED');
+    expect(checkSector(sector({ freq_ghz: 60 }), sites, S)).toEqual([]);
   });
 });

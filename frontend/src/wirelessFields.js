@@ -3,6 +3,8 @@
 // place and can be tested against the analysis rules (see wirelessFields.test.js).
 
 import { LINK_REQUIRED, SECTOR_REQUIRED } from './wirelessAnalysis.js';
+import { PRESETS } from './wirelessPresets.js';
+import { DEFAULT_WIRELESS_SETTINGS as D } from './wirelessSettings.js';
 
 const n = (key, label, extra = {}) => ({ key, label, type: 'number', ...extra });
 
@@ -87,13 +89,31 @@ export function validateFields(fields, values) {
 /** Radio parameters worth carrying from the previous link so the user is not retyping 10 numbers. */
 export const LINK_CARRY_KEYS = ['freq_ghz', 'channel_width_mhz', 'tx_power_a_dbm', 'gain_a_dbi', 'rx_sensitivity_a_dbm', 'cable_loss_a_db',
   'tx_power_b_dbm', 'gain_b_dbi', 'rx_sensitivity_b_dbm', 'cable_loss_b_db', 'extra_loss_db'];
+// Default plausibility range per carried key, so an implausible value on the
+// previous asset (e.g. 200 dBi) is never copied into the next one.
+const CARRY_RANGE = {
+  freq_ghz: [D.freqMinGhz, D.freqMaxGhz],
+  tx_power_a_dbm: [D.txPowerMinDbm, D.txPowerMaxDbm], tx_power_b_dbm: [D.txPowerMinDbm, D.txPowerMaxDbm], tx_power_dbm: [D.txPowerMinDbm, D.txPowerMaxDbm],
+  gain_a_dbi: [D.gainMinDbi, D.gainMaxDbi], gain_b_dbi: [D.gainMinDbi, D.gainMaxDbi], gain_dbi: [D.gainMinDbi, D.gainMaxDbi], cpe_gain_dbi: [D.gainMinDbi, D.gainMaxDbi],
+  rx_sensitivity_a_dbm: [D.rxSensMinDbm, D.rxSensMaxDbm], rx_sensitivity_b_dbm: [D.rxSensMinDbm, D.rxSensMaxDbm], cpe_min_rx_dbm: [D.rxSensMinDbm, D.rxSensMaxDbm],
+  cable_loss_a_db: [0, D.maxLossDb], cable_loss_b_db: [0, D.maxLossDb], cable_loss_db: [0, D.maxLossDb], extra_loss_db: [0, D.maxLossDb],
+};
+const plausible = (k, v) => { const r = CARRY_RANGE[k]; const n = Number(v); return !r || (Number.isFinite(n) && n >= r[0] && n <= r[1]); };
+
+/**
+ * Starting values for a new asset: the kind's preset (wirelessPresets.js),
+ * overlaid with the previous asset's radio values where those are plausible —
+ * so a run of links stays consistent with whatever equipment was last entered.
+ */
 export function carryDefaults(kind, existing) {
+  const preset = PRESETS[kind]?.values || {};
   const last = existing?.[existing.length - 1]?.properties;
-  if (!last) return {};
+  if (!last) return { ...preset };
   const keys = kind === 'link' ? LINK_CARRY_KEYS
     : kind === 'sector' ? ['freq_ghz', 'tx_power_dbm', 'gain_dbi', 'cable_loss_db', 'beamwidth_deg', 'range_m', 'cpe_height_m', 'cpe_gain_dbi', 'cpe_min_rx_dbm', 'antenna_height_m']
     : ['mast_height_m'];
-  return Object.fromEntries(keys.filter(k => last[k] != null).map(k => [k, last[k]]));
+  const carried = Object.fromEntries(keys.filter(k => last[k] != null && last[k] !== '' && plausible(k, last[k])).map(k => [k, last[k]]));
+  return { ...preset, ...carried };
 }
 
 export const LINK_REQUIRED_KEYS = LINK_REQUIRED.map(r => r[0]);

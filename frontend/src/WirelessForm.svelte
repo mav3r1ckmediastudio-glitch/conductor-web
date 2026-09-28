@@ -13,6 +13,7 @@
   export let subtitle = '';           // e.g. "S1 → S2"
   export let existing = null;         // properties when editing
   export let defaults = {};           // carried values when creating
+  export let preset = null;           // { name, values } — see wirelessPresets.js
 
   const TITLES = { site: 'Wireless Site', sector: 'Sector Antenna', link: 'Point-to-Point Link' };
 
@@ -44,6 +45,15 @@
     dispatch('save', r.props);
   }
   $: if (touched) errors = validateFields(fields, values).errors;
+
+  // Overwrite only the preset's fields in the form (e.g. to replace bad values
+  // on an existing link). Nothing is saved until "Save".
+  function applyPreset() {
+    if (!preset) return;
+    const next = { ...values };
+    for (const [k, v] of Object.entries(preset.values)) next[k] = v == null ? '' : String(v);
+    values = next;
+  }
 </script>
 
 <div class="wform">
@@ -52,6 +62,13 @@
     <span class="form-id">{assetId}</span>
   </div>
   {#if subtitle}<div class="subtitle">{subtitle}</div>{/if}
+  {#if preset}
+    <div class="preset">
+      <div class="preset-t">{mode === 'create' ? 'Pre-filled from' : 'Preset available'}: <b>{preset.name}</b></div>
+      <div class="preset-h">Typical values for this class of equipment. Edit any field to match the equipment you choose.</div>
+      <button class="btn-preset" data-testid="wf-apply-preset" on:click={applyPreset}>{mode === 'create' ? 'Reset to preset values' : 'Fill with preset values'}</button>
+    </div>
+  {/if}
 
   <div class="body">
     {#each Object.entries(sections) as [title, list]}
@@ -93,6 +110,11 @@
   .form-id { font-family: 'Courier New', monospace; font-size: 12px; color: #a0c4d8; }
   .subtitle { padding: 6px 16px; font-size: 11px; color: #3a5a70; border-bottom: 1px solid #1a2d40; }
   .body { overflow-y: auto; flex: 1; }
+  .preset { padding: 8px 16px; border-bottom: 1px solid #1a2d40; display: flex; flex-direction: column; gap: 4px; }
+  .preset-t { font-size: 11px; color: #7ab8d4; } .preset-t b { color: #4dc8ff; }
+  .preset-h { font-size: 10px; color: #2f5068; line-height: 1.4; }
+  .btn-preset { align-self: flex-start; padding: 4px 10px; font-size: 11px; background: #1a2d40; color: #7ab8d4; border: 1px solid #2a4a5e; border-radius: 2px; cursor: pointer; }
+  .btn-preset:hover { background: #2a4a5e; color: #a0c4d8; }
   .form-section { padding: 12px 16px; border-bottom: 1px solid #1a2d40; }
   .form-section-title { font-size: 11px; font-weight: bold; color: #4dc8ff; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
   .form-group { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }

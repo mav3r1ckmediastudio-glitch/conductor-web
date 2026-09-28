@@ -15,7 +15,7 @@
 //   LINK_PARAMS_IMPLAUSIBLE SECTOR_PARAMS_IMPLAUSIBLE  (outside the editable radio limits)
 //   LINK_ABSORPTION_UNMODELLED SECTOR_ABSORPTION_UNMODELLED
 
-import { resolveWirelessSettings } from './wirelessSettings.js';
+import { resolveWirelessSettings, atmosLossDbPerKm, absorptionModelled } from './wirelessSettings.js';
 import { hashWirelessInputs } from './wirelessInputs.js';
 import { buildProfile } from './wirelessProfile.js';
 import { computeLinkBudget } from './wirelessLinkBudget.js';
@@ -92,7 +92,7 @@ export function checkSector(sector, sitesById, settings = resolveWirelessSetting
   ]);
   if (bad.length) issues.push(issue('SECTOR_PARAMS_IMPLAUSIBLE', `Sector ${id}: ${bad.join('; ')}. ${LIMITS_HINT}`, 'sector', id));
   const f = num(p.freq_ghz);
-  if (f != null && f > S.absorptionAboveGhz) {
+  if (f != null && f > S.absorptionAboveGhz && !absorptionModelled(f, S)) {
     issues.push(issue('SECTOR_ABSORPTION_UNMODELLED', `Sector ${id}: ${f} GHz is above ${S.absorptionAboveGhz} GHz, where atmospheric absorption is significant and the coverage model does not include it.`, 'sector', id));
   }
   return issues;
@@ -104,7 +104,7 @@ function analyseLink(link, sitesById, terrain, settings) {
   const issues = [];
   const res = { link_id: id, verdict: 'FAIL', issues, distanceKm: null, terrainStatus: null,
                 fresnelWorstPct: null, clearanceWorstM: null, worstAtKm: null,
-                rxAtoBDbm: null, rxBtoADbm: null, fadeAtoBDb: null, fadeBtoADb: null, fadeMarginDb: null, surveyed: false };
+                rxAtoBDbm: null, rxBtoADbm: null, fadeAtoBDb: null, fadeBtoADb: null, fadeMarginDb: null, atmosLossDb: null, surveyed: false };
 
   const sa = sitesById.get(String(p.site_a ?? '')), sb = sitesById.get(String(p.site_b ?? ''));
   if (!sa || !sb) {
@@ -152,8 +152,9 @@ function analyseLink(link, sitesById, terrain, settings) {
   // Free-space + declared extra loss only. Above the absorption threshold that
   // model is badly optimistic, so an explicit allowance is required. This is
   // not waivable by a line-of-sight survey (it is a budget issue, not LOS).
-  if (freq > S.absorptionAboveGhz && !((num(p.extra_loss_db) ?? 0) > 0)) {
-    issues.push(issue('LINK_ABSORPTION_UNMODELLED', `Link ${id}: ${freq} GHz is above ${S.absorptionAboveGhz} GHz, where atmospheric absorption is significant (around 15 dB per km near 60 GHz) and is not modelled. Enter an extra path loss allowance for this link.`, 'link', id));
+  // Inside the modelled oxygen band the absorption is applied automatically.
+  if (freq > S.absorptionAboveGhz && !absorptionModelled(freq, S) && !((num(p.extra_loss_db) ?? 0) > 0)) {
+    issues.push(issue('LINK_ABSORPTION_UNMODELLED', `Link ${id}: ${freq} GHz is above ${S.absorptionAboveGhz} GHz, where atmospheric absorption is significant and is only modelled between ${S.oxygenBandMinGhz} and ${S.oxygenBandMaxGhz} GHz. Enter an extra path loss allowance for this link.`, 'link', id));
   }
   const profile = buildProfile(
     terrain,
@@ -187,7 +188,8 @@ function analyseLink(link, sitesById, terrain, settings) {
   }
 
   // Link budget, both directions (free-space + declared extra loss)
-  const common = { freqGHz: freq, distanceKm: profile.distanceKm, extraLossDb: num(p.extra_loss_db) ?? 0 };
+  res.atmosLossDb = atmosLossDbPerKm(freq, S) * profile.distanceKm;
+  const common = { freqGHz: freq, distanceKm: profile.distanceKm, extraLossDb: (num(p.extra_loss_db) ?? 0) + res.atmosLossDb };
   const ab = computeLinkBudget({ ...common, txPowerDbm: num(p.tx_power_a_dbm), txGainDbi: num(p.gain_a_dbi), txCableLossDb: num(p.cable_loss_a_db) ?? 0,
     rxGainDbi: num(p.gain_b_dbi), rxCableLossDb: num(p.cable_loss_b_db) ?? 0, rxSensitivityDbm: num(p.rx_sensitivity_b_dbm) });
   const ba = computeLinkBudget({ ...common, txPowerDbm: num(p.tx_power_b_dbm), txGainDbi: num(p.gain_b_dbi), txCableLossDb: num(p.cable_loss_b_db) ?? 0,

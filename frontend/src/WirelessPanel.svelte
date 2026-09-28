@@ -63,7 +63,10 @@
     ['rxSensMinDbm', 'Best (lowest) Rx sensitivity (dBm)', ''],
     ['rxSensMaxDbm', 'Worst (highest) Rx sensitivity (dBm)', ''],
     ['maxLossDb', 'Largest cable or extra loss (dB)', 'Losses can never be negative'],
-    ['absorptionAboveGhz', 'Require an extra-loss allowance above (GHz)', 'Atmospheric absorption is not modelled; ~15 dB/km near 60 GHz'],
+    ['absorptionAboveGhz', 'Require an extra-loss allowance above (GHz)', 'Except inside the modelled oxygen band below'],
+    ['oxygenBandMinGhz', 'Modelled oxygen band from (GHz)', ''],
+    ['oxygenBandMaxGhz', 'Modelled oxygen band to (GHz)', ''],
+    ['oxygenLossDbPerKm', 'Oxygen absorption in that band (dB/km)', '~15 dB/km at sea level near 60 GHz (ITU-R P.676)'],
   ];
   function commitSetting(key, raw) {
     const v = Number(raw);
@@ -130,7 +133,7 @@
           </button>
           <span class="acts">
             <button title="Zoom to link" on:click={() => dispatch('zoom', { kind: 'link', id })}>⌖</button>
-            <button title="Edit link" on:click={() => dispatch('edit', { kind: 'link', id })}>✎</button>
+            <button title="Edit link" data-testid="wp-edit-link" on:click={() => dispatch('edit', { kind: 'link', id })}>✎</button>
             <button title="Delete link" on:click={() => remove('link', id, id)}>✕</button>
           </span>
         </div>
@@ -148,6 +151,7 @@
             <tr><td>Rx A→B</td><td>{fmt(selResult.rxAtoBDbm)} dBm</td><td>fade margin</td><td>{fmt(selResult.fadeAtoBDb)} dB</td></tr>
             <tr><td>Rx B→A</td><td>{fmt(selResult.rxBtoADbm)} dBm</td><td>fade margin</td><td>{fmt(selResult.fadeBtoADb)} dB</td></tr>
             <tr><td>Free-space loss</td><td>{fmt(selResult.fsplDb)} dB</td><td>terrain</td><td>{selResult.terrainStatus}</td></tr>
+            <tr><td>Atmospheric loss</td><td>{fmt(selResult.atmosLossDb)} dB</td><td></td><td></td></tr>
             <tr><td>Worst clearance</td><td>{fmt(selResult.clearanceWorstM)} m ({fmt(selResult.fresnelWorstPct, 0)}% F1)</td><td>at</td><td>{fmt(selResult.worstAtKm, 2)} km</td></tr>
           </tbody></table>
           {#if selResult.surveyed}<div class="hint warn">Line of sight recorded as surveyed — modelled clearance is waived for this link.</div>{/if}
@@ -175,7 +179,7 @@
           <span class="rowmain static"><span class="rid">{id}</span><span class="rsub">{s.properties.site_id} · az {s.properties.azimuth_deg ?? '?'}° · {s.properties.beamwidth_deg ?? '?'}°</span></span>
           <span class="acts">
             <button title="Zoom" on:click={() => dispatch('zoom', { kind: 'sector', id })}>⌖</button>
-            <button title="Edit" on:click={() => dispatch('edit', { kind: 'sector', id })}>✎</button>
+            <button title="Edit" data-testid="wp-edit-sector" on:click={() => dispatch('edit', { kind: 'sector', id })}>✎</button>
             <button title="Delete" on:click={() => remove('sector', id, id)}>✕</button>
           </span>
         </div>

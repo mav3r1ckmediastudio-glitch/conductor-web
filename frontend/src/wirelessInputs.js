@@ -13,6 +13,7 @@
 // w2: survey_note added to LINK_KEYS. It is a required input of the surveyed-LOS
 // override, so removing or changing it must make a stored analysis stale.
 // w3: radio plausibility limits and the absorption threshold added to SETTINGS.
+// w4: modelled oxygen-band absorption settings added.
 
 import { resolveWirelessSettings } from './wirelessSettings.js';
 
@@ -28,7 +29,8 @@ const rows = (list, keys, withCoord) =>
 // Every setting that can change a verdict. Adding a setting means adding it here.
 export const SETTING_KEYS = ['kFactor', 'minFresnelClearancePct', 'minFadeMarginDb', 'coverageMarginDb', 'profileStepM',
                              'terrainZoom', 'terrainSourceId', 'freqMinGhz', 'freqMaxGhz', 'txPowerMinDbm', 'txPowerMaxDbm',
-                             'gainMinDbi', 'gainMaxDbi', 'rxSensMinDbm', 'rxSensMaxDbm', 'maxLossDb', 'absorptionAboveGhz'];
+                             'gainMinDbi', 'gainMaxDbi', 'rxSensMinDbm', 'rxSensMaxDbm', 'maxLossDb', 'absorptionAboveGhz',
+                             'oxygenBandMinGhz', 'oxygenBandMaxGhz', 'oxygenLossDbPerKm'];
 export const SITE_KEYS   = ['site_id', 'mast_height_m', 'ground_override_m'];
 export const SECTOR_KEYS = ['sector_id', 'site_id', 'azimuth_deg', 'beamwidth_deg', 'freq_ghz', 'tx_power_dbm',
                             'gain_dbi', 'cable_loss_db', 'antenna_height_m', 'range_m',
@@ -55,5 +57,5 @@ function fnv1a(s) { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^
 /** Change-detection fingerprint (not a security hash). */
 export function hashWirelessInputs(state) {
   const s = canonicalWirelessInputs(state);
-  return 'w3-' + djb2(s).toString(16).padStart(8, '0') + fnv1a(s).toString(16).padStart(8, '0') + '-' + s.length.toString(16);
+  return 'w4-' + djb2(s).toString(16).padStart(8, '0') + fnv1a(s).toString(16).padStart(8, '0') + '-' + s.length.toString(16);
 }
