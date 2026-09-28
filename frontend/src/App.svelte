@@ -22,6 +22,7 @@
   import { generateWirelessBomCsv, generateWirelessBomHtml } from './wirelessBom.js';
   import { carryDefaults } from './wirelessFields.js';
   import { presetFor } from './wirelessPresets.js';
+  import { suggestAzimuth } from './wirelessAim.js';
   import CBTForm from './CBTForm.svelte';
   import CBTTailForm from './CBTTailForm.svelte';
   import EditCabinetForm from './EditCabinetForm.svelte';
@@ -308,6 +309,9 @@
       // requests without putting a key in the environment (which would make the
       // basemap layers try to load real terrain). Absent from production builds.
       window.__conductorMaptilerKey = null;
+      // Lets specs turn a lng/lat into a screen point so they can click map
+      // features through the real tools. Test mode only.
+      window.__conductorMap = map;
     }
 
     map.on('load', () => {
@@ -510,8 +514,25 @@
     link: 'Draw PtP Link — click one site, then the other',
   };
 
+  // New sectors: aim at the most premises within range that no other sector on
+  // the same site already covers. Pre-filled only; the designer can overwrite.
+  function sectorAim(data) {
+    const d = carryDefaults('sector', projectStore.state.wirelessSectors);
+    const rangeM = Number(d.range_m), beamwidthDeg = Number(d.beamwidth_deg);
+    const existing = (projectStore.state.wirelessSectors || [])
+      .filter(f => f.properties?.site_id === data.site_id)
+      .map(f => ({ azimuthDeg: Number(f.properties.azimuth_deg), beamwidthDeg: Number(f.properties.beamwidth_deg), rangeM: Number(f.properties.range_m) }));
+    const r = suggestAzimuth({ lng: data.lng, lat: data.lat }, projectStore.state.addressPoints, { rangeM, beamwidthDeg, existing });
+    const km = (rangeM / 1000).toLocaleString('en-GB', { maximumFractionDigits: 1 });
+    const note = r.azimuthDeg != null
+      ? `Azimuth ${r.azimuthDeg}° points at ${r.count} premises within ${km} km${existing.length ? ' not already covered by this site\'s other sectors' : ''} — the most of any direction. Change it if you want to cover somewhere else.`
+      : `No ${existing.length ? 'uncovered ' : ''}premises within ${km} km of this site, so the azimuth is left for you to choose (0 = north, 90 = east, 180 = south, 270 = west).`;
+    return { azimuth: r.azimuthDeg, note };
+  }
+
   function armWireless(kind) {
     const err = W_KIND_ACTIVATE[kind](map, (data) => {
+      if (kind === 'sector') data = { ...data, aim: sectorAim(data) };
       wPending = { kind, data };
       wEdit = null;
       rpMode = 'wireless-form';
@@ -1703,8 +1724,10 @@
         {:else if wPending}
           <WirelessForm kind={wPending.kind} mode="create" assetId={wPending.data[W_ID[wPending.kind]]}
             subtitle={wPending.kind === 'link' ? `${wPending.data.site_a} ↔ ${wPending.data.site_b}` : wPending.kind === 'sector' ? `on site ${wPending.data.site_id}` : ''}
-            defaults={carryDefaults(wPending.kind, projectStore.state[W_COLL[wPending.kind]])}
+            defaults={{ ...carryDefaults(wPending.kind, projectStore.state[W_COLL[wPending.kind]]),
+                        ...(wPending.data.aim?.azimuth != null ? { azimuth_deg: wPending.data.aim.azimuth } : {}) }}
             preset={presetFor(wPending.kind)}
+            note={wPending.data.aim?.note || ''}
             on:save={onWirelessFormSaved} on:cancel={onWirelessFormCancelled} />
         {/if}
 

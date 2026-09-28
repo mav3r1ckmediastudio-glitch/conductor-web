@@ -14,6 +14,7 @@
   export let existing = null;         // properties when editing
   export let defaults = {};           // carried values when creating
   export let preset = null;           // { name, values } — see wirelessPresets.js
+  export let note = '';               // e.g. how the azimuth was chosen
 
   const TITLES = { site: 'Wireless Site', sector: 'Sector Antenna', link: 'Point-to-Point Link' };
 
@@ -62,6 +63,7 @@
     <span class="form-id">{assetId}</span>
   </div>
   {#if subtitle}<div class="subtitle">{subtitle}</div>{/if}
+  {#if note}<div class="note" data-testid="wf-note">{note}</div>{/if}
   {#if preset}
     <div class="preset">
       <div class="preset-t">{mode === 'create' ? 'Pre-filled from' : 'Preset available'}: <b>{preset.name}</b></div>
@@ -110,6 +112,7 @@
   .form-id { font-family: 'Courier New', monospace; font-size: 12px; color: #a0c4d8; }
   .subtitle { padding: 6px 16px; font-size: 11px; color: #3a5a70; border-bottom: 1px solid #1a2d40; }
   .body { overflow-y: auto; flex: 1; }
+  .note { padding: 8px 16px; font-size: 11px; line-height: 1.4; color: #9adfc0; border-bottom: 1px solid #1a2d40; }
   .preset { padding: 8px 16px; border-bottom: 1px solid #1a2d40; display: flex; flex-direction: column; gap: 4px; }
   .preset-t { font-size: 11px; color: #7ab8d4; } .preset-t b { color: #4dc8ff; }
   .preset-h { font-size: 10px; color: #2f5068; line-height: 1.4; }

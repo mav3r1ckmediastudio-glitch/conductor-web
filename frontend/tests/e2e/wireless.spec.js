@@ -187,6 +187,34 @@ test.describe('wireless planning journey', () => {
     await expect(page.getByTestId('wp-verdict')).toHaveText('PASS');
   });
 
+  test('Add Sector through the tool wheel: the form arrives with azimuth aimed at the premises, and saves', async ({ page }) => {
+    // 10 premises ~800 m north-west (bearing ~315) of S1, 3 to the south-east.
+    const around = (brg, n) => Array.from({ length: n }, (_, i) => {
+      const d = (800 + i) / 6371000, b = ((brg + (i % 5) - 2) * Math.PI) / 180, p1 = (A.lat * Math.PI) / 180, l1 = (A.lng * Math.PI) / 180;
+      const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(b));
+      const l2 = l1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
+      return { type: 'Feature', geometry: { type: 'Point', coordinates: [(l2 * 180) / Math.PI, (p2 * 180) / Math.PI] }, properties: { uprn: `U${brg}-${i}` } };
+    });
+    const seed = SEED({ addressPoints: [...around(315, 10), ...around(135, 3)] });
+    await open(page, seed, 'flat');
+
+    await page.locator('button.cat-pill', { hasText: 'Wireless' }).click();
+    await page.getByRole('button', { name: 'Add Sector', exact: true }).click();
+    await page.evaluate((c) => { const m = window.__conductorMap; m.jumpTo({ center: [c.lng, c.lat], zoom: 15 }); }, A);
+    await page.waitForTimeout(500);
+    const pt = await page.evaluate((c) => { const m = window.__conductorMap, p = m.project([c.lng, c.lat]), r = m.getCanvas().getBoundingClientRect();
+      return { x: r.left + p.x, y: r.top + p.y }; }, A);
+    await page.mouse.click(pt.x, pt.y);
+
+    await expect(page.getByTestId('wf-note')).toContainText('points at 10 premises');
+    const az = Number(await page.getByTestId('wf-input-azimuth_deg').inputValue());
+    expect(Math.abs(az - 315)).toBeLessThanOrEqual(10);
+    await expect(page.getByTestId('wf-input-freq_ghz')).toHaveValue('60');   // preset still applied
+    await page.getByTestId('wf-save').click();
+    await expect.poll(() => page.evaluate(() => window.__conductorStore.wirelessSectors.length)).toBe(1);
+    expect(await page.evaluate(() => window.__conductorStore.wirelessSectors[0].properties.azimuth_deg)).toBe(az);
+  });
+
   test('editing a site through the form: required field blocks save; a valid save makes the plan stale', async ({ page }) => {
     await open(page, SEED(), 'flat');
     await page.getByTestId('wp-analyse').click();
