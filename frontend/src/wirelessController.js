@@ -78,7 +78,7 @@ export async function runWirelessCoverage(state, { maptilerKey, fetchTile, runJo
   const skipped = [];
   const usable = [];
   for (const sec of state.wirelessSectors || []) {
-    const issues = checkSector(sec, sitesById);
+    const issues = checkSector(sec, sitesById, settings);
     if (issues.length) { skipped.push({ sector_id: sec.properties?.sector_id, reason: issues.map(i => i.message).join(' ') }); continue; }
     usable.push(sec);
   }

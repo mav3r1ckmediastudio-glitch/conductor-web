@@ -12,6 +12,8 @@
 //   LINK_NO_TERRAIN         LINK_TERRAIN_PARTIAL  LINK_OBSTRUCTED
 //   LINK_FRESNEL_FAIL       LINK_MARGIN_LOW       LINK_SURVEYED_LOS (warning)
 //   SECTOR_SITE_MISSING     SECTOR_PARAMS_INCOMPLETE
+//   LINK_PARAMS_IMPLAUSIBLE SECTOR_PARAMS_IMPLAUSIBLE  (outside the editable radio limits)
+//   LINK_ABSORPTION_UNMODELLED SECTOR_ABSORPTION_UNMODELLED
 
 import { resolveWirelessSettings } from './wirelessSettings.js';
 import { hashWirelessInputs } from './wirelessInputs.js';
@@ -53,7 +55,24 @@ function missingFields(props, spec) {
   return out;
 }
 
-export function checkSector(sector, sitesById) {
+
+/**
+ * Radio values outside the project's plausibility limits (settings). Catches
+ * typos and unit mistakes before they become an impossible link budget.
+ * @param checks  [value, label, lo, hi] — value already parsed with num()
+ * @returns human-readable problems, e.g. "antenna gain at A is 300 (allowed 0 to 50)"
+ */
+export function implausibleValues(checks) {
+  const out = [];
+  for (const [v, label, lo, hi] of checks) {
+    if (v == null) continue;                        // absence is handled by the completeness check
+    if (v < lo || v > hi) out.push(`${label} is ${v} (allowed ${lo} to ${hi})`);
+  }
+  return out;
+}
+const LIMITS_HINT = 'Correct the value, or change the limit in Engineering thresholds if it is genuinely right.';
+
+export function checkSector(sector, sitesById, settings = resolveWirelessSettings(null)) {
   const p = P(sector);
   const id = p.sector_id || '(unnamed sector)';
   const issues = [];
@@ -62,6 +81,20 @@ export function checkSector(sector, sitesById) {
   }
   const missing = missingFields(p, SECTOR_REQUIRED);
   if (missing.length) issues.push(issue('SECTOR_PARAMS_INCOMPLETE', `Sector ${id} is missing or has invalid: ${missing.join(', ')}.`, 'sector', id));
+  const S = settings;
+  const bad = implausibleValues([
+    [num(p.freq_ghz), 'frequency (GHz)', S.freqMinGhz, S.freqMaxGhz],
+    [num(p.tx_power_dbm), 'Tx power (dBm)', S.txPowerMinDbm, S.txPowerMaxDbm],
+    [num(p.gain_dbi), 'antenna gain (dBi)', S.gainMinDbi, S.gainMaxDbi],
+    [num(p.cable_loss_db), 'cable/connector loss (dB)', 0, S.maxLossDb],
+    [num(p.cpe_gain_dbi), 'CPE gain (dBi)', S.gainMinDbi, S.gainMaxDbi],
+    [num(p.cpe_min_rx_dbm), 'CPE minimum Rx (dBm)', S.rxSensMinDbm, S.rxSensMaxDbm],
+  ]);
+  if (bad.length) issues.push(issue('SECTOR_PARAMS_IMPLAUSIBLE', `Sector ${id}: ${bad.join('; ')}. ${LIMITS_HINT}`, 'sector', id));
+  const f = num(p.freq_ghz);
+  if (f != null && f > S.absorptionAboveGhz) {
+    issues.push(issue('SECTOR_ABSORPTION_UNMODELLED', `Sector ${id}: ${f} GHz is above ${S.absorptionAboveGhz} GHz, where atmospheric absorption is significant and the coverage model does not include it.`, 'sector', id));
+  }
   return issues;
 }
 
@@ -96,7 +129,32 @@ function analyseLink(link, sitesById, terrain, settings) {
     return res;
   }
 
+  const S = settings;
+  const bad = implausibleValues([
+    [num(p.freq_ghz), 'frequency (GHz)', S.freqMinGhz, S.freqMaxGhz],
+    [num(p.tx_power_a_dbm), 'Tx power at A (dBm)', S.txPowerMinDbm, S.txPowerMaxDbm],
+    [num(p.tx_power_b_dbm), 'Tx power at B (dBm)', S.txPowerMinDbm, S.txPowerMaxDbm],
+    [num(p.gain_a_dbi), 'antenna gain at A (dBi)', S.gainMinDbi, S.gainMaxDbi],
+    [num(p.gain_b_dbi), 'antenna gain at B (dBi)', S.gainMinDbi, S.gainMaxDbi],
+    [num(p.rx_sensitivity_a_dbm), 'Rx sensitivity at A (dBm)', S.rxSensMinDbm, S.rxSensMaxDbm],
+    [num(p.rx_sensitivity_b_dbm), 'Rx sensitivity at B (dBm)', S.rxSensMinDbm, S.rxSensMaxDbm],
+    [num(p.cable_loss_a_db), 'cable/connector loss at A (dB)', 0, S.maxLossDb],
+    [num(p.cable_loss_b_db), 'cable/connector loss at B (dB)', 0, S.maxLossDb],
+    [num(p.extra_loss_db), 'extra path loss (dB)', 0, S.maxLossDb],
+  ]);
+  if (bad.length) {
+    // Never compute a budget from impossible inputs: its figures would be shown.
+    issues.push(issue('LINK_PARAMS_IMPLAUSIBLE', `Link ${id}: ${bad.join('; ')}. ${LIMITS_HINT}`, 'link', id));
+    return res;
+  }
+
   const freq = num(p.freq_ghz);
+  // Free-space + declared extra loss only. Above the absorption threshold that
+  // model is badly optimistic, so an explicit allowance is required. This is
+  // not waivable by a line-of-sight survey (it is a budget issue, not LOS).
+  if (freq > S.absorptionAboveGhz && !((num(p.extra_loss_db) ?? 0) > 0)) {
+    issues.push(issue('LINK_ABSORPTION_UNMODELLED', `Link ${id}: ${freq} GHz is above ${S.absorptionAboveGhz} GHz, where atmospheric absorption is significant (around 15 dB per km near 60 GHz) and is not modelled. Enter an extra path loss allowance for this link.`, 'link', id));
+  }
   const profile = buildProfile(
     terrain,
     { ...A, antennaAglM: aglA, groundM: num(P(sa).ground_override_m) ?? undefined },
@@ -182,7 +240,7 @@ export function analyseWirelessDetailed(state, terrain) {
 
   const linkResults = links.map(l => analyseLink(l, sitesById, terrain, settings));
   for (const r of linkResults) issues.push(...r.issues);
-  for (const s of sectors) issues.push(...checkSector(s, sitesById));
+  for (const s of sectors) issues.push(...checkSector(s, sitesById, settings));
 
   const blocking = issues.filter(i => i.severity === 'error');
   const anyAsset = links.length + sectors.length > 0;

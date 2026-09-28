@@ -12,6 +12,25 @@ export const DEFAULT_WIRELESS_SETTINGS = Object.freeze({
   profileStepM: 25,               // ground spacing of terrain samples along a link
   terrainZoom: 12,                // Terrain-RGB tile zoom used for sampling
   terrainSourceId: 'maptiler-terrain-rgb-v2',
+
+  // ── Radio input plausibility limits ──────────────────────────────────────
+  // Typical UK fixed-wireless figures, used to catch typos and unit mistakes
+  // (e.g. 300 dBi entered for 30). A value outside these makes the link or
+  // sector fail rather than produce an impossible link budget. They are NOT
+  // regulatory limits (Ofcom EIRP / licence conditions are not checked).
+  freqMinGhz: 0.4,                // below UHF PtP use
+  freqMaxGhz: 90,                 // covers E-band (71-86 GHz)
+  txPowerMinDbm: -10,
+  txPowerMaxDbm: 40,
+  gainMinDbi: 0,
+  gainMaxDbi: 50,                 // large PtP dishes are ~40-45 dBi
+  rxSensMinDbm: -110,             // better sensitivity than this is not real-world
+  rxSensMaxDbm: -20,
+  maxLossDb: 100,                 // ceiling for cable/connector and extra path loss
+  // Above this frequency, atmospheric (oxygen/water) absorption is significant
+  // (~15 dB/km around 60 GHz) and the free-space model does not include it:
+  // links must carry an explicit extra-loss allowance or they fail.
+  absorptionAboveGhz: 50,
 });
 
 const RANGES = {
@@ -21,6 +40,16 @@ const RANGES = {
   coverageMarginDb:       [0, 40],
   profileStepM:           [5, 200],
   terrainZoom:            [8, 14],
+  freqMinGhz:             [0.1, 100],
+  freqMaxGhz:             [1, 300],
+  txPowerMinDbm:          [-40, 20],
+  txPowerMaxDbm:          [0, 60],
+  gainMinDbi:             [-20, 20],
+  gainMaxDbi:             [10, 70],
+  rxSensMinDbm:           [-150, -60],
+  rxSensMaxDbm:           [-80, 0],
+  maxLossDb:              [1, 300],
+  absorptionAboveGhz:     [1, 300],
 };
 
 /** Merge user settings over defaults, dropping anything invalid back to default. */

@@ -115,6 +115,27 @@ test.describe('wireless planning journey', () => {
     await expect(page.getByTestId('wp-state')).toHaveText('VALIDATED');
   });
 
+  test('an implausible radio value fails the link; raising that limit in Engineering thresholds is honoured', async ({ page }) => {
+    const seed = SEED();
+    seed.wirelessLinks[0].properties.gain_a_dbi = 55;               // above the 50 dBi default ceiling
+    await open(page, seed, 'flat');
+    await page.getByTestId('wp-analyse').click();
+    await expect(page.getByTestId('wp-state')).toHaveText('INVALID');
+    await expect(page.locator('[data-testid="wp-issue"][data-code="LINK_PARAMS_IMPLAUSIBLE"]')).toContainText('allowed 0 to 50');
+
+    await page.locator('button.fold', { hasText: 'Engineering thresholds' }).click();
+    const field = page.getByTestId('ws-gainMaxDbi');
+    await expect(field).toHaveValue('50');
+    await field.fill('60');
+    await field.press('Enter');
+    await field.blur();
+    await expect(page.getByTestId('wp-state')).toHaveText('STALE');        // limits are fingerprinted inputs
+
+    await page.getByTestId('wp-analyse').click();
+    await expect(page.getByTestId('wp-state')).toHaveText('VALIDATED');
+    await expect(page.locator('[data-code="LINK_PARAMS_IMPLAUSIBLE"]')).toHaveCount(0);
+  });
+
   test('a ridge across the path fails the link and says why (LINK_OBSTRUCTED)', async ({ page }) => {
     await open(page, SEED(), 'ridge');
     await page.getByTestId('wp-analyse').click();

@@ -51,6 +51,20 @@
     ['profileStepM', 'Terrain sample spacing (m)', 'Finer is slower and no more accurate than the data'],
     ['terrainZoom', 'Terrain tile zoom', '12 ≈ 21 m/px at this latitude; source data is ~30 m'],
   ];
+  // Plausibility limits for entered radio values (typical UK fixed wireless).
+  // They catch typos and unit mistakes; they are not Ofcom/regulatory limits.
+  const LIMIT_FIELDS = [
+    ['freqMinGhz', 'Lowest frequency (GHz)', ''],
+    ['freqMaxGhz', 'Highest frequency (GHz)', '90 covers E-band (71–86 GHz)'],
+    ['txPowerMinDbm', 'Lowest Tx power (dBm)', ''],
+    ['txPowerMaxDbm', 'Highest Tx power (dBm)', ''],
+    ['gainMinDbi', 'Lowest antenna gain (dBi)', ''],
+    ['gainMaxDbi', 'Highest antenna gain (dBi)', 'Large PtP dishes are about 40–45 dBi'],
+    ['rxSensMinDbm', 'Best (lowest) Rx sensitivity (dBm)', ''],
+    ['rxSensMaxDbm', 'Worst (highest) Rx sensitivity (dBm)', ''],
+    ['maxLossDb', 'Largest cable or extra loss (dB)', 'Losses can never be negative'],
+    ['absorptionAboveGhz', 'Require an extra-loss allowance above (GHz)', 'Atmospheric absorption is not modelled; ~15 dB/km near 60 GHz'],
+  ];
   function commitSetting(key, raw) {
     const v = Number(raw);
     if (raw === '' || !Number.isFinite(v)) { draft[key] = settings[key]; return; }
@@ -201,6 +215,15 @@
             <label for={'ws-' + key}>{label}</label>
             <input id={'ws-' + key} type="text" inputmode="decimal" bind:value={draft[key]} on:change={(e) => commitSetting(key, e.currentTarget.value)} />
             <div class="help">{help}</div>
+          </div>
+        {/each}
+        <div class="sec-t sub">Radio input limits</div>
+        <div class="hint">Typical UK fixed-wireless values. An entry outside these fails the link or sector so a typo can never produce an impossible budget. They are not Ofcom or licence limits.</div>
+        {#each LIMIT_FIELDS as [key, label, help]}
+          <div class="setg">
+            <label for={'ws-' + key}>{label}</label>
+            <input id={'ws-' + key} data-testid={'ws-' + key} type="text" inputmode="decimal" bind:value={draft[key]} on:change={(e) => commitSetting(key, e.currentTarget.value)} />
+            {#if help}<div class="help">{help}</div>{/if}
           </div>
         {/each}
       {/if}
