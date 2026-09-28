@@ -25,6 +25,34 @@ import { ensureSources, ensureTerrainLayers, syncToMap } from './mapTools.js';
  * @param options.showBuildings current buildings-toggle state to restore.
  * @param options.showRoads     current roads-toggle state to restore.
  */
+// Terrain relief for wireless planning. Reuses the existing 'terrain' DEM
+// source (no extra tile requests). Hidden by default so the established dark
+// visual language is unchanged; toggled via setHillshadeVisible().
+export const HILLSHADE_LAYER_ID = 'terrain-hillshade';
+
+export function ensureHillshadeLayer(map) {
+  if (!map.getSource('terrain') || map.getLayer(HILLSHADE_LAYER_ID)) return;
+  // Insert beneath our first custom layer so hillshade never covers assets.
+  const before = map.getLayer('addresses-clusters') ? 'addresses-clusters' : undefined;
+  map.addLayer({
+    id: HILLSHADE_LAYER_ID,
+    type: 'hillshade',
+    source: 'terrain',
+    layout: { visibility: 'none' },
+    paint: {
+      'hillshade-exaggeration': 0.5,
+      'hillshade-shadow-color': '#000814',
+      'hillshade-highlight-color': '#4dc8ff',
+      'hillshade-accent-color': '#0a2a44',
+    },
+  }, before);
+}
+
+export function setHillshadeVisible(map, visible) {
+  if (!map.getLayer(HILLSHADE_LAYER_ID)) return;
+  map.setLayoutProperty(HILLSHADE_LAYER_ID, 'visibility', visible ? 'visible' : 'none');
+}
+
 export function setupMapLayers(map, { maptilerKey, showBuildings, showRoads }) {
   // 1. GeoJSON sources + non-terrain symbol layers (chambers, joints, labels etc.)
   ensureSources(map);
@@ -45,6 +73,7 @@ export function setupMapLayers(map, { maptilerKey, showBuildings, showRoads }) {
       });
     }
     map.setTerrain({ source: 'terrain', exaggeration: 1.5 });
+    ensureHillshadeLayer(map);
   }
 
   // 3. Terrain-dependent line layers + 3D pole CustomLayerInterface
