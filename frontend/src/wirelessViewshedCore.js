@@ -90,10 +90,13 @@ export function computeSectorCoverage(p) {
       const g = bilinear(dem, px, py);
       if (Number.isNaN(g)) break;                           // unknown terrain: stop, never assume
       const d = s * mpp;
-      const bulge = d * d * curv;
+      // Earth curvature in the transmitter's tangent-plane frame: the ground
+      // FALLS AWAY from the transmitter by d^2 / (2kR). (Adding it instead
+      // raises distant terrain and removes the radio horizon entirely.)
+      const drop = d * d * curv;
 
       // Received power at a CPE standing here.
-      const rxTop = g + sector.cpeHeightM + bulge;
+      const rxTop = g + sector.cpeHeightM - drop;
       let diffLoss = 0;
       if (obsD > 0) {
         const los = txH + (rxTop - txH) * (obsD / d);
@@ -110,7 +113,7 @@ export function computeSectorCoverage(p) {
       }
 
       // The ground here may block cells further out (ground level, not CPE height).
-      const hEff = g + bulge;
+      const hEff = g - drop;
       const ang = (hEff - txH) / d;
       if (ang > maxAng) { maxAng = ang; obsD = d; obsH = hEff; }
     }

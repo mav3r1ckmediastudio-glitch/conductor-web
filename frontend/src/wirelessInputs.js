@@ -9,6 +9,9 @@
 // Prefix 'w1-' is a FORMAT version for the canonical string. Bump it whenever
 // canonicalWirelessInputs() changes shape so an old stored hash can never
 // equal a new computed one.
+//
+// w2: survey_note added to LINK_KEYS. It is a required input of the surveyed-LOS
+// override, so removing or changing it must make a stored analysis stale.
 
 import { resolveWirelessSettings } from './wirelessSettings.js';
 
@@ -28,7 +31,7 @@ export const SECTOR_KEYS = ['sector_id', 'site_id', 'azimuth_deg', 'beamwidth_de
 export const LINK_KEYS   = ['link_id', 'site_a', 'site_b', 'freq_ghz', 'channel_width_mhz',
                             'tx_power_a_dbm', 'gain_a_dbi', 'cable_loss_a_db', 'rx_sensitivity_a_dbm', 'antenna_height_a_m',
                             'tx_power_b_dbm', 'gain_b_dbi', 'cable_loss_b_db', 'rx_sensitivity_b_dbm', 'antenna_height_b_m',
-                            'extra_loss_db', 'survey_los_confirmed'];
+                            'extra_loss_db', 'survey_los_confirmed', 'survey_note'];
 
 export function canonicalWirelessInputs(state) {
   if (!state) return '';
@@ -47,5 +50,5 @@ function fnv1a(s) { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^
 /** Change-detection fingerprint (not a security hash). */
 export function hashWirelessInputs(state) {
   const s = canonicalWirelessInputs(state);
-  return 'w1-' + djb2(s).toString(16).padStart(8, '0') + fnv1a(s).toString(16).padStart(8, '0') + '-' + s.length.toString(16);
+  return 'w2-' + djb2(s).toString(16).padStart(8, '0') + fnv1a(s).toString(16).padStart(8, '0') + '-' + s.length.toString(16);
 }
