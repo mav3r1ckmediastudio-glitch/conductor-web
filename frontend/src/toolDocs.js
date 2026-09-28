@@ -16,7 +16,7 @@ export const TOOL_DOCS = {
   "wireless-sector": {
     title:    "Add Sector",
     purpose:  "Adds a sector antenna to an existing site for point-to-multipoint coverage estimates.",
-    howTo:    "1. Click Add Sector.\n2. Click a wireless site.\n3. Enter azimuth, beamwidth, radio and CPE parameters (all required) and save.\n4. Run Coverage estimate from Analyse & Coverage.",
+    howTo:    "1. Click Add Sector.\n2. Click a wireless site.\n3. The sector opens pre-aimed at the most premises. Drag the amber handle on the map (end of the dashed line) to aim it elsewhere; hold Shift to snap to 5°. The azimuth box follows.\n4. Check the other radio and CPE values and save.\n5. To re-aim a saved sector, drag the blue handle on its dashed line. Then re-run Coverage estimate.",
     mistakes: "Treating the coverage overlay as a guarantee: it models bare terrain only (no trees or buildings) and is an estimate.",
     related:  ["wireless-site", "wireless-panel"],
   },

@@ -44,3 +44,37 @@ export function suggestAzimuth(site, premises, { rangeM, beamwidthDeg, existing 
   }
   return { azimuthDeg: best, count: bestCount, inRange: candidates.length };
 }
+
+/**
+ * Compass azimuth (whole degrees, [0,360)) from a site to a dragged point.
+ * snapDeg > 0 rounds to that step (Shift while dragging). Returns null when the
+ * point is on top of the site, where a bearing is meaningless.
+ */
+export function azimuthFromPoint(from, to, { snapDeg = 0 } = {}) {
+  if (groundDistanceM(from, to) < 1) return null;
+  const step = snapDeg > 0 ? snapDeg : 1;
+  const az = Math.round(bearingDeg(from, to) / step) * step;
+  return ((az % 360) + 360) % 360;
+}
+
+/**
+ * Premises inside one specific beam (range + beamwidth around `azimuthDeg`),
+ * and how many of those are not already covered by the site's other sectors.
+ */
+export function countPremisesInBeam(site, premises, { azimuthDeg, rangeM, beamwidthDeg, existing = [] } = {}) {
+  if (!Number.isFinite(azimuthDeg) || !(rangeM > 0) || !(beamwidthDeg > 0)) return { inBeam: 0, uncovered: 0 };
+  let inBeam = 0, uncovered = 0;
+  for (const f of premises || []) {
+    const c = f?.geometry?.coordinates;
+    if (!Array.isArray(c) || !Number.isFinite(c[0]) || !Number.isFinite(c[1])) continue;
+    const p = { lng: c[0], lat: c[1] }, d = groundDistanceM(site, p);
+    if (!(d > 0) || d > rangeM) continue;
+    const b = bearingDeg(site, p);
+    if (angleDiffDeg(b, azimuthDeg) > beamwidthDeg / 2) continue;
+    inBeam++;
+    const covered = existing.some(e => Number.isFinite(e.azimuthDeg) && d <= (e.rangeM ?? rangeM)
+      && angleDiffDeg(b, e.azimuthDeg) <= (e.beamwidthDeg ?? beamwidthDeg) / 2);
+    if (!covered) uncovered++;
+  }
+  return { inBeam, uncovered };
+}

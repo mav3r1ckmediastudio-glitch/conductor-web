@@ -14,7 +14,8 @@
   export let existing = null;         // properties when editing
   export let defaults = {};           // carried values when creating
   export let preset = null;           // { name, values } — see wirelessPresets.js
-  export let note = '';               // e.g. how the azimuth was chosen
+  export let note = '';               // live hint for sectors: what the current azimuth points at
+  export let aimSet = null;           // { deg, n } — the map handle was dragged; n increases on every move
 
   const TITLES = { site: 'Wireless Site', sector: 'Sector Antenna', link: 'Point-to-Point Link' };
 
@@ -46,6 +47,15 @@
     dispatch('save', r.props);
   }
   $: if (touched) errors = validateFields(fields, values).errors;
+
+  // Map drag -> form: the handle on the map sets the azimuth box.
+  let lastAim = 0;
+  $: if (aimSet && aimSet.n !== lastAim) { lastAim = aimSet.n; values = { ...values, azimuth_deg: String(aimSet.deg) }; }
+
+  // Form -> map: tell the app what the sector currently looks like so it can
+  // draw the ghost fan and handle (typing an azimuth moves the handle too).
+  const numOrNull = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+  $: if (kind === 'sector') dispatch('preview', { azimuth: numOrNull(values.azimuth_deg), beamwidth: numOrNull(values.beamwidth_deg), range: numOrNull(values.range_m) });
 
   // Overwrite only the preset's fields in the form (e.g. to replace bad values
   // on an existing link). Nothing is saved until "Save".

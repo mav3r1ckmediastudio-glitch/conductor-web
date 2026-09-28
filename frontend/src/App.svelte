@@ -22,7 +22,9 @@
   import { generateWirelessBomCsv, generateWirelessBomHtml } from './wirelessBom.js';
   import { carryDefaults } from './wirelessFields.js';
   import { presetFor } from './wirelessPresets.js';
-  import { suggestAzimuth } from './wirelessAim.js';
+  import { suggestAzimuth, countPremisesInBeam } from './wirelessAim.js';
+  import { installSectorAiming } from './wirelessTools.js';
+  import { setSectorPreview, setAimHandlesHidden } from './wirelessLayers.js';
   import CBTForm from './CBTForm.svelte';
   import CBTTailForm from './CBTTailForm.svelte';
   import EditCabinetForm from './EditCabinetForm.svelte';
@@ -316,6 +318,7 @@
 
     map.on('load', () => {
       setupMapLayers(map, layerOpts());
+      installSectorAiming(map, onSectorAim);
       // Enforce the current view's camera lock from the start (handler enable/disable
       // state lives on the Map instance and persists across basemap style reloads).
       applyCameraLock(is3D);
@@ -515,24 +518,67 @@
   };
 
   // New sectors: aim at the most premises within range that no other sector on
-  // the same site already covers. Pre-filled only; the designer can overwrite.
+  // the same site already covers. Pre-filled only; the designer can drag the
+  // map handle or type over it.
+  function otherSectorsOnSite(siteId, exceptId = '') {
+    return (projectStore.state.wirelessSectors || [])
+      .filter(f => f.properties?.site_id === siteId && f.properties?.sector_id !== exceptId)
+      .map(f => ({ azimuthDeg: Number(f.properties.azimuth_deg), beamwidthDeg: Number(f.properties.beamwidth_deg), rangeM: Number(f.properties.range_m) }));
+  }
   function sectorAim(data) {
     const d = carryDefaults('sector', projectStore.state.wirelessSectors);
-    const rangeM = Number(d.range_m), beamwidthDeg = Number(d.beamwidth_deg);
-    const existing = (projectStore.state.wirelessSectors || [])
-      .filter(f => f.properties?.site_id === data.site_id)
-      .map(f => ({ azimuthDeg: Number(f.properties.azimuth_deg), beamwidthDeg: Number(f.properties.beamwidth_deg), rangeM: Number(f.properties.range_m) }));
-    const r = suggestAzimuth({ lng: data.lng, lat: data.lat }, projectStore.state.addressPoints, { rangeM, beamwidthDeg, existing });
-    const km = (rangeM / 1000).toLocaleString('en-GB', { maximumFractionDigits: 1 });
-    const note = r.azimuthDeg != null
-      ? `Azimuth ${r.azimuthDeg}° points at ${r.count} premises within ${km} km${existing.length ? ' not already covered by this site\'s other sectors' : ''} — the most of any direction. Change it if you want to cover somewhere else.`
-      : `No ${existing.length ? 'uncovered ' : ''}premises within ${km} km of this site, so the azimuth is left for you to choose (0 = north, 90 = east, 180 = south, 270 = west).`;
-    return { azimuth: r.azimuthDeg, note };
+    const r = suggestAzimuth({ lng: data.lng, lat: data.lat }, projectStore.state.addressPoints,
+      { rangeM: Number(d.range_m), beamwidthDeg: Number(d.beamwidth_deg), existing: otherSectorsOnSite(data.site_id) });
+    return { azimuth: r.azimuthDeg };
+  }
+
+  // ── Aiming a sector on the map ──────────────────────────────────────────
+  // The open sector form owns its azimuth: dragging the ghost handle writes into
+  // the form (aimSet), typing in the form moves the ghost. Stored sectors' own
+  // handles save straight to the project when released.
+  let wAimSet = null, wAimSeq = 0, wAimNote = '';
+  function onSectorAim({ sectorId, azimuth, phase }) {
+    if (!sectorId) { if (phase === 'move') wAimSet = { deg: azimuth, n: ++wAimSeq }; return; }
+    if (phase === 'end') {
+      projectStore.updateWirelessProps('sector', sectorId, { azimuth_deg: azimuth });
+      syncToMap(map);
+      showToast(`${sectorId} aimed at ${azimuth}°. Re-run Coverage estimate.`);
+    }
+  }
+  function onSectorPreview(e) {
+    if (!map) return;
+    const { azimuth, beamwidth, range } = e.detail;
+    const editing = wEdit ? wFind(wEdit.kind, wEdit.id) : null;
+    const siteId = editing ? editing.properties.site_id : wPending?.data?.site_id;
+    const site = (projectStore.state.wirelessSites || []).find(s => s.properties?.site_id === siteId);
+    if (!site) return;
+    const [lng, lat] = site.geometry.coordinates;
+    const az = azimuth != null && azimuth >= 0 && azimuth < 360 ? azimuth : null;
+    const bw = beamwidth > 0 ? Math.min(beamwidth, 359) : 90, r = range > 0 ? range : 1000;
+    setSectorPreview(map, { lng, lat, azimuthDeg: az, beamwidthDeg: bw, rangeM: r });
+    const km = (r / 1000).toLocaleString('en-GB', { maximumFractionDigits: 1 });
+    if (az == null) {
+      wAimNote = `No aim yet. Drag the amber handle on the map to aim this sector, or type an azimuth (0 = north, 90 = east, 180 = south, 270 = west).`;
+      return;
+    }
+    const existing = otherSectorsOnSite(siteId, editing ? wEdit.id : '');
+    const c = countPremisesInBeam({ lng, lat }, projectStore.state.addressPoints, { azimuthDeg: az, rangeM: r, beamwidthDeg: bw, existing });
+    const auto = !editing && wPending?.data?.aim?.azimuth === az;
+    wAimNote = (auto ? 'Aimed automatically at the direction with the most premises. ' : '')
+      + `Pointing at ${c.inBeam} premises within ${km} km`
+      + (existing.length && c.uncovered !== c.inBeam ? ` (${c.uncovered} not already covered by this site's other sectors)` : '')
+      + '. Drag the amber handle on the map to aim it somewhere else.';
+  }
+  // While a form is open only its ghost is draggable; otherwise the ghost is cleared.
+  $: if (map) {
+    setAimHandlesHidden(map, rpMode === 'wireless-form');
+    if (rpMode !== 'wireless-form') setSectorPreview(map, null);
   }
 
   function armWireless(kind) {
     const err = W_KIND_ACTIVATE[kind](map, (data) => {
       if (kind === 'sector') data = { ...data, aim: sectorAim(data) };
+      wAimSet = null; wAimNote = '';
       wPending = { kind, data };
       wEdit = null;
       rpMode = 'wireless-form';
@@ -597,6 +643,7 @@
     const { kind, id } = e.detail;
     if (!wFind(kind, id)) return;
     clearTool(map); activeToolLabel = '';
+    wAimSet = null; wAimNote = '';
     wPending = null; wEdit = { kind, id };
     rpMode = 'wireless-form';
   }
@@ -1720,6 +1767,7 @@
         {#if wEdit}
           {@const f = wFind(wEdit.kind, wEdit.id)}
           <WirelessForm kind={wEdit.kind} mode="edit" assetId={wEdit.id} existing={f?.properties} preset={presetFor(wEdit.kind)}
+            note={wEdit.kind === 'sector' ? wAimNote : ''} aimSet={wAimSet} on:preview={onSectorPreview}
             on:save={onWirelessFormSaved} on:cancel={onWirelessFormCancelled} />
         {:else if wPending}
           <WirelessForm kind={wPending.kind} mode="create" assetId={wPending.data[W_ID[wPending.kind]]}
@@ -1727,7 +1775,7 @@
             defaults={{ ...carryDefaults(wPending.kind, projectStore.state[W_COLL[wPending.kind]]),
                         ...(wPending.data.aim?.azimuth != null ? { azimuth_deg: wPending.data.aim.azimuth } : {}) }}
             preset={presetFor(wPending.kind)}
-            note={wPending.data.aim?.note || ''}
+            note={wPending.kind === 'sector' ? wAimNote : ''} aimSet={wAimSet} on:preview={onSectorPreview}
             on:save={onWirelessFormSaved} on:cancel={onWirelessFormCancelled} />
         {/if}
 

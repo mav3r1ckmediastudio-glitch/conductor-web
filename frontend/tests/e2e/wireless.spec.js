@@ -206,13 +206,76 @@ test.describe('wireless planning journey', () => {
       return { x: r.left + p.x, y: r.top + p.y }; }, A);
     await page.mouse.click(pt.x, pt.y);
 
-    await expect(page.getByTestId('wf-note')).toContainText('points at 10 premises');
+    await expect(page.getByTestId('wf-note')).toContainText('Pointing at 10 premises');
     const az = Number(await page.getByTestId('wf-input-azimuth_deg').inputValue());
     expect(Math.abs(az - 315)).toBeLessThanOrEqual(10);
     await expect(page.getByTestId('wf-input-freq_ghz')).toHaveValue('60');   // preset still applied
     await page.getByTestId('wf-save').click();
     await expect.poll(() => page.evaluate(() => window.__conductorStore.wirelessSectors.length)).toBe(1);
     expect(await page.evaluate(() => window.__conductorStore.wirelessSectors[0].properties.azimuth_deg)).toBe(az);
+  });
+
+  test('drag the aiming handle on the map: the form follows, a saved sector can be re-aimed, and typing moves the handle', async ({ page }) => {
+    test.setTimeout(120000);      // a long real-mouse journey: create, drag, type, save, analyse, re-aim
+    const dest = (brg, m) => {
+      const d = m / 6371000, b = (brg * Math.PI) / 180, p1 = (A.lat * Math.PI) / 180, l1 = (A.lng * Math.PI) / 180;
+      const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(b));
+      const l2 = l1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
+      return { lng: (l2 * 180) / Math.PI, lat: (p2 * 180) / Math.PI };
+    };
+    const cluster = (brg, n) => Array.from({ length: n }, (_, i) => ({ type: 'Feature', properties: { uprn: `U${brg}-${i}` },
+      geometry: { type: 'Point', coordinates: Object.values(dest(brg + (i % 5) - 2, 800 + i)) } }));
+    await open(page, SEED({ addressPoints: [...cluster(315, 10), ...cluster(45, 6)] }), 'flat');
+
+    const screen = (c) => page.evaluate((c) => { const m = window.__conductorMap, p = m.project([c.lng, c.lat]), r = m.getCanvas().getBoundingClientRect();
+      return { x: r.left + p.x, y: r.top + p.y }; }, c);
+    const dragTo = async (from, to) => { await page.mouse.move(from.x, from.y); await page.mouse.down();
+      await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2, { steps: 4 }); await page.mouse.move(to.x, to.y, { steps: 4 }); await page.mouse.up(); };
+    const azBox = page.getByTestId('wf-input-azimuth_deg');
+    const storeAz = () => page.evaluate(() => Number(window.__conductorStore.wirelessSectors[0]?.properties.azimuth_deg));
+
+    // Create a sector: it opens aimed at the biggest cluster (~315).
+    await page.locator('button.cat-pill', { hasText: 'Wireless' }).click();
+    await page.getByRole('button', { name: 'Add Sector', exact: true }).click();
+    // Put the site in the middle of the visible map area so every handle is reachable by the mouse.
+    await page.evaluate((c) => window.__conductorMap.jumpTo({ center: [c.lng, c.lat], zoom: 13 }), A);
+    await page.waitForTimeout(400);
+    const at0 = await screen(A);
+    await page.evaluate(([dx, dy]) => window.__conductorMap.panBy([dx, dy], { duration: 0 }), [at0.x - 560, at0.y - 380]);
+    await page.waitForTimeout(400);
+    await page.mouse.click((await screen(A)).x, (await screen(A)).y);
+    await expect(page.getByTestId('wf-note')).toContainText('Pointing at 10 premises');
+    expect(Math.abs(Number(await azBox.inputValue()) - 315)).toBeLessThanOrEqual(10);
+
+    // Drag the amber (ghost) handle from its current tip round to the north-east cluster.
+    await page.waitForTimeout(300);
+    const tipNow = await screen(dest(Number(await azBox.inputValue()), 1200));
+    await dragTo(tipNow, await screen(dest(45, 900)));
+    expect(Math.abs(Number(await azBox.inputValue()) - 45)).toBeLessThanOrEqual(2);
+    await expect(page.getByTestId('wf-note')).toContainText('Pointing at 6 premises');   // live count follows the drag
+
+    // Typing an azimuth moves the handle (form -> map): type 180, then the handle is due south.
+    await azBox.fill('180');
+    await page.waitForTimeout(300);
+    const south = await screen(dest(180, 1200)), a = await screen(A);
+    expect(Math.abs(south.x - a.x)).toBeLessThan(3);
+    expect(south.y).toBeGreaterThan(a.y);
+    await page.mouse.move(south.x, south.y);                                             // the handle is really there to grab
+    await dragTo(south, await screen(dest(45, 900)));
+    expect(Math.abs(Number(await azBox.inputValue()) - 45)).toBeLessThanOrEqual(2);
+
+    await page.getByTestId('wf-save').click();
+    await expect.poll(storeAz).toBeGreaterThan(40);
+    expect(Math.abs(await storeAz() - 45)).toBeLessThanOrEqual(2);
+
+    // Re-aim the SAVED sector by dragging its blue handle; the project updates on release and results go stale.
+    await page.getByTestId('wp-analyse').click();
+    await expect(page.getByTestId('wp-state')).toHaveText('VALIDATED');
+    await page.waitForTimeout(300);
+    await dragTo(await screen(dest(45, 1200)), await screen(dest(200, 900)));
+    await expect.poll(storeAz).toBeGreaterThan(190);
+    expect(Math.abs(await storeAz() - 200)).toBeLessThanOrEqual(2);
+    await expect(page.getByTestId('wp-state')).toHaveText('STALE');
   });
 
   test('editing a site through the form: required field blocks save; a valid save makes the plan stale', async ({ page }) => {

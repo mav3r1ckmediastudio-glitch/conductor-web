@@ -6,7 +6,8 @@
 import { projectStore } from './projectStore.js';
 import { showToast } from './toast.js';
 import { clearTool, setActiveTool } from './toolSession.js';
-import { WL, setWirelessRubber } from './wirelessLayers.js';
+import { WL, setWirelessRubber, setSectorPreview } from './wirelessLayers.js';
+import { azimuthFromPoint } from './wirelessAim.js';
 
 const PICK_PX = 12;
 
@@ -106,4 +107,53 @@ export function activateWirelessMoveTool(map, onFinish) {
     },
   });
   return null;
+}
+
+/**
+ * Drag-to-aim for sector handles (the dot at the end of the dashed line).
+ * Works on stored sectors and on the ghost of the sector whose form is open.
+ * Hold Shift to snap to 5 degrees. Installed once per map; the layer-scoped
+ * listeners survive basemap style reloads.
+ *
+ * onAim({ sectorId, azimuth, phase }) — phase is 'move' or 'end'. sectorId is
+ * '' for the ghost (the form owns that value); for a stored sector the caller
+ * saves the azimuth on 'end'.
+ */
+export function installSectorAiming(map, onAim) {
+  let drag = null;
+  const layers = [WL.aimHandle, WL.previewHandle];
+  const canvas = () => map.getCanvas();
+
+  function begin(e) {
+    if (drag || (e.points && e.points.length > 1)) return;
+    const f = e.features?.[0];
+    if (!f) return;
+    e.preventDefault();                                    // stops the map panning under the drag
+    const p = f.properties;
+    drag = { sectorId: p.sector_id || '', from: { lng: Number(p.lng), lat: Number(p.lat) }, bw: Number(p.bw), r: Number(p.r), az: null };
+    canvas().style.cursor = 'grabbing';
+    map.on('mousemove', move); map.on('touchmove', move);
+    map.once('mouseup', end); map.once('touchend', end);
+  }
+  function move(e) {
+    if (!drag) return;
+    const az = azimuthFromPoint(drag.from, e.lngLat, { snapDeg: e.originalEvent?.shiftKey ? 5 : 0 });
+    if (az == null) return;
+    drag.az = az;
+    setSectorPreview(map, { lng: drag.from.lng, lat: drag.from.lat, azimuthDeg: az, beamwidthDeg: drag.bw, rangeM: drag.r });
+    onAim({ sectorId: drag.sectorId, azimuth: az, phase: 'move' });
+  }
+  function end() {
+    if (!drag) return;
+    map.off('mousemove', move); map.off('touchmove', move);
+    canvas().style.cursor = '';
+    const d = drag; drag = null;
+    if (d.az != null) onAim({ sectorId: d.sectorId, azimuth: d.az, phase: 'end' });
+    if (d.sectorId) setSectorPreview(map, null);           // a stored sector's ghost is only for the drag itself
+  }
+  for (const id of layers) {
+    map.on('mousedown', id, begin); map.on('touchstart', id, begin);
+    map.on('mouseenter', id, () => { if (!drag) canvas().style.cursor = 'grab'; });
+    map.on('mouseleave', id, () => { if (!drag) canvas().style.cursor = ''; });
+  }
 }

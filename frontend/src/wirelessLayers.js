@@ -15,7 +15,15 @@ export const WL = {
   coverageLayer: 'wireless-coverage-layer', fansFill: 'wireless-fans-fill', fansLine: 'wireless-fans-line',
   linksGlow: 'wireless-links-glow', linksLayer: 'wireless-links-layer', rubberLayer: 'wireless-rubber-layer',
   sitesLayer: 'wireless-sites-layer', sitesLabel: 'wireless-sites-label',
+  // Draggable aiming handles: one per placed sector, plus a ghost for the sector
+  // whose form is open (create or edit), which is drawn but not yet saved.
+  aimSrc: 'wireless-aim-src', aimLine: 'wireless-aim-line', aimHandle: 'wireless-aim-handle',
+  previewSrc: 'wireless-aim-preview-src', previewFill: 'wireless-aim-preview-fill', previewLine: 'wireless-aim-preview-line',
+  previewAim: 'wireless-aim-preview-aim', previewHandle: 'wireless-aim-preview-handle',
 };
+
+/** Longest fan radius drawn on the map (m); the handle sits at the fan's tip. */
+export const FAN_MAX_M = 1200;
 
 const COLOURS = { pass: '#3ddc97', fail: '#ff5c5c', unverified: '#4dc8ff' };
 
@@ -49,6 +57,19 @@ export function sectorFanPolygon(center, azimuthDeg, beamwidthDeg, radiusM) {
   return { type: 'Polygon', coordinates: [ring] };
 }
 
+/**
+ * The aiming line (site -> tip of the boresight) and its drag handle for one
+ * sector. `props` ride on both so a drag knows which sector, site and beam it is.
+ */
+export function sectorAimFeatures(center, azimuthDeg, beamwidthDeg, rangeM, props = {}) {
+  const r = Math.min(rangeM, FAN_MAX_M), tip = destinationPoint(center, azimuthDeg, r);
+  const meta = { ...props, lng: center.lng, lat: center.lat, bw: beamwidthDeg, r };
+  return [
+    { type: 'Feature', properties: meta, geometry: { type: 'LineString', coordinates: [[center.lng, center.lat], [tip.lng, tip.lat]] } },
+    { type: 'Feature', properties: meta, geometry: { type: 'Point', coordinates: [tip.lng, tip.lat] } },
+  ];
+}
+
 /** Per-link display state from the stored analysis, only if it is fresh. */
 export function linkDisplayStates(state) {
   const a = state.wirelessAnalysis;
@@ -60,22 +81,26 @@ export function linkDisplayStates(state) {
 export function buildDisplayCollections(state) {
   const stateOf = linkDisplayStates(state);
   const links = (state.wirelessLinks || []).map(f => ({ ...f, properties: { ...f.properties, _state: stateOf(f.properties?.link_id) } }));
-  const fans = [];
+  const fans = [], aim = [];
   const sitesById = new Map((state.wirelessSites || []).map(s => [s.properties?.site_id, s]));
   for (const sec of state.wirelessSectors || []) {
     const p = sec.properties || {}, site = sitesById.get(p.site_id), c = (site || sec).geometry?.coordinates;
     // num() maps '' / null / junk to null — never to 0 — so an incomplete sector is not drawn pointing north.
     const az = num(p.azimuth_deg), bw = num(p.beamwidth_deg);
     if (!c || az == null || bw == null || bw <= 0) continue;
-    const r = Math.min(num(p.range_m) ?? 1000, 1200);
+    const r = Math.min(num(p.range_m) ?? 1000, FAN_MAX_M);
     fans.push({ type: 'Feature', properties: { sector_id: p.sector_id }, geometry: sectorFanPolygon({ lng: c[0], lat: c[1] }, az, Math.min(bw, 359), r) });
+    aim.push(...sectorAimFeatures({ lng: c[0], lat: c[1] }, az, Math.min(bw, 359), r, { sector_id: p.sector_id }));
   }
-  return { sites: state.wirelessSites || [], links, fans };
+  return { sites: state.wirelessSites || [], links, fans, aim };
 }
 
 // ── Coverage overlay state (survives basemap switches) ──────────────────────
 let _coverage = null;   // { url, coordinates }
 let _last = {};
+let _aim = [];          // stored-sector handles, kept so they can be hidden/shown
+let _aimHidden = false;
+let _preview = null;    // ghost fan + handle for the open sector form / a drag in progress
 
 export function ensureWirelessLayers(map) {
   _last = {};
@@ -84,6 +109,8 @@ export function ensureWirelessLayers(map) {
   add(WL.linksSrc,  { type: 'geojson', data: emptyFC() });
   add(WL.sitesSrc,  { type: 'geojson', data: emptyFC() });
   add(WL.rubberSrc, { type: 'geojson', data: emptyFC() });
+  add(WL.aimSrc,     { type: 'geojson', data: emptyFC() });
+  add(WL.previewSrc, { type: 'geojson', data: emptyFC() });
 
   if (_coverage && !map.getSource(WL.coverageSrc)) {
     map.addSource(WL.coverageSrc, { type: 'image', url: _coverage.url, coordinates: _coverage.coordinates });
@@ -111,6 +138,56 @@ export function ensureWirelessLayers(map) {
       layout: { 'text-field': ['get', 'site_id'], 'text-font': ['Noto Sans Regular'], 'text-size': 9, 'text-offset': [0, 1.2], 'text-anchor': 'top', 'text-allow-overlap': true },
       paint: { 'text-color': '#a0c4d8', 'text-halo-color': '#0a0f14', 'text-halo-width': 0.4 } });
   }
+  // Aiming handles sit above everything else so they are always grabbable.
+  const isLine = ['==', ['geometry-type'], 'LineString'], isPoint = ['==', ['geometry-type'], 'Point'], isPoly = ['==', ['geometry-type'], 'Polygon'];
+  if (!map.getLayer(WL.aimHandle)) {
+    map.addLayer({ id: WL.aimLine, type: 'line', source: WL.aimSrc, filter: isLine,
+      paint: { 'line-color': '#4dc8ff', 'line-width': 1.2, 'line-dasharray': [2, 2], 'line-opacity': 0.7 } });
+    map.addLayer({ id: WL.aimHandle, type: 'circle', source: WL.aimSrc, filter: isPoint,
+      paint: { 'circle-radius': 6, 'circle-color': '#4dc8ff', 'circle-stroke-color': '#0a0f14', 'circle-stroke-width': 2 } });
+    map.addLayer({ id: WL.previewFill, type: 'fill', source: WL.previewSrc, filter: isPoly,
+      paint: { 'fill-color': '#ffcf80', 'fill-opacity': 0.16 } });
+    map.addLayer({ id: WL.previewLine, type: 'line', source: WL.previewSrc, filter: isPoly,
+      paint: { 'line-color': '#ffcf80', 'line-width': 1.4, 'line-dasharray': [3, 2] } });
+    map.addLayer({ id: WL.previewAim, type: 'line', source: WL.previewSrc, filter: isLine,
+      paint: { 'line-color': '#ffcf80', 'line-width': 1.6, 'line-dasharray': [2, 2] } });
+    map.addLayer({ id: WL.previewHandle, type: 'circle', source: WL.previewSrc, filter: isPoint,
+      paint: { 'circle-radius': 8, 'circle-color': '#ffcf80', 'circle-stroke-color': '#0a0f14', 'circle-stroke-width': 2 } });
+  }
+  putAim(map); putPreview(map);
+}
+
+function putAim(map) {
+  const src = map.getSource(WL.aimSrc);
+  if (src) src.setData({ type: 'FeatureCollection', features: _aimHidden ? [] : _aim });
+}
+function previewFeatures(pv) {
+  if (!pv) return [];
+  const center = { lng: pv.lng, lat: pv.lat }, out = [];
+  // No azimuth yet (e.g. no premises in range): show only a handle to drag out from.
+  if (pv.azimuthDeg != null) out.push({ type: 'Feature', properties: {}, geometry: sectorFanPolygon(center, pv.azimuthDeg, Math.min(pv.beamwidthDeg, 359), Math.min(pv.rangeM, FAN_MAX_M)) });
+  out.push(...sectorAimFeatures(center, pv.azimuthDeg ?? 0, pv.beamwidthDeg, pv.rangeM, { sector_id: '' }));
+  return out;
+}
+function putPreview(map) {
+  const src = map.getSource(WL.previewSrc);
+  if (src) src.setData({ type: 'FeatureCollection', features: previewFeatures(_preview) });
+}
+
+/**
+ * Ghost fan + drag handle for the sector being created/edited or dragged.
+ * pv = { lng, lat, azimuthDeg|null, beamwidthDeg, rangeM } or null to clear.
+ */
+export function setSectorPreview(map, pv) {
+  _preview = pv;
+  putPreview(map);
+}
+
+/** Hide the stored sectors' handles while a form is open (only the ghost is draggable then). */
+export function setAimHandlesHidden(map, hidden) {
+  if (_aimHidden === !!hidden) return;
+  _aimHidden = !!hidden;
+  putAim(map);
 }
 
 /** Push wireless state to the map. Skips work when nothing relevant changed by reference. */
@@ -120,6 +197,7 @@ export function syncWireless(map, state) {
   const c = buildDisplayCollections(state);
   const put = (id, features) => { const src = map.getSource(id); if (src) src.setData({ type: 'FeatureCollection', features }); };
   put(WL.sitesSrc, c.sites); put(WL.linksSrc, c.links); put(WL.fansSrc, c.fans);
+  _aim = c.aim; putAim(map);
   _last.key = key;
 }
 
