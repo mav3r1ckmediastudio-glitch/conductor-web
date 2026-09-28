@@ -57,6 +57,14 @@ export function sampleHeight(getHeight, lng, lat, z, tileSize = 256) {
  * @typedef {Object} TerrainSource
  * @property {string} id              e.g. 'maptiler-terrain-rgb-v2' | 'user-dem:<hash>'
  * @property {number} resolutionM     nominal, surfaced to the user
- * @property {'BARE_EARTH'|'SURFACE'} model
+ * @property {'BARE_EARTH'|'SURFACE'|'UNKNOWN'} model   // UNKNOWN = provider does not document terrain-vs-surface
  * @property {(lng:number, lat:number) => number|null} sample
  */
+
+/** Inverse of lngLatToGlobalPixel. */
+export function globalPixelToLngLat(gx, gy, z, tileSize = 256) {
+  const scale = tileSize * 2 ** z;
+  const lng = (gx / scale) * 360 - 180;
+  const n = Math.PI - (2 * Math.PI * gy) / scale;
+  return { lng, lat: (180 / Math.PI) * Math.atan(Math.sinh(n)) };
+}

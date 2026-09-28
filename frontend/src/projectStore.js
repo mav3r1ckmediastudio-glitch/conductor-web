@@ -8,6 +8,7 @@ import { computeCascadeDelete } from './cascadeDelete.js';
 import { analyseProject, repairProject } from './repairProject.js';
 import { validateProjectState, stampVersion } from './projectSchema.js';
 import { hashPhysicalPlanInputs } from './fibrePlanInputs.js';
+import { nextWirelessId } from './wirelessIds.js';
 
 // Set by vite.config.js's `define` from package.json — see that file for
 // why. Guarded for any code path that imports this module outside the
@@ -284,6 +285,16 @@ const DEFAULT_STATE = {
   // that passes every invariant; only a validated planner run sets 'VALIDATED'.
   // Logical splitter-port allocation is unaffected by this flag.
   physicalPlanStatus: 'UNVERIFIED',
+  // Wireless planning layer (schema v3). Sites/sectors are Point features,
+  // links are LineStrings whose endpoints always equal their two sites' points.
+  // `wirelessAnalysis` is the stored result of the last analysis; it is only
+  // trusted while its inputHash matches hashWirelessInputs(state) — see
+  // wirelessAnalysis.wirelessPlanReady().
+  wirelessSites: [],
+  wirelessLinks: [],
+  wirelessSectors: [],
+  wirelessSettings: null,
+  wirelessAnalysis: null,
 };
 
 function load() {
@@ -410,6 +421,11 @@ class ProjectStore {
   get physicalPlanStatus() { return this._state.physicalPlanStatus || 'UNVERIFIED'; }
   get physicalAssignments() { return this._state.physicalAssignments || []; }
   get physicalPlanInputHash() { return this._state.physicalPlanInputHash || null; }
+  get wirelessSites()    { return this._state.wirelessSites || []; }
+  get wirelessLinks()    { return this._state.wirelessLinks || []; }
+  get wirelessSectors()  { return this._state.wirelessSectors || []; }
+  get wirelessSettings() { return this._state.wirelessSettings || null; }
+  get wirelessAnalysis() { return this._state.wirelessAnalysis || null; }
 
   on(fn) { this._listeners.push(fn); return () => { this._listeners = this._listeners.filter(l => l !== fn); }; }
   _emit(event, extra) { this._listeners.forEach(fn => fn(event, this._state, extra)); }
@@ -510,6 +526,106 @@ class ProjectStore {
 
   addCBTTail(feature) {
     this._update({ cbtTails: [...(this._state.cbtTails || []), feature] });
+  }
+
+  // ── Wireless layer ─────────────────────────────────────────────────────────
+  // All mutations are immutable replacements (so map sync, autosave and the
+  // input fingerprint see them). IDs are stable after creation and unique per
+  // collection; a duplicate ID is refused rather than silently overwritten.
+  // Derived results (wirelessAnalysis) are never edited in place — an input
+  // edit simply makes the stored analysis stale via its fingerprint.
+
+  nextWirelessId(kind) {
+    const coll = { site: 'wirelessSites', link: 'wirelessLinks', sector: 'wirelessSectors' }[kind];
+    const idKey = { site: 'site_id', link: 'link_id', sector: 'sector_id' }[kind];
+    return nextWirelessId(kind, this._state.project?.areaId, (this._state[coll] || []).map(f => f.properties?.[idKey]));
+  }
+
+  _addWireless(coll, idKey, feature) {
+    const id = feature?.properties?.[idKey];
+    if (!id || (this._state[coll] || []).some(f => f.properties?.[idKey] === id)) return false;
+    this._update({ [coll]: [...(this._state[coll] || []), feature] });
+    return true;
+  }
+  addWirelessSite(feature)   { return this._addWireless('wirelessSites', 'site_id', feature); }
+  addWirelessSector(feature) { return this._addWireless('wirelessSectors', 'sector_id', feature); }
+  addWirelessLink(feature)   { return this._addWireless('wirelessLinks', 'link_id', feature); }
+
+  // kind: 'site' | 'link' | 'sector'. The ID field itself can never be changed.
+  updateWirelessProps(kind, id, props) {
+    const coll = { site: 'wirelessSites', link: 'wirelessLinks', sector: 'wirelessSectors' }[kind];
+    const idKey = { site: 'site_id', link: 'link_id', sector: 'sector_id' }[kind];
+    if (!coll) return false;
+    const arr = this._state[coll] || [];
+    const i = arr.findIndex(f => f.properties?.[idKey] === id);
+    if (i < 0) return false;
+    const { [idKey]: _ignored, ...safe } = props || {};
+    const next = arr.slice();
+    next[i] = { ...arr[i], properties: { ...arr[i].properties, ...safe } };
+    this._update({ [coll]: next });
+    return true;
+  }
+
+  updateWirelessSettings(patch) {
+    this._update({ wirelessSettings: { ...(this._state.wirelessSettings || {}), ...patch } });
+  }
+
+  // Moves a site and keeps everything attached to it geometrically consistent
+  // in ONE update: its sectors, and the matching endpoint of every link.
+  moveWirelessSite(siteId, coords) {
+    const sites = this._state.wirelessSites || [];
+    const i = sites.findIndex(f => f.properties?.site_id === siteId);
+    if (i < 0 || !Array.isArray(coords) || coords.length < 2) return false;
+    const pt = [coords[0], coords[1]];
+    const wirelessSites = sites.slice();
+    wirelessSites[i] = { ...sites[i], geometry: { ...sites[i].geometry, coordinates: pt } };
+    const wirelessSectors = (this._state.wirelessSectors || []).map(f =>
+      f.properties?.site_id === siteId ? { ...f, geometry: { ...f.geometry, coordinates: pt } } : f);
+    const wirelessLinks = (this._state.wirelessLinks || []).map(f => {
+      const p = f.properties || {};
+      if (p.site_a !== siteId && p.site_b !== siteId) return f;
+      const c = f.geometry.coordinates.slice();
+      if (p.site_a === siteId) c[0] = pt;
+      if (p.site_b === siteId) c[c.length - 1] = pt;
+      return { ...f, geometry: { ...f.geometry, coordinates: c } };
+    });
+    this._update({ wirelessSites, wirelessSectors, wirelessLinks });
+    return true;
+  }
+
+  // Deleting a site cascades to its sectors and to every link that ends on it.
+  // Returns { removed: { wirelessSites, wirelessSectors, wirelessLinks } } or null.
+  deleteWirelessSite(siteId) {
+    const sites = this._state.wirelessSites || [];
+    if (!sites.some(f => f.properties?.site_id === siteId)) return null;
+    const sectors = this._state.wirelessSectors || [], links = this._state.wirelessLinks || [];
+    const keepSectors = sectors.filter(f => f.properties?.site_id !== siteId);
+    const keepLinks = links.filter(f => f.properties?.site_a !== siteId && f.properties?.site_b !== siteId);
+    this._update({
+      wirelessSites: sites.filter(f => f.properties?.site_id !== siteId),
+      wirelessSectors: keepSectors,
+      wirelessLinks: keepLinks,
+    });
+    return { removed: { wirelessSites: 1, wirelessSectors: sectors.length - keepSectors.length, wirelessLinks: links.length - keepLinks.length } };
+  }
+  deleteWirelessLink(linkId) {
+    const arr = this._state.wirelessLinks || [];
+    if (!arr.some(f => f.properties?.link_id === linkId)) return false;
+    this._update({ wirelessLinks: arr.filter(f => f.properties?.link_id !== linkId) });
+    return true;
+  }
+  deleteWirelessSector(sectorId) {
+    const arr = this._state.wirelessSectors || [];
+    if (!arr.some(f => f.properties?.sector_id === sectorId)) return false;
+    this._update({ wirelessSectors: arr.filter(f => f.properties?.sector_id !== sectorId) });
+    return true;
+  }
+
+  // Stores the result of wirelessAnalysis.analyseWireless(). The result carries
+  // the input fingerprint it was computed for; the gate compares it to the
+  // CURRENT project, so storing here never makes a stale result exportable.
+  applyWirelessAnalysis(analysis) {
+    this._update({ wirelessAnalysis: analysis ? { ...analysis, computedAt: new Date().toISOString() } : null });
   }
 
   // ── Asset mutation helpers (used by Edit / Move / Delete tools) ───────────
