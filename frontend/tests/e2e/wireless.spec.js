@@ -225,6 +225,40 @@ test.describe('wireless planning journey', () => {
     await expect(page.getByTestId('wp-rain-avail')).toContainText('> 99.999');      // 11 GHz rain fade is mild: shown as a bound, never rounded up to 100%
   });
 
+  test('editing a tower height updates the tower body, the top marker, and its attached link all together', async ({ page }) => {
+    await open(page, SEED(), 'flat');
+
+    const extrusionHeight = () => page.evaluate(() => {
+      const f = window.__conductorMap?.getSource('wireless-towers-src')?._data?.geojson?.features?.find(f => f.properties.site_id === 'S1');
+      return f?.properties.mast_height_m;
+    });
+    const markerY = () => page.evaluate(() => {
+      const pl = window.__conductorPoleLayer?.();
+      const spheres = pl?._group?.children.filter(m => m.geometry?.type === 'SphereGeometry' && Math.abs(m.position.x) < 50000);
+      return spheres?.length ? Math.max(...spheres.map(m => m.position.y)) : null;
+    });
+    const linkLength = () => page.evaluate(() => {
+      const pl = window.__conductorPoleLayer?.();
+      const cyl = pl?._group?.children.filter(m => m.geometry?.type === 'CylinderGeometry');
+      if (!cyl?.length) return null;
+      return Math.max(...cyl.map(m => m.geometry.parameters.height));
+    });
+
+    await expect.poll(extrusionHeight).toBe(30);
+    await expect.poll(markerY).toBe(30);
+    const lengthBefore = await linkLength();
+
+    await page.getByTestId('wp-edit-site').first().click();
+    await page.getByTestId('wf-input-mast_height_m').fill('530');
+    await page.getByTestId('wf-save').click();
+
+    await expect.poll(extrusionHeight).toBe(530);
+    await expect.poll(markerY).toBe(530);
+    const lengthAfter = await linkLength();
+    expect(lengthAfter).toBeGreaterThan(lengthBefore + 8);
+    expect(lengthAfter).toBeLessThan(lengthBefore + 18);
+  });
+
   test('the wireless link renders as a real 3D path between the two real antenna heights, not a flat ground line', async ({ page }) => {
     await open(page, SEED(), 'flat');
 
