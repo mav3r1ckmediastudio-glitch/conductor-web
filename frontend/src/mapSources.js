@@ -3,6 +3,7 @@
 
 import { projectStore } from './projectStore.js';
 import { emptyFC } from './mapGeom.js';
+import { ensureWirelessLayers, syncWireless } from './wirelessLayers.js';
 
 // ── SOURCE / LAYER SETUP ─────────────────────────────────────────────────────
 
@@ -148,6 +149,33 @@ export function ensureSources(map) {
         'circle-stroke-color': '#3a6a80',
         'circle-opacity': 0.7,
       }
+    });
+  }
+
+  // ── Forestry stands (NFI or similar) — 3D fill-extrusion ────────────────
+  // Height is a TYPICAL value per species group (forestryHeights.js), never a
+  // measurement — Conductor has no DSM ingestion yet (see wirelessTerrainTiles.js).
+  // Dashed outline marks that explicitly, reusing the same "dashed = not
+  // certain" convention already used for unverified wireless links.
+  if (!map.getSource('forestry-src')) {
+    map.addSource('forestry-src', { type: 'geojson', data: emptyFC() });
+    const GROUP_COLOUR = ['match', ['get', 'canopy_group'],
+      'Conifer', '#1b5e20', 'Broadleaved', '#8bc34a', 'Young trees', '#66bb6a', 'Assumed woodland', '#c5e1a5',
+      '#8bc34a'];
+    map.addLayer({
+      id: 'forestry-3d', type: 'fill-extrusion', source: 'forestry-src',
+      filter: ['>', ['coalesce', ['get', 'typical_height_m'], 0], 0],   // Cleared/Other stands have no canopy to show
+      paint: {
+        'fill-extrusion-color': GROUP_COLOUR,
+        'fill-extrusion-height': ['coalesce', ['get', 'typical_height_m'], 0],
+        'fill-extrusion-base': 0,
+        'fill-extrusion-opacity': 0.55,
+      },
+    });
+    map.addLayer({
+      id: 'forestry-outline', type: 'line', source: 'forestry-src',
+      filter: ['>', ['coalesce', ['get', 'typical_height_m'], 0], 0],
+      paint: { 'line-color': GROUP_COLOUR, 'line-width': 1, 'line-dasharray': [2, 2], 'line-opacity': 0.7 },
     });
   }
 
@@ -407,6 +435,9 @@ export function ensureSources(map) {
       },
     });
   }
+
+  // ── Wireless layer (sites / links / sector fans / coverage overlay) ─────
+  ensureWirelessLayers(map);
 }
 
 // ── TERRAIN-DEPENDENT LAYERS ─────────────────────────────────────────────────
@@ -624,6 +655,7 @@ const ARRAY_SOURCES = [
   ['spans-src',     'spans'],
   ['adrops-src',    'aerialDrops'],
   ['cbttails-src',  'cbtTails'],
+  ['forestry-src',  'forestryStands'],
 ];
 // Single-feature sources: sourceId -> state key holding one feature (or null).
 const SINGLE_SOURCES = [
@@ -656,4 +688,6 @@ export function syncToMap(map) {
     src.setData(feat ? { type: 'FeatureCollection', features: [feat] } : emptyFC());
     _lastSynced[srcId] = feat;
   }
+
+  syncWireless(map, s);
 }

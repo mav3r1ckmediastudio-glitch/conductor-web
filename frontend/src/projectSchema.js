@@ -29,7 +29,16 @@
 // redefined fibreAssignments as the LOGICAL layer only. Because the MEANING of
 // stored data changed — not just its structure — the version is bumped so older
 // builds refuse a v2 file rather than misread it as a complete physical plan.
-export const SCHEMA_VERSION = 2;
+//
+// v3 (wireless planning): adds the wireless layer — wirelessSites,
+// wirelessLinks, wirelessSectors (GeoJSON features), wirelessSettings and
+// wirelessAnalysis (a stored, fingerprint-gated analysis result). These are new
+// top-level structures rather than a harmless optional property, and an older
+// build that opened a v3 file would silently drop them on its next save, so the
+// version is bumped and older builds refuse the file instead.
+// forestryStands (NFI forest-stand polygons, imported like address data)
+// is a purely additive optional collection per the rule above: no bump.
+export const SCHEMA_VERSION = 3;
 
 // Every collection ProjectStore expects to be an array. Single source of
 // truth here (rather than re-deriving from projectStore.js's DEFAULT_STATE)
@@ -38,11 +47,13 @@ export const ARRAY_FIELDS = [
   'chambers', 'ducts', 'joints', 'dropDucts', 'cables', 'bundles',
   'poles', 'cbts', 'spans', 'aerialDrops', 'cbtTails', 'addressPoints',
   'fibreAssignments', 'physicalAssignments',
+  'wirelessSites', 'wirelessLinks', 'wirelessSectors',
+  'forestryStands',
 ];
 
 // Fields that must be a plain object or null/undefined — never an
 // array/string/number.
-const OBJECT_OR_NULL_FIELDS = ['project', 'buildArea', 'cabinet'];
+const OBJECT_OR_NULL_FIELDS = ['project', 'buildArea', 'cabinet', 'wirelessSettings', 'wirelessAnalysis'];
 
 function isPlainObject(v) {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -136,6 +147,19 @@ export function validateProjectState(raw) {
     state.physicalPlanStatus = 'UNVERIFIED';
     state.physicalPlanInputHash = null;
     migrations.push('Upgraded to project schema v2: the physical fibre plan is UNVERIFIED and must be recalculated before splice-plan export.');
+  }
+
+  // ── v2 → v3 migration (wireless planning) ──────────────────────────────────
+  // Purely additive: nothing existing is reinterpreted. A file that predates the
+  // wireless layer simply has none. Any wireless data already present is kept
+  // untouched; only absent structures are created empty. There is no wireless
+  // analysis to trust, so it stays null (state UNVERIFIED until analysed).
+  const preV3 = declaredVersion === undefined || declaredVersion < 3;
+  if (preV3) {
+    for (const f of ['wirelessSites', 'wirelessLinks', 'wirelessSectors']) if (!Array.isArray(state[f])) state[f] = [];
+    if (state.wirelessSettings === undefined) state.wirelessSettings = null;
+    if (state.wirelessAnalysis === undefined) state.wirelessAnalysis = null;
+    migrations.push('Upgraded to project schema v3: adds the wireless planning layer. Your fibre design is unchanged.');
   }
 
   state.schemaVersion = SCHEMA_VERSION;   // always stamp current on the way out

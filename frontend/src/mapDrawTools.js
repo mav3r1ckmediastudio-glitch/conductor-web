@@ -3,7 +3,7 @@
 
 import { projectStore } from './projectStore.js';
 import { showToast } from './toast.js';
-import { compassLeg, emptyFC, haversine, haversineChain, pointFC, pointInPolygon } from './mapGeom.js';
+import { compassLeg, emptyFC, haversine, haversineChain, pointFC, pointInPolygon, filterByCentroidInRing } from './mapGeom.js';
 import { CBT_TAIL_MAX_M, cbtsWithTail, nextAerialDropId, nextBundleId, nextCBTId, nextCBTTailId, nextCableId, nextChamberId, nextDropDuctId, nextDuctId, nextJointId, nextPoleId, nextPopId, nextSpanId } from './mapIds.js';
 import { _snapToNode } from './mapPick.js';
 import { invalidateSyncSource } from './mapSources.js';
@@ -102,6 +102,30 @@ export function applyCookieCutter(map, buildAreaFeature) {
   invalidateSyncSource('addresses-src');
 
   projectStore._state.addressPoints = inside;
+  projectStore._save();
+}
+
+/**
+ * Cookie-cutter for forestry stand POLYGONS, not points: a stand is kept or
+ * dropped whole by whether its centroid falls inside the build area, never
+ * trimmed at the edge (see filterByCentroidInRing's own doc for why). Called
+ * automatically whenever a build area is drawn/redrawn (same as addresses),
+ * and exposed separately so forestry imported AFTER a build area already
+ * exists can be re-cut on demand without re-drawing the boundary.
+ */
+export function applyForestryCookieCutter(map, buildAreaFeature) {
+  if (!map.getSource('forestry-src')) return;
+
+  const ring = buildAreaFeature.geometry.coordinates[0];
+  const all  = projectStore.state.forestryStands || [];
+  if (!all.length) return;
+
+  const inside = filterByCentroidInRing(all, ring);
+
+  map.getSource('forestry-src').setData({ type: 'FeatureCollection', features: inside });
+  invalidateSyncSource('forestry-src');
+
+  projectStore._state.forestryStands = inside;
   projectStore._save();
 }
 

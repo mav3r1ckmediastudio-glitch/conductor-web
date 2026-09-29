@@ -68,3 +68,50 @@ export function compassLeg(fromLng, fromLat, toLng, toLat) {
   if (b >= 135 && b < 225) return 'S';
   return 'W';
 }
+
+
+/**
+ * Area-weighted centroid of a Polygon or MultiPolygon (exterior rings only —
+ * holes are ignored, which is fine for a "does this stand roughly sit inside
+ * the build area" test, not a survey-grade calculation). Standard shoelace
+ * centroid per ring, combined by ring area for MultiPolygon.
+ * @returns [lng, lat] or null if the geometry has no usable ring.
+ */
+export function featureCentroid(geometry) {
+  if (!geometry) return null;
+  const rings = geometry.type === 'Polygon' ? [geometry.coordinates[0]]
+    : geometry.type === 'MultiPolygon' ? geometry.coordinates.map(poly => poly[0])
+    : null;
+  if (!rings) return null;
+  let cx = 0, cy = 0, totalArea = 0;
+  for (const ring of rings) {
+    if (!ring || ring.length < 3) continue;
+    let a = 0, rx = 0, ry = 0;
+    for (let i = 0; i < ring.length - 1; i++) {
+      const [x0, y0] = ring[i], [x1, y1] = ring[i + 1];
+      const cross = x0 * y1 - x1 * y0;
+      a += cross; rx += (x0 + x1) * cross; ry += (y0 + y1) * cross;
+    }
+    a /= 2;
+    if (a === 0) continue;                 // degenerate ring; skip rather than divide by zero
+    cx += (rx / (6 * a)) * Math.abs(a);
+    cy += (ry / (6 * a)) * Math.abs(a);
+    totalArea += Math.abs(a);
+  }
+  if (totalArea === 0) return null;
+  return [cx / totalArea, cy / totalArea];
+}
+
+/**
+ * Polygon/MultiPolygon features whose centroid falls inside `ring` (a build
+ * area's outer ring, [lng,lat] pairs). Whole-feature keep/discard — a stand
+ * straddling the boundary is kept or dropped entirely, never trimmed at the
+ * edge. See applyForestryCookieCutter in mapDrawTools.js for why that's an
+ * accepted, stated limitation rather than a true polygon clip.
+ */
+export function filterByCentroidInRing(features, ring) {
+  return (features || []).filter(f => {
+    const c = featureCentroid(f.geometry);
+    return c ? pointInPolygon(c[0], c[1], ring) : false;
+  });
+}
