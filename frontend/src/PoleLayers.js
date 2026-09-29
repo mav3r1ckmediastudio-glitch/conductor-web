@@ -68,9 +68,12 @@ const ANCHOR_COLOR    = 0x4dc8ff;
 // mast_height_m (see wirelessLayers.js circlePolygon()/WL.towersLayer — the
 // fill-extrusion body), not a fixed constant like a pole. A sphere rather
 // than the pole anchor's flat disc, so the two read as distinct things at a
-// glance despite sharing the same house blue.
-const TOWER_MARKER_RADIUS_M = 0.9;
-const TOWER_MARKER_COLOR    = 0x4dc8ff;
+// glance. Dark core + blue glow, matching the flat 2D site marker's own
+// dark-fill/blue-stroke look (wirelessLayers.js WL.sitesLayer) it replaces --
+// a solid blue sphere on a solid blue tower body was invisible against it.
+const TOWER_MARKER_RADIUS_M = 1.1;
+const TOWER_MARKER_CORE     = 0x0d1520;
+const TOWER_MARKER_GLOW     = 0x4dc8ff;
 
 // CBT cabinet box — rendered at pole-top when a CBT is mounted on a pole.
 const CBT_SIZE_M    = 0.5;
@@ -316,10 +319,18 @@ class PoleLayer {
 
     this._towerMarkerGeometry = new THREE.SphereGeometry(TOWER_MARKER_RADIUS_M, 16, 12);
     this._towerMarkerMaterial = new THREE.MeshPhongMaterial({
-      color:    TOWER_MARKER_COLOR,
-      emissive: TOWER_MARKER_COLOR,
-      emissiveIntensity: 0.5,
-      shininess: 40,
+      color:    TOWER_MARKER_CORE,
+      emissive: TOWER_MARKER_GLOW,
+      emissiveIntensity: 0.9,
+      shininess: 60,
+      specular: TOWER_MARKER_GLOW,
+    });
+    // A slightly larger, additive-blended halo behind the core sphere reads
+    // as a glowing beacon rather than a flat-shaded ball, closer in spirit to
+    // the flat marker's crisp blue ring.
+    this._towerHaloGeometry = new THREE.SphereGeometry(TOWER_MARKER_RADIUS_M * 1.6, 16, 12);
+    this._towerHaloMaterial = new THREE.MeshBasicMaterial({
+      color: TOWER_MARKER_GLOW, transparent: true, opacity: 0.28, depthWrite: false,
     });
 
     this._cbtGeometry = new THREE.BoxGeometry(CBT_SIZE_M, CBT_SIZE_M, CBT_SIZE_M * 0.6);
@@ -599,6 +610,9 @@ class PoleLayer {
       const marker = new THREE.Mesh(this._towerMarkerGeometry, this._towerMarkerMaterial);
       marker.position.set(east, groundElev + h, -north);
       this._group.add(marker);
+      const halo = new THREE.Mesh(this._towerHaloGeometry, this._towerHaloMaterial);
+      halo.position.copy(marker.position);
+      this._group.add(halo);
     }
 
     // pole_id → Vector3 at the pole-top attach height (same level CBTs/spans use).
@@ -939,6 +953,8 @@ class PoleLayer {
     if (this._cbtMaterial)    this._cbtMaterial.dispose();
     if (this._towerMarkerGeometry) this._towerMarkerGeometry.dispose();
     if (this._towerMarkerMaterial) this._towerMarkerMaterial.dispose();
+    if (this._towerHaloGeometry) this._towerHaloGeometry.dispose();
+    if (this._towerHaloMaterial) this._towerHaloMaterial.dispose();
     if (this._spanMaterial)   this._spanMaterial.dispose();
     if (this._adropMaterial)  this._adropMaterial.dispose();
     if (this._tailMaterial)   this._tailMaterial.dispose();

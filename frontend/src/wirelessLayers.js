@@ -160,11 +160,21 @@ export function ensureWirelessLayers(map) {
       paint: { 'fill-extrusion-color': '#4dc8ff', 'fill-extrusion-height': ['get', 'mast_height_m'], 'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.75 } });
   }
   if (!map.getLayer(WL.sitesLayer)) {
+    // Sites with a real 3D tower (PoleLayers.js, mast_height_m > 0) show their
+    // marker up there instead — this flat 2D marker+label fades out for those,
+    // staying solid only for a site with no height set yet (so there's still
+    // something to see/click for it). Opacity, not a filter: pickWirelessSite
+    // (wirelessTools.js) hit-tests this exact layer via queryRenderedFeatures,
+    // which needs every site still present in it, tower or not, to keep
+    // "click a site to attach a sector/link" working for every site.
+    const noTower = ['<=', ['coalesce', ['get', 'mast_height_m'], 0], 0];
+    const opacityFor = ['case', noTower, 1, 0];
     map.addLayer({ id: WL.sitesLayer, type: 'circle', source: WL.sitesSrc,
-      paint: { 'circle-radius': 7, 'circle-color': '#0d1520', 'circle-stroke-color': '#4dc8ff', 'circle-stroke-width': 2.5 } });
+      paint: { 'circle-radius': 7, 'circle-color': '#0d1520', 'circle-stroke-color': '#4dc8ff', 'circle-stroke-width': 2.5,
+               'circle-opacity': opacityFor, 'circle-stroke-opacity': opacityFor } });
     map.addLayer({ id: WL.sitesLabel, type: 'symbol', source: WL.sitesSrc,
       layout: { 'text-field': ['get', 'site_id'], 'text-font': ['Noto Sans Regular'], 'text-size': 9, 'text-offset': [0, 1.2], 'text-anchor': 'top', 'text-allow-overlap': true },
-      paint: { 'text-color': '#a0c4d8', 'text-halo-color': '#0a0f14', 'text-halo-width': 0.4 } });
+      paint: { 'text-color': '#a0c4d8', 'text-halo-color': '#0a0f14', 'text-halo-width': 0.4, 'text-opacity': opacityFor } });
   }
   // Aiming handles sit above everything else so they are always grabbable.
   const isLine = ['==', ['geometry-type'], 'LineString'], isPoint = ['==', ['geometry-type'], 'Point'], isPoly = ['==', ['geometry-type'], 'Polygon'];

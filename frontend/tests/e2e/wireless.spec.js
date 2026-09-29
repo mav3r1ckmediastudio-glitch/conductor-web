@@ -245,6 +245,14 @@ test.describe('wireless planning journey', () => {
     await page.getByTestId('wf-input-mast_height_m').fill('28');
     await page.getByTestId('wf-save').click();
     await expect.poll(markerY).toBe(28);
+
+    // The flat 2D marker must fade out (opacity), NOT be excluded by a filter --
+    // a filter would also remove it from queryRenderedFeatures, which is
+    // exactly how pickWirelessSite (wirelessTools.js) finds "which site did you
+    // click" to attach a new sector/link. That regression happened once
+    // already; this pins the fix so it can't happen silently again.
+    const sitesLayerFilter = await page.evaluate(() => window.__conductorMap.getFilter('wireless-sites-layer'));
+    expect(sitesLayerFilter).toBeUndefined();
   });
 
   test('Add Sector through the tool wheel: the form arrives with azimuth aimed at the premises, and saves', async ({ page }) => {
