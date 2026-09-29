@@ -225,6 +225,42 @@ test.describe('wireless planning journey', () => {
     await expect(page.getByTestId('wp-rain-avail')).toContainText('> 99.999');      // 11 GHz rain fade is mild: shown as a bound, never rounded up to 100%
   });
 
+  test('the wireless link renders as a real 3D path between the two real antenna heights, not a flat ground line', async ({ page }) => {
+    await open(page, SEED(), 'flat');
+
+    const linkProps = () => page.evaluate(() => window.__conductorMap?.getSource('wireless-links-src')?._data?.geojson?.features?.[0]?.properties);
+    await expect.poll(linkProps).toMatchObject({ _hasTower3D: true });
+    const filter = await page.evaluate(() => window.__conductorMap.getFilter('wireless-links-layer'));
+    expect(filter).toBeUndefined();
+
+    const linkMesh = () => page.evaluate(() => {
+      const pl = window.__conductorPoleLayer?.();
+      const cyl = pl?._group?.children.filter(m => m.geometry?.type === 'CylinderGeometry');
+      if (!cyl?.length) return null;
+      const longest = cyl.reduce((a, b) => (b.geometry.parameters.height > a.geometry.parameters.height ? b : a));
+      return { height: longest.geometry.parameters.height, radius: longest.geometry.parameters.radiusTop };
+    });
+    await expect.poll(() => linkMesh().then(m => m?.radius)).toBe(2);
+    const m = await linkMesh();
+    expect(m.height).toBeGreaterThan(9000);
+    expect(m.height).toBeLessThan(11000);
+  });
+
+  test('a link with one end lacking a real tower height stays a flat 2D line, no 3D cylinder', async ({ page }) => {
+    const noHeightSite = { type: 'Feature', geometry: { type: 'Point', coordinates: [B.lng, B.lat] }, properties: { site_id: 'S2' } };
+    await open(page, SEED({ wirelessSites: [site('S1', A), noHeightSite] }), 'flat');
+
+    const linkProps2 = () => page.evaluate(() => window.__conductorMap?.getSource('wireless-links-src')?._data?.geojson?.features?.[0]?.properties?._hasTower3D);
+    await expect.poll(linkProps2).toBe(false);
+
+    const anyLinkLength = await page.evaluate(() => {
+      const pl = window.__conductorPoleLayer?.();
+      const cyl = pl?._group?.children.filter(m => m.geometry?.type === 'CylinderGeometry') || [];
+      return cyl.some(m => m.geometry.parameters.height > 5000);
+    });
+    expect(anyLinkLength).toBe(false);
+  });
+
   test('3D tower-top marker sits at the real, editable mast height (not the base)', async ({ page }) => {
     const seed = SEED({ wirelessSites: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [A.lng, A.lat] },
       properties: { site_id: 'S1', mast_height_m: 15 } }] });

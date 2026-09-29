@@ -93,7 +93,14 @@ export function linkDisplayStates(state) {
 
 export function buildDisplayCollections(state) {
   const stateOf = linkDisplayStates(state);
-  const links = (state.wirelessLinks || []).map(f => ({ ...f, properties: { ...f.properties, _state: stateOf(f.properties?.link_id) } }));
+  const sitesByIdForLinks = new Map((state.wirelessSites || []).map(s => [s.properties?.site_id, s]));
+  const hasRealTower = (siteId) => {
+    const h = num(sitesByIdForLinks.get(siteId)?.properties?.mast_height_m);
+    return h != null && h > 0;
+  };
+  const links = (state.wirelessLinks || []).map(f => ({ ...f, properties: { ...f.properties,
+    _state: stateOf(f.properties?.link_id),
+    _hasTower3D: hasRealTower(f.properties?.site_a) && hasRealTower(f.properties?.site_b) } }));
   const fans = [], aim = [];
   const sitesById = new Map((state.wirelessSites || []).map(s => [s.properties?.site_id, s]));
   for (const sec of state.wirelessSectors || []) {
@@ -145,11 +152,13 @@ export function ensureWirelessLayers(map) {
     map.addLayer({ id: WL.fansLine, type: 'line', source: WL.fansSrc, paint: { 'line-color': '#4dc8ff', 'line-width': 1, 'line-opacity': 0.6 } });
   }
   if (!map.getLayer(WL.linksLayer)) {
+    const linkOpacity = ['case', ['get', '_hasTower3D'], 0, 1];
     map.addLayer({ id: WL.linksGlow, type: 'line', source: WL.linksSrc, layout: { 'line-cap': 'round' },
-      paint: { 'line-color': ['match', ['get', '_state'], 'pass', COLOURS.pass, 'fail', COLOURS.fail, COLOURS.unverified], 'line-width': 8, 'line-opacity': 0.18, 'line-blur': 4 } });
+      paint: { 'line-color': ['match', ['get', '_state'], 'pass', COLOURS.pass, 'fail', COLOURS.fail, COLOURS.unverified], 'line-width': 8, 'line-opacity': ['*', 0.18, linkOpacity], 'line-blur': 4 } });
     map.addLayer({ id: WL.linksLayer, type: 'line', source: WL.linksSrc, layout: { 'line-cap': 'round' },
       paint: { 'line-color': ['match', ['get', '_state'], 'pass', COLOURS.pass, 'fail', COLOURS.fail, COLOURS.unverified],
-               'line-width': 2.5, 'line-dasharray': ['match', ['get', '_state'], 'unverified', ['literal', [3, 2]], ['literal', [1, 0]]] } });
+               'line-width': 2.5, 'line-opacity': linkOpacity,
+               'line-dasharray': ['match', ['get', '_state'], 'unverified', ['literal', [3, 2]], ['literal', [1, 0]]] } });
     map.addLayer({ id: WL.rubberLayer, type: 'line', source: WL.rubberSrc, paint: { 'line-color': '#ffffff', 'line-width': 1.5, 'line-dasharray': [2, 2], 'line-opacity': 0.8 } });
   }
   // Real, measured mast height (mast_height_m) — solid and fully opaque,

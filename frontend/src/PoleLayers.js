@@ -44,6 +44,7 @@
 //   or every rebuild — see _makeSplitterTexture()/_getSplitterMaterial().
 
 import * as THREE from 'three';
+import { linkDisplayStates } from './wirelessLayers.js';
 import maplibregl from 'maplibre-gl';
 
 // ── Barber pole animation ──────────────────────────────────────────────────────
@@ -74,6 +75,9 @@ const ANCHOR_COLOR    = 0x4dc8ff;
 const TOWER_MARKER_RADIUS_M = 1.1;
 const TOWER_MARKER_CORE     = 0x0d1520;
 const TOWER_MARKER_GLOW     = 0x4dc8ff;
+
+const LINK_RADIUS_M = 2;
+const LINK_COLOR = { pass: 0x3ddc97, fail: 0xff5c5c, unverified: 0x4dc8ff };
 
 // CBT cabinet box — rendered at pole-top when a CBT is mounted on a pole.
 const CBT_SIZE_M    = 0.5;
@@ -333,6 +337,11 @@ class PoleLayer {
       color: TOWER_MARKER_GLOW, transparent: true, opacity: 0.28, depthWrite: false,
     });
 
+    this._linkMaterials = {};
+    for (const [state, color] of Object.entries(LINK_COLOR)) {
+      this._linkMaterials[state] = new THREE.MeshPhongMaterial({ color, emissive: color, emissiveIntensity: 0.6, shininess: 30 });
+    }
+
     this._cbtGeometry = new THREE.BoxGeometry(CBT_SIZE_M, CBT_SIZE_M, CBT_SIZE_M * 0.6);
     this._cbtMaterial = new THREE.MeshPhongMaterial({
       color:    CBT_COLOR,
@@ -550,6 +559,11 @@ class PoleLayer {
       towerElev[site.properties.site_id] = g;
       sig += 'W' + site.properties.site_id + ':' + h.toFixed(1) + ':' + g.toFixed(1) + ';';
     }
+    const linkState = linkDisplayStates(this.projectStore.state);
+    for (const link of (this.projectStore.wirelessLinks || [])) {
+      const id = link.properties?.link_id;
+      if (id) sig += 'V' + id + ':' + linkState(id) + ';';
+    }
     return { poleElev, towerElev, sig, pending };
   }
 
@@ -613,6 +627,29 @@ class PoleLayer {
       const halo = new THREE.Mesh(this._towerHaloGeometry, this._towerHaloMaterial);
       halo.position.copy(marker.position);
       this._group.add(halo);
+    }
+
+    const towerTopById = {};
+    for (const site of towers) {
+      const c = site.geometry.coordinates, id = site.properties.site_id;
+      const { east, north } = this._metresFromOrigin(c[0], c[1]);
+      towerTopById[id] = new THREE.Vector3(east, (towerElev[id] ?? 0) + Number(site.properties.mast_height_m), -north);
+    }
+    const linkVerdict = linkDisplayStates(this.projectStore.state);
+    for (const link of (this.projectStore.wirelessLinks || [])) {
+      const p = link.properties || {};
+      const a = towerTopById[p.site_a], b = towerTopById[p.site_b];
+      if (!a || !b) continue;
+      const dir = new THREE.Vector3().subVectors(b, a);
+      const len = dir.length();
+      if (len === 0) continue;
+      const mat = this._linkMaterials[linkVerdict(p.link_id)];
+      const linkGeom = new THREE.CylinderGeometry(LINK_RADIUS_M, LINK_RADIUS_M, len, 6);
+      this._dynamicGeoms.push(linkGeom);
+      const linkMesh = new THREE.Mesh(linkGeom, mat);
+      linkMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+      linkMesh.position.copy(a).add(b).multiplyScalar(0.5);
+      this._group.add(linkMesh);
     }
 
     // pole_id → Vector3 at the pole-top attach height (same level CBTs/spans use).
@@ -955,6 +992,7 @@ class PoleLayer {
     if (this._towerMarkerMaterial) this._towerMarkerMaterial.dispose();
     if (this._towerHaloGeometry) this._towerHaloGeometry.dispose();
     if (this._towerHaloMaterial) this._towerHaloMaterial.dispose();
+    for (const mat of Object.values(this._linkMaterials || {})) mat.dispose();
     if (this._spanMaterial)   this._spanMaterial.dispose();
     if (this._adropMaterial)  this._adropMaterial.dispose();
     if (this._tailMaterial)   this._tailMaterial.dispose();
