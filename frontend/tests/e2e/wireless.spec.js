@@ -225,6 +225,28 @@ test.describe('wireless planning journey', () => {
     await expect(page.getByTestId('wp-rain-avail')).toContainText('> 99.999');      // 11 GHz rain fade is mild: shown as a bound, never rounded up to 100%
   });
 
+  test('3D tower-top marker sits at the real, editable mast height (not the base)', async ({ page }) => {
+    const seed = SEED({ wirelessSites: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [A.lng, A.lat] },
+      properties: { site_id: 'S1', mast_height_m: 15 } }] });
+    await open(page, seed, 'flat');
+
+    // No real DEM tiles load in test mode (no MapTiler key), so ground elevation
+    // settles at 0 -- the marker's Y should equal exactly the stored mast height.
+    const markerY = () => page.evaluate(() => {
+      const pl = window.__conductorPoleLayer?.();
+      const mesh = pl?._group?.children.find(m => m.geometry?.type === 'SphereGeometry');
+      return mesh?.position.y ?? null;
+    });
+    await expect.poll(markerY).toBe(15);
+
+    // Edit the site's height through the real form; the marker must move to
+    // match, via the explicit refresh() call (not by luck on a later frame).
+    await page.getByTestId('wp-edit-site').click();
+    await page.getByTestId('wf-input-mast_height_m').fill('28');
+    await page.getByTestId('wf-save').click();
+    await expect.poll(markerY).toBe(28);
+  });
+
   test('Add Sector through the tool wheel: the form arrives with azimuth aimed at the premises, and saves', async ({ page }) => {
     // 10 premises ~800 m north-west (bearing ~315) of S1, 3 to the south-east.
     const around = (brg, n) => Array.from({ length: n }, (_, i) => {

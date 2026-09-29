@@ -316,6 +316,9 @@
       // Lets specs turn a lng/lat into a screen point so they can click map
       // features through the real tools. Test mode only.
       window.__conductorMap = map;
+      // Lets specs inspect the real THREE.js scene graph (tower-marker
+      // position, group children) rather than only pixels. Test mode only.
+      window.__conductorPoleLayer = getPoleLayer;
     }
 
     map.on('load', () => {
@@ -627,9 +630,14 @@
   function onWirelessFormSaved(e) {
     const props = e.detail;
     if (wEdit) {
+      const editedKind = wEdit.kind;
       projectStore.updateWirelessProps(wEdit.kind, wEdit.id, props);
       wEdit = null;
       syncToMap(map);
+      // A site's mast_height_m may have just changed: force the 3D tower-top
+      // marker to move now, rather than waiting on the pole layer's own
+      // per-frame heuristics (see the comment on PoleLayer.refresh()).
+      if (editedKind === 'site') getPoleLayer()?.refresh();
       rpMode = 'wireless-panel';
       return;
     }

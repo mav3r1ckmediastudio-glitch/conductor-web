@@ -64,6 +64,14 @@ const ANCHOR_RADIUS_M = 0.4;
 const ANCHOR_HEIGHT_M = 0.25;
 const ANCHOR_COLOR    = 0x4dc8ff;
 
+// Wireless tower-top marker — sits at the tower's REAL, user-editable
+// mast_height_m (see wirelessLayers.js circlePolygon()/WL.towersLayer — the
+// fill-extrusion body), not a fixed constant like a pole. A sphere rather
+// than the pole anchor's flat disc, so the two read as distinct things at a
+// glance despite sharing the same house blue.
+const TOWER_MARKER_RADIUS_M = 0.9;
+const TOWER_MARKER_COLOR    = 0x4dc8ff;
+
 // CBT cabinet box — rendered at pole-top when a CBT is mounted on a pole.
 const CBT_SIZE_M    = 0.5;
 const CBT_COLOR     = 0xa0c4d8;
@@ -205,6 +213,7 @@ class PoleLayer {
     this._spanCount    = -1;
     this._adropCount   = -1;
     this._tailCount    = -1;
+    this._towerCount   = -1;
     this._originMatrix = null;   // matrix `l` — origin world transform (axis swap + scale)
     this._mpu          = 1;      // mercator units per metre at origin
     this._renderCount  = 0;      // short startup window to catch the store-population race
@@ -244,6 +253,14 @@ class PoleLayer {
   setLiveState(routedUprns, liveNodeIds) {
     this._liveUprns   = routedUprns  || new Set();
     this._liveNodeIds = liveNodeIds  || new Set();
+    this._update(true);
+    if (this._map) this._map.triggerRepaint();
+  }
+
+  // Called from App.svelte right after a wireless site's height is edited —
+  // see the comment on the elevation-signature fold above for why this
+  // explicit call exists rather than relying on render()'s own per-frame checks.
+  refresh() {
     this._update(true);
     if (this._map) this._map.triggerRepaint();
   }
@@ -294,6 +311,14 @@ class PoleLayer {
       color:    ANCHOR_COLOR,
       emissive: ANCHOR_COLOR,
       emissiveIntensity: 0.4,
+      shininess: 40,
+    });
+
+    this._towerMarkerGeometry = new THREE.SphereGeometry(TOWER_MARKER_RADIUS_M, 16, 12);
+    this._towerMarkerMaterial = new THREE.MeshPhongMaterial({
+      color:    TOWER_MARKER_COLOR,
+      emissive: TOWER_MARKER_COLOR,
+      emissiveIntensity: 0.5,
       shininess: 40,
     });
 
@@ -498,11 +523,27 @@ class PoleLayer {
     for (const j of (this.projectStore.joints || [])) {
       if (jointHasSplitter(j)) sig += 'J' + j.properties.joint_id + ':' + splitterRatioFor(j) + ';';
     }
-    return { poleElev, sig, pending };
+
+    // Wireless towers: ground elevation same as poles, PLUS the real, stored
+    // mast_height_m folded into the signature — editing it (via the wireless
+    // site form, no count change) must still force a rebuild, same reasoning
+    // as the splitter-ratio fold above. Only sites with a real, positive
+    // height get a marker at all (see _buildGroup) — no invented height.
+    const towerElev = {};
+    for (const site of (this.projectStore.wirelessSites || [])) {
+      const h = Number(site.properties?.mast_height_m);
+      if (!(h > 0)) continue;
+      const [lng, lat] = site.geometry.coordinates;
+      let g = this._elevAt(lng, lat);
+      if (g == null) { g = 0; pending = true; }
+      towerElev[site.properties.site_id] = g;
+      sig += 'W' + site.properties.site_id + ':' + h.toFixed(1) + ':' + g.toFixed(1) + ';';
+    }
+    return { poleElev, towerElev, sig, pending };
   }
 
   // EXPENSIVE pass: (re)build the THREE group from the pole-elevation cache.
-  _buildGroup(poleElev) {
+  _buildGroup(poleElev, towerElev = {}) {
     // Dispose the per-span/drop geometries from the previous build first — they
     // are created fresh every rebuild and would otherwise leak GPU memory.
     for (const g of this._dynamicGeoms) g.dispose();
@@ -525,19 +566,40 @@ class PoleLayer {
     const spans  = this.projectStore.spans || [];
     const adrops = this.projectStore.aerialDrops || [];
     const tails  = this.projectStore.cbtTails || [];
+    const towers = (this.projectStore.wirelessSites || []).filter(s => Number(s.properties?.mast_height_m) > 0);
 
     this._poleCount  = poles.length;
     this._cbtCount   = cbts.length;
     this._spanCount  = spans.length;
     this._adropCount = adrops.length;
     this._tailCount  = tails.length;
+    this._towerCount = towers.length;
 
-    if (!poles.length && !cbts.length && !spans.length && !adrops.length && !tails.length) {
+    if (!poles.length && !cbts.length && !spans.length && !adrops.length && !tails.length && !towers.length) {
       return; // nothing to place
     }
 
     this._group = new THREE.Group();
     let elevMin = Infinity, elevMax = -Infinity;
+
+    // Wireless tower-top markers — one sphere per site, sitting at the REAL
+    // top of that site's 3D tower body (groundElev + its own stored
+    // mast_height_m), so dragging the site or editing its height moves the
+    // marker exactly as far as the tower extrusion itself moves. Placed
+    // before the pole loop only for reading order; order doesn't matter to
+    // the group.
+    for (const site of towers) {
+      const [lng, lat] = site.geometry.coordinates;
+      const { east, north } = this._metresFromOrigin(lng, lat);
+      const groundElev = towerElev[site.properties.site_id] ?? 0;
+      const h = Number(site.properties.mast_height_m);
+      elevMin = Math.min(elevMin, groundElev);
+      elevMax = Math.max(elevMax, groundElev + h);
+
+      const marker = new THREE.Mesh(this._towerMarkerGeometry, this._towerMarkerMaterial);
+      marker.position.set(east, groundElev + h, -north);
+      this._group.add(marker);
+    }
 
     // pole_id → Vector3 at the pole-top attach height (same level CBTs/spans use).
     // Lets a CBT tail ride the aerial route through intermediate poles.
@@ -612,7 +674,7 @@ class PoleLayer {
     // Allow spans/drops to attach to the cabinet/POP.
     let popTop = null;
     const cabinet = this.projectStore.cabinet;
-    if (cabinet) {
+    if (cabinet?.geometry?.coordinates) {
       const [lng, lat] = cabinet.geometry.coordinates;
       const { east, north } = this._metresFromOrigin(lng, lat);
       let groundElev = this._elevAt(lng, lat);
@@ -790,12 +852,12 @@ class PoleLayer {
   // Sample elevations (cheap) and rebuild the meshes only if something changed.
   // `force` rebuilds unconditionally (initial add / asset count change).
   _update(force) {
-    const { poleElev, sig, pending } = this._samplePoleElevations();
+    const { poleElev, towerElev, sig, pending } = this._samplePoleElevations();
     const changed = sig !== this._lastElevSig;
     if (changed) this._lastElevSig = sig;
 
     if (force || changed || pending) {
-      this._buildGroup(poleElev);
+      this._buildGroup(poleElev, towerElev);
     }
 
     // Keep retrying only while terrain is still loading for some pole.
@@ -811,12 +873,14 @@ class PoleLayer {
       const spanCount  = (this.projectStore.spans || []).length;
       const adropCount = (this.projectStore.aerialDrops || []).length;
       const tailCount  = (this.projectStore.cbtTails || []).length;
+      const towerCount = (this.projectStore.wirelessSites || []).filter(s => Number(s.properties?.mast_height_m) > 0).length;
 
       const countsChanged = poleCount  !== this._poleCount
                          || cbtCount   !== this._cbtCount
                          || spanCount  !== this._spanCount
                          || adropCount !== this._adropCount
-                         || tailCount  !== this._tailCount;
+                         || tailCount  !== this._tailCount
+                         || towerCount !== this._towerCount;
 
       if (countsChanged) {
         this._update(true);
@@ -873,6 +937,8 @@ class PoleLayer {
     if (this._anchorMaterial) this._anchorMaterial.dispose();
     if (this._cbtGeometry)    this._cbtGeometry.dispose();
     if (this._cbtMaterial)    this._cbtMaterial.dispose();
+    if (this._towerMarkerGeometry) this._towerMarkerGeometry.dispose();
+    if (this._towerMarkerMaterial) this._towerMarkerMaterial.dispose();
     if (this._spanMaterial)   this._spanMaterial.dispose();
     if (this._adropMaterial)  this._adropMaterial.dispose();
     if (this._tailMaterial)   this._tailMaterial.dispose();
