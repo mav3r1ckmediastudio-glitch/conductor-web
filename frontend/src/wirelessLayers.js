@@ -17,10 +17,21 @@ export const WL = {
   sitesLayer: 'wireless-sites-layer', sitesLabel: 'wireless-sites-label',
   // Draggable aiming handles: one per placed sector, plus a ghost for the sector
   // whose form is open (create or edit), which is drawn but not yet saved.
+  towersSrc: 'wireless-towers-src', towersLayer: 'wireless-towers-3d',
   aimSrc: 'wireless-aim-src', aimLine: 'wireless-aim-line', aimHandle: 'wireless-aim-handle',
   previewSrc: 'wireless-aim-preview-src', previewFill: 'wireless-aim-preview-fill', previewLine: 'wireless-aim-preview-line',
   previewAim: 'wireless-aim-preview-aim', previewHandle: 'wireless-aim-preview-handle',
 };
+
+/** Ground footprint radius (m) drawn for a site's 3D tower extrusion. Visual only, not an engineering dimension. */
+const TOWER_FOOTPRINT_M = 4;
+
+/** A small circular ground footprint for a site's tower, extruded to its real (stored) mast_height_m. */
+export function circlePolygon(center, radiusM, steps = 16) {
+  const ring = [];
+  for (let i = 0; i <= steps; i++) ring.push(destinationPoint(center, (360 * i) / steps, radiusM));
+  return { type: 'Polygon', coordinates: [ring.map(p => [p.lng, p.lat])] };
+}
 
 /** Longest fan radius drawn on the map (m): the analysis range limit. The fan shows the sector's true range. */
 export const FAN_MAX_M = 30000;
@@ -94,7 +105,14 @@ export function buildDisplayCollections(state) {
     fans.push({ type: 'Feature', properties: { sector_id: p.sector_id }, geometry: sectorFanPolygon({ lng: c[0], lat: c[1] }, az, Math.min(bw, 359), r) });
     aim.push(...sectorAimFeatures({ lng: c[0], lat: c[1] }, az, Math.min(bw, 359), r, { sector_id: p.sector_id }));
   }
-  return { sites: state.wirelessSites || [], links, fans, aim };
+  const towers = [];
+  for (const site of state.wirelessSites || []) {
+    const c = site.geometry?.coordinates, h = num(site.properties?.mast_height_m);
+    if (!c || h == null || h <= 0) continue;    // real, stored height only — never a guessed one
+    towers.push({ type: 'Feature', properties: { site_id: site.properties?.site_id, mast_height_m: h },
+      geometry: circlePolygon({ lng: c[0], lat: c[1] }, TOWER_FOOTPRINT_M) });
+  }
+  return { sites: state.wirelessSites || [], links, fans, aim, towers };
 }
 
 // ── Coverage overlay state (survives basemap switches) ──────────────────────
@@ -111,6 +129,7 @@ export function ensureWirelessLayers(map) {
   add(WL.linksSrc,  { type: 'geojson', data: emptyFC() });
   add(WL.sitesSrc,  { type: 'geojson', data: emptyFC() });
   add(WL.rubberSrc, { type: 'geojson', data: emptyFC() });
+  add(WL.towersSrc,  { type: 'geojson', data: emptyFC() });
   add(WL.aimSrc,     { type: 'geojson', data: emptyFC() });
   add(WL.previewSrc, { type: 'geojson', data: emptyFC() });
 
@@ -132,6 +151,13 @@ export function ensureWirelessLayers(map) {
       paint: { 'line-color': ['match', ['get', '_state'], 'pass', COLOURS.pass, 'fail', COLOURS.fail, COLOURS.unverified],
                'line-width': 2.5, 'line-dasharray': ['match', ['get', '_state'], 'unverified', ['literal', [3, 2]], ['literal', [1, 0]]] } });
     map.addLayer({ id: WL.rubberLayer, type: 'line', source: WL.rubberSrc, paint: { 'line-color': '#ffffff', 'line-width': 1.5, 'line-dasharray': [2, 2], 'line-opacity': 0.8 } });
+  }
+  // Real, measured mast height (mast_height_m) — solid and fully opaque,
+  // deliberately more confident-looking than forestry's dashed/translucent
+  // "typical, not measured" style (see mapSources.js).
+  if (!map.getLayer(WL.towersLayer)) {
+    map.addLayer({ id: WL.towersLayer, type: 'fill-extrusion', source: WL.towersSrc,
+      paint: { 'fill-extrusion-color': '#4dc8ff', 'fill-extrusion-height': ['get', 'mast_height_m'], 'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.75 } });
   }
   if (!map.getLayer(WL.sitesLayer)) {
     map.addLayer({ id: WL.sitesLayer, type: 'circle', source: WL.sitesSrc,
@@ -198,7 +224,7 @@ export function syncWireless(map, state) {
   if (_last.key && key.every((v, i) => v === _last.key[i])) return;
   const c = buildDisplayCollections(state);
   const put = (id, features) => { const src = map.getSource(id); if (src) src.setData({ type: 'FeatureCollection', features }); };
-  put(WL.sitesSrc, c.sites); put(WL.linksSrc, c.links); put(WL.fansSrc, c.fans);
+  put(WL.sitesSrc, c.sites); put(WL.linksSrc, c.links); put(WL.fansSrc, c.fans); put(WL.towersSrc, c.towers);
   _aim = c.aim; putAim(map);
   _last.key = key;
 }

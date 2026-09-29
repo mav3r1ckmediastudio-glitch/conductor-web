@@ -36,6 +36,8 @@
 // top-level structures rather than a harmless optional property, and an older
 // build that opened a v3 file would silently drop them on its next save, so the
 // version is bumped and older builds refuse the file instead.
+// forestryStands (NFI forest-stand polygons, imported like address data)
+// is a purely additive optional collection per the rule above: no bump.
 export const SCHEMA_VERSION = 3;
 
 // Every collection ProjectStore expects to be an array. Single source of
@@ -46,6 +48,7 @@ export const ARRAY_FIELDS = [
   'poles', 'cbts', 'spans', 'aerialDrops', 'cbtTails', 'addressPoints',
   'fibreAssignments', 'physicalAssignments',
   'wirelessSites', 'wirelessLinks', 'wirelessSectors',
+  'forestryStands',
 ];
 
 // Fields that must be a plain object or null/undefined — never an

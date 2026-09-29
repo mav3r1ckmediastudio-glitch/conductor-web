@@ -10,6 +10,7 @@
   export let stage = 'setup';
   export let activeCat = 'civil';
   export let showBuildings = true;
+  export let showForestry = true;
   export let showRoads = true;
   export let showHillshade = false;
   export let basemaps = [];          // [{ id, label }] — style URLs stay in App.svelte
@@ -22,7 +23,7 @@
   const buildLabel = `${(VERSION.split('+')[1] || VERSION).slice(0, 7)}${BUILT ? ' · ' + BUILT.slice(5) : ''}`;
 </script>
 
-<div class="sidebar">
+<div class="sidebar" class:design-scroll={stage === 'design'}>
   {#if stage === 'import'}
     <div class="sid-lbl">Step 1</div>
     <button class="cat-pill on" on:click={() => dispatch('importAddresses')}>⬆ Import Address Data</button>
@@ -48,6 +49,9 @@
     <button class="asset-btn" on:click={() => dispatch('deleteAsset')}>✕ Delete Asset</button>
     <button class="asset-btn" on:click={() => dispatch('moveAsset')}>⇄ Move Asset</button>
     <button class="asset-btn" class:on={showBuildings} on:click={() => dispatch('toggleBuildings')}>⌂ Buildings</button>
+    <button class="asset-btn" on:click={() => dispatch('importForestry')}>♣ Import Forestry</button>
+    <button class="asset-btn" class:on={showForestry} on:click={() => dispatch('toggleForestry')}>♣ Forestry</button>
+    <button class="asset-btn" on:click={() => dispatch('recutForestry')}>✂ Recut Forestry to Build Area</button>
     <button class="asset-btn" class:on={showRoads} on:click={() => dispatch('toggleRoads')}>▬ Roads</button>
     <button class="asset-btn" class:on={showHillshade} on:click={() => dispatch('toggleHillshade')}>⛰ Terrain relief</button>
     <div class="sid-basemap-dock">
@@ -70,7 +74,13 @@
 
 <style>
   /* ── Sidebar ── */
-  .sidebar { width: 140px; background: #0d1520; border-right: 1px solid #1a2d40; display: flex; flex-direction: column; justify-content: center; flex-shrink: 0; z-index: 10; position: relative; }
+  .sidebar { width: 140px; background: #0d1520; border-right: 1px solid #1a2d40; display: flex; flex-direction: column; justify-content: center; flex-shrink: 0; z-index: 10; position: relative; overflow-y: auto; }
+  /* The design stage's tool list can outgrow the sidebar (more asset-tool buttons than fit at once).
+     The other three onboarding stages are one short, centred prompt each and should stay untouched --
+     this only applies once the design-stage tool list is showing. padding-bottom reserves room for the
+     absolutely-positioned basemap dock below, so scrolling to the end of the list doesn't still leave
+     the last button hidden under it. */
+  .sidebar.design-scroll { justify-content: flex-start; padding-bottom: 200px; }
   .sid-lbl { font-size: 7.5px; color: #3a5a70; letter-spacing: 0.12em; text-transform: uppercase; padding: 6px 12px 3px; }
   .sid-div { height: 1px; background: #1a2d40; margin: 8px 12px; }
   .sid-hint { font-size: 8px; color: #2a4050; letter-spacing: 0.08em; text-transform: uppercase; padding: 4px 12px; line-height: 1.6; }

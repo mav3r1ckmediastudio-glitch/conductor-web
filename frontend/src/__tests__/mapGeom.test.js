@@ -16,6 +16,8 @@ import {
   haversineChain,
   compassLeg,
   _distToSegment,
+  featureCentroid,
+  filterByCentroidInRing,
 } from '../mapGeom.js';
 
 describe('emptyFC / pointFC', () => {
@@ -121,5 +123,54 @@ describe('_distToSegment (screen-space, {x,y} points)', () => {
 
   it('handles a degenerate zero-length segment as point distance', () => {
     expect(_distToSegment({ x: 3, y: 4 }, a, a)).toBeCloseTo(5, 10);
+  });
+});
+
+describe('featureCentroid', () => {
+  it('is the geometric centre for a symmetric square', () => {
+    const geom = { type: 'Polygon', coordinates: [[[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]] };
+    expect(featureCentroid(geom)).toEqual([1, 1]);
+  });
+  it('is area-weighted for an L-shape (not the vertex average)', () => {
+    // A 2x2 square plus a 1x1 tab on the right: area-weighted centre sits left of the naive vertex mean.
+    const geom = { type: 'Polygon', coordinates: [[[0, 0], [2, 0], [2, 1], [3, 1], [3, 2], [0, 2], [0, 0]]] };
+    const [cx] = featureCentroid(geom);
+    const vertexMeanX = (0 + 2 + 2 + 3 + 3 + 0) / 6;
+    expect(cx).toBeLessThan(vertexMeanX);
+    expect(cx).toBeGreaterThan(1);
+  });
+  it('combines MultiPolygon parts by area', () => {
+    // A big square far to the left and a tiny one far to the right: centroid should sit close to the big one.
+    const geom = { type: 'MultiPolygon', coordinates: [
+      [[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]],
+      [[[100, 0], [101, 0], [101, 1], [100, 1], [100, 0]]],
+    ] };
+    const [cx] = featureCentroid(geom);
+    expect(cx).toBeLessThan(10);
+  });
+  it('returns null for points, lines, and degenerate/empty rings', () => {
+    expect(featureCentroid({ type: 'Point', coordinates: [0, 0] })).toBeNull();
+    expect(featureCentroid({ type: 'LineString', coordinates: [[0, 0], [1, 1]] })).toBeNull();
+    expect(featureCentroid({ type: 'Polygon', coordinates: [[[0, 0], [1, 1]]] })).toBeNull();
+    expect(featureCentroid(null)).toBeNull();
+  });
+});
+
+describe('filterByCentroidInRing', () => {
+  const ring = [[0, 0], [2, 0], [2, 2], [0, 2]];   // 2x2 square
+  const stand = (cx, cy, id) => ({ type: 'Feature', properties: { id }, geometry: { type: 'Polygon',
+    coordinates: [[[cx - 0.4, cy - 0.4], [cx + 0.4, cy - 0.4], [cx + 0.4, cy + 0.4], [cx - 0.4, cy + 0.4], [cx - 0.4, cy - 0.4]]] } });
+  it('keeps whole stands whose centroid is inside, drops those outside', () => {
+    const feats = [stand(1, 1, 'in'), stand(5, 5, 'out')];
+    const kept = filterByCentroidInRing(feats, ring);
+    expect(kept.map(f => f.properties.id)).toEqual(['in']);
+  });
+  it('a stand straddling the boundary is kept or dropped whole, by its centroid only', () => {
+    const straddling = stand(1.9, 1, 'edge');   // centre still inside despite crossing x=2
+    expect(filterByCentroidInRing([straddling], ring).map(f => f.properties.id)).toEqual(['edge']);
+  });
+  it('handles an empty or missing feature list', () => {
+    expect(filterByCentroidInRing([], ring)).toEqual([]);
+    expect(filterByCentroidInRing(undefined, ring)).toEqual([]);
   });
 });

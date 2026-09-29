@@ -43,6 +43,7 @@
   import ValidationSummaryPanel from './ValidationSummaryPanel.svelte';
   import TopBar from './TopBar.svelte';
   import AddressImporter from './AddressImporter.svelte';
+  import ForestryImporter from './ForestryImporter.svelte';
   import BuildAreaForm from './BuildAreaForm.svelte';
   import { showToast, showError } from './toast.js';
   import { projectStore } from './projectStore.js';
@@ -84,7 +85,7 @@
     startToolSession,
     activateFibreTraceTool, clearTraceHighlight,
     activateFibreCountTool, clearCountHighlight,
-    applyCookieCutter, clearTool, getPoleLayer, setSearchMarker
+    applyCookieCutter, applyForestryCookieCutter, clearTool, getPoleLayer, setSearchMarker
   } from './mapTools.js';
 
   const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY;
@@ -116,6 +117,7 @@
   let map;
   let is3D = false;   // Conductor opens in 2D by default (agreed 15 Jul 2026)
   let showBuildings = true;
+  let showForestry = true;
   let showRoads = true;
   let showHillshade = false;   // terrain relief (wireless planning aid); off by default
   let currentBasemap = 'dark';
@@ -283,7 +285,7 @@
   // Map-layer (re)build lives in mapLayers.js — see setupMapLayers() there.
   // Called on first load AND after every basemap switch, with the current
   // toggle state passed explicitly.
-  const layerOpts = () => ({ maptilerKey: MAPTILER_KEY, showBuildings, showRoads, showHillshade });
+  const layerOpts = () => ({ maptilerKey: MAPTILER_KEY, showBuildings, showRoads, showHillshade, showForestry });
 
   onMount(() => {
     map = new maplibregl.Map({
@@ -415,6 +417,24 @@
     rpMode = 'default';
   }
 
+  function onForestryImported(e) {
+    projectStore.setForestryStands(e.detail);
+    syncToMap(map);
+    if (projectStore.state.buildArea) applyForestryCookieCutter(map, projectStore.state.buildArea);
+    rpMode = 'default';
+  }
+
+  function onForestrySkipped() {
+    rpMode = 'default';
+  }
+
+  function onRecutForestry() {
+    if (map && projectStore.state.buildArea) {
+      applyForestryCookieCutter(map, projectStore.state.buildArea);
+      showToast('Forestry re-cut to the current build area.');
+    }
+  }
+
   function onDrawBuildArea() {
     clearTool(map);
     activeToolLabel = 'Draw Build Area';
@@ -429,6 +449,7 @@
     const attrs = e.detail;
     const feature = { ...pendingBuildArea, properties: attrs };
     applyCookieCutter(map, feature);
+    applyForestryCookieCutter(map, feature);
     projectStore.setBuildArea(feature);
     rpMode = 'default';
     pendingBuildArea = null;
@@ -1502,6 +1523,13 @@
     }
   }
 
+  function toggleForestry() {
+    showForestry = !showForestry;
+    for (const id of ['forestry-3d', 'forestry-outline']) {
+      if (map && map.getLayer(id)) map.setLayoutProperty(id, 'visibility', showForestry ? 'visible' : 'none');
+    }
+  }
+
   function toggleHillshade() {
     showHillshade = !showHillshade;
     if (map) setHillshadeVisible(map, showHillshade);
@@ -1697,6 +1725,7 @@
       {stage}
       {activeCat}
       {showBuildings}
+      {showForestry}
       {showRoads}
       {showHillshade}
       basemaps={BASEMAPS}
@@ -1710,6 +1739,9 @@
       on:deleteAsset={onDeleteAsset}
       on:moveAsset={onMoveAsset}
       on:toggleBuildings={toggleBuildings}
+      on:toggleForestry={toggleForestry}
+      on:importForestry={() => rpMode = 'forestry-import'}
+      on:recutForestry={onRecutForestry}
       on:toggleRoads={toggleRoads}
       on:toggleHillshade={toggleHillshade}
       on:changeBasemap={(e) => changeBasemap(e.detail)}
@@ -1744,6 +1776,8 @@
 
       {#if rpMode === 'address-import'}
         <AddressImporter on:imported={onAddressImported} on:skip={onAddressSkipped} />
+      {:else if rpMode === 'forestry-import'}
+        <ForestryImporter on:imported={onForestryImported} on:skip={onForestrySkipped} />
 
       {:else if rpMode === 'build-area-form'}
         <BuildAreaForm areaId={project?.areaId || ''} on:save={onBuildAreaSaved} on:cancel={onBuildAreaCancelled} />

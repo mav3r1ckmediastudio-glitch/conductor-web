@@ -55,7 +55,7 @@ export function setHillshadeVisible(map, visible) {
   map.setLayoutProperty(HILLSHADE_LAYER_ID, 'visibility', visible ? 'visible' : 'none');
 }
 
-export function setupMapLayers(map, { maptilerKey, showBuildings, showRoads, showHillshade = false }) {
+export function setupMapLayers(map, { maptilerKey, showBuildings, showRoads, showHillshade = false, showForestry = true }) {
   // 1. GeoJSON sources + non-terrain symbol layers (chambers, joints, labels etc.)
   ensureSources(map);
 
@@ -153,6 +153,10 @@ export function setupMapLayers(map, { maptilerKey, showBuildings, showRoads, sho
   const roadVis = showRoads ? 'visible' : 'none';
   if (map.getLayer('roads-glow')) map.setLayoutProperty('roads-glow', 'visibility', roadVis);
   if (map.getLayer('roads-neon')) map.setLayoutProperty('roads-neon', 'visibility', roadVis);
+  const forestryVis = showForestry ? 'visible' : 'none';
+  for (const id of ['forestry-3d', 'forestry-outline']) {
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', forestryVis);
+  }
 
   // 6. Push all stored GeoJSON data into sources
   syncToMap(map);

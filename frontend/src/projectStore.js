@@ -277,6 +277,7 @@ const DEFAULT_STATE = {
   aerialDrops: [],
   cbtTails: [],
   addressPoints: [],
+  forestryStands: [],
   fibreAssignments: [],
   physicalAssignments: [],
   physicalPlanInputHash: null,
@@ -417,6 +418,7 @@ class ProjectStore {
   get aerialDrops()   { return this._state.aerialDrops || []; }
   get cbtTails()      { return this._state.cbtTails || []; }
   get addressPoints() { return this._state.addressPoints; }
+  get forestryStands() { return this._state.forestryStands; }
   get fibreAssignments() { return this._state.fibreAssignments || []; }
   get physicalPlanStatus() { return this._state.physicalPlanStatus || 'UNVERIFIED'; }
   get physicalAssignments() { return this._state.physicalAssignments || []; }
@@ -474,6 +476,13 @@ class ProjectStore {
 
   setAddressPoints(features) {
     this._updateNow({ addressPoints: features, stage: 'build-area' });
+  }
+
+  // Forest stand polygons (National Forest Inventory or similar), imported
+  // the same way as address data but optional and available at any stage —
+  // unlike addressPoints it never advances the onboarding stage.
+  setForestryStands(features) {
+    this._updateNow({ forestryStands: features });
   }
 
   setBuildArea(feature) {

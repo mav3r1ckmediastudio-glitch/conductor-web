@@ -105,3 +105,49 @@ describe('map sync', () => {
     expect(m2.sources.get(WL.sitesSrc).setData).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('tower footprints (buildDisplayCollections.towers)', () => {
+  it('one tower per site, extruded to its real, stored mast_height_m', () => {
+    const c = buildDisplayCollections(base());
+    expect(c.towers).toHaveLength(2);
+    const bySite = Object.fromEntries(c.towers.map(f => [f.properties.site_id, f.properties.mast_height_m]));
+    expect(bySite).toEqual({ S1: 30, S2: 30 });
+    expect(c.towers[0].geometry.type).toBe('Polygon');
+  });
+  it('the footprint is centred on the site and a few metres across, not an engineering dimension', () => {
+    const c = buildDisplayCollections(base());
+    const ring = c.towers[0].geometry.coordinates[0];
+    const centre = ring.reduce((s, [x, y]) => [s[0] + x / ring.length, s[1] + y / ring.length], [0, 0]);
+    expect(Math.abs(centre[0] - A.lng)).toBeLessThan(0.0005);
+    expect(Math.abs(centre[1] - A.lat)).toBeLessThan(0.0005);
+    const r = Math.max(...ring.map(([x, y]) => groundDistanceM(A, { lng: x, lat: y })));
+    expect(r).toBeGreaterThan(1);
+    expect(r).toBeLessThan(10);
+  });
+  it('a site with no mast_height_m (or zero/negative) gets no tower rather than a guessed height', () => {
+    const noHeight = { type: 'Feature', geometry: { type: 'Point', coordinates: [A.lng, A.lat] }, properties: { site_id: 'S3' } };
+    const zero = { type: 'Feature', geometry: { type: 'Point', coordinates: [A.lng, A.lat] }, properties: { site_id: 'S4', mast_height_m: 0 } };
+    const c = buildDisplayCollections({ wirelessSites: [noHeight, zero], wirelessLinks: [], wirelessSectors: [] });
+    expect(c.towers).toEqual([]);
+  });
+});
+
+describe('towers on the map (syncWireless)', () => {
+  function fakeMap() {
+    const sources = new Map(), layers = new Set();
+    return {
+      sources, layers,
+      getSource: (id) => sources.get(id), getLayer: (id) => (layers.has(id) ? {} : undefined),
+      addSource: (id) => sources.set(id, { setData: vi.fn(), updateImage: vi.fn() }),
+      addLayer: (spec) => layers.add(spec.id), removeLayer: (id) => layers.delete(id), removeSource: (id) => sources.delete(id),
+    };
+  }
+  it('the tower fill-extrusion layer is created, and towers are pushed on sync', () => {
+    const m = fakeMap();
+    ensureWirelessLayers(m);
+    expect(m.layers.has(WL.towersLayer)).toBe(true);
+    syncWireless(m, base());
+    const calls = m.sources.get(WL.towersSrc).setData.mock.calls;
+    expect(calls[calls.length - 1][0].features).toHaveLength(2);
+  });
+});
