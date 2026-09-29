@@ -255,6 +255,66 @@ test.describe('wireless planning journey', () => {
     expect(sitesLayerFilter).toBeUndefined();
   });
 
+  test('the generic Delete Asset / Edit Asset / Move Asset tools work on wireless sites, sectors and links, same as every other asset', async ({ page }) => {
+    test.setTimeout(60000);
+    const seed = SEED({ wirelessSectors: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [A.lng, A.lat] }, properties: {
+      sector_id: 'X1', site_id: 'S1', azimuth_deg: 90, beamwidth_deg: 90, freq_ghz: 5, tx_power_dbm: 24, gain_dbi: 17,
+      antenna_height_m: 15, range_m: 1000, cpe_height_m: 6, cpe_gain_dbi: 20, cpe_min_rx_dbm: -75 } }] });
+    await open(page, seed, 'flat');
+
+    const screen = (c) => page.evaluate((c) => { const m = window.__conductorMap, p = m.project([c.lng, c.lat]), r = m.getCanvas().getBoundingClientRect();
+      return { x: r.left + p.x, y: r.top + p.y }; }, c);
+
+    // -- Edit Asset: clicking the LINK (a line, midpoint between S1/S2) opens the real wireless edit form --
+    const mid = { lng: (A.lng + B.lng) / 2, lat: (A.lat + B.lat) / 2 };
+    await page.evaluate((c) => window.__conductorMap.jumpTo({ center: [c.lng, c.lat], zoom: 12 }), mid);
+    await page.waitForTimeout(400);
+    await page.locator('button.asset-btn', { hasText: 'Edit Asset' }).click();
+    let pt = await screen(mid);
+    await page.mouse.click(pt.x, pt.y);
+    await expect(page.getByTestId('wf-input-freq_ghz')).toBeVisible();
+    await page.getByTestId('wf-input-freq_ghz').fill('11');
+    await page.getByTestId('wf-save').click();
+    expect(await page.evaluate(() => window.__conductorStore.wirelessLinks[0].properties.freq_ghz)).toBe(11);
+
+    // -- Delete Asset: clicking the SECTOR (a point, at S1) removes it, same confirm dialog as every other asset --
+    // A sector's geometry is its site's own point (see mapPick.js), so a click
+    // there hits both and opens the same overlap chooser poles/CBTs already
+    // use -- proof this integrates with the existing generic system, not a
+    // wireless-only special case.
+    await page.evaluate((c) => window.__conductorMap.jumpTo({ center: [c.lng, c.lat], zoom: 15 }), A);
+    await page.waitForTimeout(400);
+    await page.locator('button.asset-btn', { hasText: 'Delete Asset' }).click();
+    pt = await screen(A);
+    await page.mouse.click(pt.x, pt.y);
+    await page.locator('.apd-item', { hasText: 'Wireless Sector' }).click();
+    await expect.poll(() => page.evaluate(() => window.__conductorStore.wirelessSectors.length)).toBe(0);
+
+    // Still in the same Delete session (re-armed): S1 and link L1 (which starts
+    // there) still overlap at this exact point -- another chooser, same as
+    // above. Choosing the SITE cascades to remove its remaining link too.
+    await page.mouse.click(pt.x, pt.y);
+    await page.locator('.apd-item', { hasText: 'Wireless Site' }).click();
+    await expect.poll(() => page.evaluate(() => window.__conductorStore.wirelessSites.length)).toBe(1);
+    expect(await page.evaluate(() => window.__conductorStore.wirelessLinks.length)).toBe(0);
+
+    // -- Move Asset: clicking the remaining site (S2), then a new spot, actually relocates it --
+    // Two clicks on the site, not one: the first is the generic tool's pick,
+    // which hands off to activateWirelessMoveTool fresh (see the code comment
+    // on handleWirelessAssetPick) -- that tool then needs its own first click
+    // to do its own picking before the destination click means anything.
+    await page.evaluate((c) => window.__conductorMap.jumpTo({ center: [c.lng, c.lat], zoom: 12 }), B);
+    await page.waitForTimeout(400);
+    await page.locator('button.asset-btn', { hasText: 'Move Asset' }).click();
+    pt = await screen(B);
+    await page.mouse.click(pt.x, pt.y);
+    await page.mouse.click(pt.x, pt.y);
+    const dest = { lng: B.lng + 0.01, lat: B.lat };
+    const destPt = await screen(dest);
+    await page.mouse.click(destPt.x, destPt.y);
+    await expect.poll(() => page.evaluate(() => window.__conductorStore.wirelessSites[0].geometry.coordinates[0])).toBeCloseTo(dest.lng, 3);
+  });
+
   test('Add Sector through the tool wheel: the form arrives with azimuth aimed at the premises, and saves', async ({ page }) => {
     // 10 premises ~800 m north-west (bearing ~315) of S1, 3 to the south-east.
     const around = (brg, n) => Array.from({ length: n }, (_, i) => {

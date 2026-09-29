@@ -255,6 +255,7 @@
   // clicked again for every asset.
   let activeSession = null;
   let sessionHint = ''; // the "Click an asset to..." hint for the current select-based session — activeToolLabel gets blanked on each pick, so this is what re-arms restore it from
+  let sessionAction = ''; // 'edit' | 'delete' | 'move' — which sidebar tool started this session; used to redirect a wireless pick (see handleWirelessAssetPick) to the right dedicated flow instead of the generic AssetEditPanel, which knows nothing about wireless assets
 
   // validateResults: populated by ValidateRoutesPanel on:results. Row
   // filtering/sorting/CSV moved into RoutesDrawer.svelte with the drawer.
@@ -1068,13 +1069,54 @@
     }
   }
 
+  const WIRELESS_ASSET_TYPES = { wirelessSite: 'site', wirelessSector: 'sector', wirelessLink: 'link' };
+
   function selectAsset(hit) {
+    const kind = WIRELESS_ASSET_TYPES[hit.assetType];
+    if (kind) { handleWirelessAssetPick(kind, hit.assetId); return; }
     selectedAsset = hit;
     // rpMode deliberately NOT changed here any more (was 'asset-selected').
     // AssetEditPanel now renders in-place inside the default view's
     // asset-section instead of replacing the whole panel — see the rpMode
     // fallback branch below. Selecting an asset no longer hides Validation
     // Summary / Engineer Outputs.
+  }
+
+  // A wireless asset picked via the generic Edit/Delete/Move Asset tools
+  // (same click-an-asset flow every other asset type uses) — AssetEditPanel
+  // has no idea how to show/edit/delete/move a wireless site, sector or link,
+  // so redirect straight to the exact flows the Wireless panel's own
+  // pencil/✕ buttons already use, keyed off which tool started this session.
+  function handleWirelessAssetPick(kind, id) {
+    if (sessionAction === 'delete') {
+      onWirelessRemove({ detail: { kind, id } });
+      if (activeSession) activeSession.rearm(() => armSelectTool(sessionHint));
+      return;
+    }
+    if (sessionAction === 'move') {
+      if (kind !== 'site') {
+        showToast(`A ${kind} follows its site — move the site instead.`);
+        if (activeSession) activeSession.rearm(() => armSelectTool(sessionHint));
+        return;
+      }
+      // activateWirelessMoveTool does its own click-to-pick internally (it
+      // isn't built to accept an already-resolved site), so this hands off
+      // to it fresh rather than reusing the click that got us here — one
+      // extra click on the same site to confirm, then click its new spot.
+      clearTool(map);
+      const err = activateWirelessMoveTool(map, () => {
+        activeToolLabel = ''; syncToMap(map); showToast('Site moved. Re-run Analyse links.');
+        if (activeSession) activeSession.rearm(() => armSelectTool(sessionHint));
+      });
+      if (err?.error) { showToast(err.error); if (activeSession) activeSession.rearm(() => armSelectTool(sessionHint)); }
+      return;
+    }
+    // 'edit' (the default action) — same form the Wireless panel's own
+    // pencil button opens. Left in place afterward rather than re-arming the
+    // generic picker: matches how editing an asset already works elsewhere.
+    wEdit = { kind, id };
+    wPending = null;
+    rpMode = 'wireless-form';
   }
 
   function onAssetPickerChoose(e) {
@@ -1100,7 +1142,7 @@
   // something is selected and the asset panel is open. One continuous
   // session covers all three uniformly — see docs/conductor-web-context.md
   // (agreed 2 Jul 2026).
-  function startAssetSelectSession(hint) {
+  function startAssetSelectSession(hint, action = 'edit') {
     clearTool(map); // implicitly ends any dangling session as 'save' — see clearTool() in mapTools.js
     // Explicit reset needed here now: selecting an asset no longer forces
     // rpMode to a dedicated mode (see selectAsset() above), so if some other
@@ -1108,6 +1150,7 @@
     // instead of the asset-section where AssetEditPanel actually lives.
     rpMode = 'default';
     sessionHint = hint;
+    sessionAction = action;
     const session = startToolSession(map, {
       onEnd: endSession,
       message: 'End this session? Save keeps everything edited, deleted or moved since you started; Cancel undoes it all.',
@@ -1118,17 +1161,17 @@
 
   function onEditAsset() {
     if (stage !== 'design') return;
-    startAssetSelectSession('Click an asset to select it');
+    startAssetSelectSession('Click an asset to select it', 'edit');
   }
 
   function onDeleteAsset() {
     if (stage !== 'design') return;
-    startAssetSelectSession('Click an asset to delete it');
+    startAssetSelectSession('Click an asset to delete it', 'delete');
   }
 
   function onMoveAsset() {
     if (stage !== 'design') return;
-    startAssetSelectSession('Click an asset to move it');
+    startAssetSelectSession('Click an asset to move it', 'move');
   }
 
   function onAssetPanelSaved(e) {
