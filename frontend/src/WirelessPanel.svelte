@@ -6,6 +6,7 @@
   import { createEventDispatcher } from 'svelte';
   import WirelessProfileChart from './WirelessProfileChart.svelte';
   import { COVERAGE_STOPS } from './wirelessLayers.js';
+  import { computeCapacityDemand } from './wirelessCapacity.js';
 
   const dispatch = createEventDispatcher();
 
@@ -40,6 +41,13 @@
   $: selResult = selected ? results.get(selected.properties.link_id) : null;
   $: selProfile = selected && fresh ? profiles.get(selected.properties.link_id) : null;
 
+  // Backhaul capacity: live topology/arithmetic, not RF-gated — recomputed
+  // from whatever sites/links currently exist, independent of planState.
+  $: capacity = computeCapacityDemand(sites, links, settings);
+  $: capacityErrors = capacity.issues.filter(i => i.severity === 'error');
+  $: capacityWarnings = capacity.issues.filter(i => i.severity !== 'error');
+  const capChip = (status) => ({ ok: 'PASS', near: 'STALE', over: 'FAIL', unrated: 'STALE' })[status] || 'NONE';
+
   let showSettings = false;
   let draft = {};
   $: draft = { ...settings };
@@ -71,6 +79,13 @@
     ['rainRate001Mmh', 'Rain rate exceeded 0.01% of the time (mm/h)', 'ITU-R P.837-7 gives 27-30 for the three Loch Tay sites. Change it for anywhere else.'],
     ['minAvailabilityPct', 'Required availability against rain (%)', 'A design target. 99.9 is about 9 hours of rain outage a year'],
     ['minClearSkyMarginDb', 'Required clear-sky margin for rain-assessed links (dB)', 'Allowance for alignment, ageing and mount sway'],
+  ];
+  // Backhaul capacity assumptions (see wirelessCapacity.js) — planning inputs,
+  // not RF physics or Ofcom limits.
+  const CAPACITY_FIELDS = [
+    ['serviceTierMbps', 'Committed service tier per customer (Mbps)', 'The rate sold, used to size backhaul demand'],
+    ['contentionRatio', 'Contention ratio', 'Customers sharing 1x the service tier worth of backhaul'],
+    ['targetUtilizationPct', 'Target utilization ceiling (%)', 'Warn once a link\'s required demand passes this share of its rated capacity'],
   ];
   function commitSetting(key, raw) {
     const v = Number(raw);
@@ -167,12 +182,52 @@
       </div>
     {/if}
 
+    {#if sites.length}
+      <div class="sec" data-testid="wp-capacity">
+        <div class="sec-t">Backhaul capacity</div>
+        {#if capacity.hubId}
+          <table class="kv"><tbody>
+            <tr><td>Hub</td><td>{capacity.hubId}</td><td>customers</td><td data-testid="wp-capacity-total-customers">{capacity.totalCustomers}</td></tr>
+            <tr><td>Total required</td><td colspan="3">~{fmt(capacity.totalRequiredMbps, 0)} Mbps (at {settings.serviceTierMbps} Mbps/customer, {settings.contentionRatio}:1 contention)</td></tr>
+          </tbody></table>
+        {:else}
+          <div class="hint warn">No single backhaul hub is marked yet — see Sites below. Nothing can be rolled up until exactly one site is marked as the hub.</div>
+        {/if}
+        {#if capacityErrors.length}
+          <div class="sec-t sub">Problems ({capacityErrors.length})</div>
+          {#each capacityErrors as i}
+            <button class="issue err" data-testid="wp-capacity-issue" data-code={i.code} on:click={() => i.scope && dispatch('zoom', { kind: i.scope, id: i.id })}><code>{i.code}</code> {i.message}</button>
+          {/each}
+        {/if}
+        {#if capacityWarnings.length}
+          <div class="sec-t sub">Notes ({capacityWarnings.length})</div>
+          {#each capacityWarnings as i}<div class="issue note" data-testid="wp-capacity-note" data-code={i.code}><code>{i.code}</code> {i.message}</div>{/each}
+        {/if}
+        {#if links.length}
+          <div class="sec-t sub">Links</div>
+          <table class="kv"><tbody>
+            {#each links as l}
+              {@const id = l.properties.link_id}
+              {@const c = capacity.perLink.get(id)}
+              <tr data-testid="wp-capacity-link">
+                <td>{id}</td>
+                <td>{c ? fmt(c.requiredMbps, 0) + ' Mbps' : '—'}</td>
+                <td>{c?.ratedMbps != null ? c.ratedMbps + ' Mbps rated' : 'unrated'}</td>
+                <td><span class="chip {capChip(c?.status)}" data-testid="wp-capacity-status">{c?.status ?? 'ok'}</span></td>
+              </tr>
+            {/each}
+          </tbody></table>
+        {/if}
+        <div class="hint">Planning only — not RF. Mark a site as the hub and set customers-served per site (Edit site) and rated capacity per link (Edit link) to size this.</div>
+      </div>
+    {/if}
+
     <div class="sec">
       <div class="sec-t">Sites ({sites.length})</div>
       {#each sites as s}
         {@const id = s.properties.site_id}
         <div class="row">
-          <span class="rowmain static"><span class="rid">{id}</span><span class="rsub">{s.properties.name || ''} · {s.properties.mast_height_m ?? '?'} m</span></span>
+          <span class="rowmain static"><span class="rid">{id}</span>{#if s.properties.is_hub}<span class="chip PASS">HUB</span>{/if}<span class="rsub">{s.properties.name || ''} · {s.properties.mast_height_m ?? '?'} m{#if s.properties.customers_served != null} · {s.properties.customers_served} customers{/if}</span></span>
           <span class="acts">
             <button title="Zoom" on:click={() => dispatch('zoom', { kind: 'site', id })}>⌖</button>
             <button title="Edit" data-testid="wp-edit-site" on:click={() => dispatch('edit', { kind: 'site', id })}>✎</button>
@@ -232,6 +287,15 @@
         <div class="sec-t sub">Radio input limits</div>
         <div class="hint">Typical UK fixed-wireless values. An entry outside these fails the link or sector so a typo can never produce an impossible budget. They are not Ofcom or licence limits.</div>
         {#each LIMIT_FIELDS as [key, label, help]}
+          <div class="setg">
+            <label for={'ws-' + key}>{label}</label>
+            <input id={'ws-' + key} data-testid={'ws-' + key} type="text" inputmode="decimal" bind:value={draft[key]} on:change={(e) => commitSetting(key, e.currentTarget.value)} />
+            {#if help}<div class="help">{help}</div>{/if}
+          </div>
+        {/each}
+        <div class="sec-t sub">Backhaul capacity assumptions</div>
+        <div class="hint">Planning assumptions, not RF physics or Ofcom limits. Confirm against your actual service plans and contention policy.</div>
+        {#each CAPACITY_FIELDS as [key, label, help]}
           <div class="setg">
             <label for={'ws-' + key}>{label}</label>
             <input id={'ws-' + key} data-testid={'ws-' + key} type="text" inputmode="decimal" bind:value={draft[key]} on:change={(e) => commitSetting(key, e.currentTarget.value)} />

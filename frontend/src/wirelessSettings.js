@@ -50,6 +50,16 @@ export const DEFAULT_WIRELESS_SETTINGS = Object.freeze({
   rainRate001Mmh: 30,
   minAvailabilityPct: 99.9,
   minClearSkyMarginDb: 6,
+
+  // ── Backhaul capacity planning (see wirelessCapacity.js) ─────────────────
+  // A topology/arithmetic check, deliberately separate from the RF physics
+  // above: does every link on the path from a customer site to the backhaul
+  // hub carry enough rated capacity for the customers behind it? These are
+  // PLANNING assumptions, not RF physics or Ofcom limits — confirm against
+  // your actual service plans and contention policy.
+  serviceTierMbps: 1000,          // committed/sold rate per customer used for demand roll-up
+  contentionRatio: 20,            // customers per 1x the service tier's worth of backhaul
+  targetUtilizationPct: 70,       // warn once required demand exceeds this % of a link's rated capacity
 });
 
 import { gaseousAttenuationDbPerKm } from './wirelessGas.js';
@@ -78,6 +88,9 @@ const RANGES = {
   gasModel:               [0, 1],
   gasTemperatureC:        [-40, 50],
   gasWaterVapourGm3:      [0, 30],
+  serviceTierMbps:        [1, 100000],
+  contentionRatio:        [1, 1000],
+  targetUtilizationPct:   [1, 100],
 };
 
 /** Merge user settings over defaults, dropping anything invalid back to default. */

@@ -12,6 +12,8 @@ export const SITE_FIELDS = [
   { key: 'name', label: 'Name', type: 'text', section: 'Site' },
   n('mast_height_m', 'Structure height (m AGL)', { section: 'Site', required: true, min: 0, help: 'Height of the mast/tower/building above ground where antennas are mounted.' }),
   n('ground_override_m', 'Ground elevation override (m ASL)', { section: 'Site', help: 'Leave blank to use terrain data. Enter a surveyed value to override the terrain model.' }),
+  { key: 'is_hub', label: 'Backhaul hub (traffic joins the wired network here)', type: 'boolean', section: 'Backhaul capacity', help: 'Mark exactly one site as the hub. Customer demand on every other site rolls up toward it, link by link.' },
+  n('customers_served', 'Customers served from this site', { section: 'Backhaul capacity', min: 0, help: 'Used only for backhaul sizing, not RF. Leave blank for a pass-through/relay site with no customers of its own.' }),
   { key: 'notes', label: 'Notes', type: 'text', section: 'Site' },
 ];
 
@@ -41,6 +43,7 @@ export const LINK_FIELDS = [
   n('freq_ghz', 'Frequency (GHz)', { section: 'Link', required: true, min: 0.1 }),
   n('channel_width_mhz', 'Channel width (MHz)', { section: 'Link', min: 1, help: 'Recorded for the design; not used in the free-space budget.' }),
   n('extra_loss_db', 'Extra path loss (dB)', { section: 'Link', min: 0, help: 'Rain / foliage / other allowance. Blank = 0. Required above the absorption threshold (default 50 GHz), e.g. about 15 dB per km near 60 GHz.' }),
+  n('rated_capacity_mbps', 'Rated capacity (Mbps)', { section: 'Backhaul capacity', min: 1, help: "The throughput figure from the radio's datasheet for your chosen channel width/modulation, not calculated here. Used to check this link against downstream customer demand." }),
   ...end('a', 'A'), ...end('b', 'B'),
   { key: 'survey_los_confirmed', label: 'Line of sight confirmed by site survey', type: 'boolean', section: 'Survey override', help: 'Waives the MODELLED clearance check only. The link budget is still enforced.' },
   { key: 'survey_note', label: 'Survey note (required if confirmed)', type: 'text', section: 'Survey override' },
@@ -88,7 +91,7 @@ export function validateFields(fields, values) {
 
 /** Radio parameters worth carrying from the previous link so the user is not retyping 10 numbers. */
 export const LINK_CARRY_KEYS = ['freq_ghz', 'channel_width_mhz', 'tx_power_a_dbm', 'gain_a_dbi', 'rx_sensitivity_a_dbm', 'cable_loss_a_db',
-  'tx_power_b_dbm', 'gain_b_dbi', 'rx_sensitivity_b_dbm', 'cable_loss_b_db', 'extra_loss_db'];
+  'tx_power_b_dbm', 'gain_b_dbi', 'rx_sensitivity_b_dbm', 'cable_loss_b_db', 'extra_loss_db', 'rated_capacity_mbps'];
 // Default plausibility range per carried key, so an implausible value on the
 // previous asset (e.g. 200 dBi) is never copied into the next one.
 const CARRY_RANGE = {
