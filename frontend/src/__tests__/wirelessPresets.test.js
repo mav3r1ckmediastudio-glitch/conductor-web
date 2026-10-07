@@ -1,6 +1,6 @@
-// Presets (airFiber-60-LR-class backhaul, LTU-class 5.8 GHz access, plus the
-// gigabit alternatives) and the ITU-R P.676 gas-absorption model as it is
-// applied to links and coverage.
+// Presets (11 GHz licensed PtP backhaul trunk, 60 GHz PtMP customer access by
+// default, plus the airFiber-60-LR-class and LTU-class 5.8 GHz alternatives)
+// and the ITU-R P.676 gas-absorption model as it is applied to links and coverage.
 import { describe, it, expect } from 'vitest';
 import { PRESETS, presetFor, presetOptions } from '../wirelessPresets.js';
 import { analyseWireless, checkSector } from '../wirelessAnalysis.js';
@@ -22,17 +22,17 @@ const codes = (a) => a.issues.map(i => i.code);
 
 describe('preset catalogue', () => {
   it('links and sectors each offer at least two selectable presets; the first is the default', () => {
-    expect(presetOptions('link').map(p => p.id)).toEqual(['af60lr', 'ptp11']);
-    expect(presetOptions('sector').map(p => p.id)).toEqual(['ptmp5', 'ptmp60']);
-    expect(presetFor('link').id).toBe('af60lr');
-    expect(presetFor('sector').id).toBe('ptmp5');
-    expect(presetFor('link', 'ptp11').name).toMatch(/11 GHz/);
-    expect(presetFor('link', 'nonsense').id).toBe('af60lr');         // unknown id falls back to the default
+    expect(presetOptions('link').map(p => p.id)).toEqual(['ptp11', 'af60lr']);
+    expect(presetOptions('sector').map(p => p.id)).toEqual(['ptmp60', 'ptmp5']);
+    expect(presetFor('link').id).toBe('ptp11');
+    expect(presetFor('sector').id).toBe('ptmp60');
+    expect(presetFor('link', 'af60lr').name).toMatch(/60 GHz/);
+    expect(presetFor('link', 'nonsense').id).toBe('ptp11');          // unknown id falls back to the default
   });
   it('every preset carries a note saying where its numbers come from', () => {
     for (const k of ['site', 'link', 'sector']) for (const p of presetOptions(k)) expect(p.note.length).toBeGreaterThan(30);
-    expect(presetFor('link').note).toMatch(/FCC/);
-    expect(presetFor('sector').note).toMatch(/36 dBm/);
+    expect(presetFor('link').note).toMatch(/Ofcom/);
+    expect(presetFor('sector').note).toMatch(/absorption/);
   });
   it('azimuth is deliberately not preset', () => {
     for (const p of presetOptions('sector')) expect(p.values).not.toHaveProperty('azimuth_deg');
@@ -46,9 +46,9 @@ describe('preset catalogue', () => {
     }
   });
   it('new assets start from the default preset; implausible values on the previous asset are not carried', () => {
-    expect(carryDefaults('sector', [])).toMatchObject({ freq_ghz: 5.8, tx_power_dbm: 19, gain_dbi: 17 });
+    expect(carryDefaults('sector', [])).toMatchObject({ freq_ghz: 60, tx_power_dbm: 20, gain_dbi: 18 });
     const d = carryDefaults('link', [{ properties: { freq_ghz: 200, gain_a_dbi: 200, tx_power_a_dbm: 200, rx_sensitivity_a_dbm: 200 } }]);
-    expect(d).toMatchObject({ freq_ghz: 69.12, gain_a_dbi: 38, tx_power_a_dbm: 21, rx_sensitivity_a_dbm: -70 });
+    expect(d).toMatchObject({ freq_ghz: 11, gain_a_dbi: 38, tx_power_a_dbm: 23, rx_sensitivity_a_dbm: -58 });
   });
   it('the 5.8 GHz sector preset is exactly at the UK 36 dBm (4 W) EIRP cap', () => {
     const v = presetFor('sector', 'ptmp5').values;
