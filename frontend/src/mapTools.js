@@ -44,6 +44,7 @@ export {
   activateJointTool,
   activatePoleTool,
   applyCookieCutter,
+  applyForestryCookieCutter,
 } from './mapDrawTools.js';
 export {
   activateFibreCountTool,

@@ -9,6 +9,22 @@
   import JointForm from './JointForm.svelte';
   import CableForm from './CableForm.svelte';
   import PlacePoleForm from './PlacePoleForm.svelte';
+  import WirelessForm from './WirelessForm.svelte';
+  import WirelessPanel from './WirelessPanel.svelte';
+  import {
+    activateWirelessSiteTool, activateWirelessSectorTool, activateWirelessLinkTool, activateWirelessMoveTool,
+  } from './wirelessTools.js';
+  import { runWirelessAnalysis, runWirelessCoverage } from './wirelessController.js';
+  import { setCoverageOverlay } from './wirelessLayers.js';
+  import { wirelessPlanState } from './wirelessAnalysis.js';
+  import { hashWirelessInputs } from './wirelessInputs.js';
+  import { resolveWirelessSettings } from './wirelessSettings.js';
+  import { generateWirelessBomCsv, generateWirelessBomHtml } from './wirelessBom.js';
+  import { carryDefaults } from './wirelessFields.js';
+  import { presetOptions } from './wirelessPresets.js';
+  import { suggestAzimuth, countPremisesInBeam } from './wirelessAim.js';
+  import { installSectorAiming } from './wirelessTools.js';
+  import { setSectorPreview, setAimHandlesHidden } from './wirelessLayers.js';
   import CBTForm from './CBTForm.svelte';
   import CBTTailForm from './CBTTailForm.svelte';
   import EditCabinetForm from './EditCabinetForm.svelte';
@@ -27,6 +43,7 @@
   import ValidationSummaryPanel from './ValidationSummaryPanel.svelte';
   import TopBar from './TopBar.svelte';
   import AddressImporter from './AddressImporter.svelte';
+  import ForestryImporter from './ForestryImporter.svelte';
   import BuildAreaForm from './BuildAreaForm.svelte';
   import { showToast, showError } from './toast.js';
   import { projectStore } from './projectStore.js';
@@ -41,7 +58,7 @@
     resumeProjectFile as fsaaResumeProjectFile,
   } from './fsaa.js';
   import { exportSheet } from './mapExport.js';
-  import { setupMapLayers } from './mapLayers.js';
+  import { setupMapLayers, setHillshadeVisible } from './mapLayers.js';
   import { searchAndZoom, fitToProject as fitToProjectExtent } from './mapSearch.js';
   import { exportCadSheet } from './cadExport.js';
   import { assignFibres } from './fibreAssign.js';
@@ -68,10 +85,12 @@
     startToolSession,
     activateFibreTraceTool, clearTraceHighlight,
     activateFibreCountTool, clearCountHighlight,
-    applyCookieCutter, clearTool, getPoleLayer, setSearchMarker
+    applyCookieCutter, applyForestryCookieCutter, clearTool, getPoleLayer, setSearchMarker
   } from './mapTools.js';
 
   const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY;
+  // Key for wireless terrain requests. E2E may substitute one (guarded seam below).
+  const wirelessKey = () => (import.meta.env.VITE_TEST_MODE === '1' && window.__conductorMaptilerKey) || MAPTILER_KEY;
 
   // Playwright/E2E only: swaps every basemap for a local, source-less style
   // spec instead of a live MapTiler URL. MapLibre still fires 'load' and
@@ -98,7 +117,9 @@
   let map;
   let is3D = false;   // Conductor opens in 2D by default (agreed 15 Jul 2026)
   let showBuildings = true;
+  let showForestry = true;
   let showRoads = true;
+  let showHillshade = false;   // terrain relief (wireless planning aid); off by default
   let currentBasemap = 'dark';
   let basemapSwitching = false; // prevents double-clicks during style reload
 
@@ -234,6 +255,7 @@
   // clicked again for every asset.
   let activeSession = null;
   let sessionHint = ''; // the "Click an asset to..." hint for the current select-based session — activeToolLabel gets blanked on each pick, so this is what re-arms restore it from
+  let sessionAction = ''; // 'edit' | 'delete' | 'move' — which sidebar tool started this session; used to redirect a wireless pick (see handleWirelessAssetPick) to the right dedicated flow instead of the generic AssetEditPanel, which knows nothing about wireless assets
 
   // validateResults: populated by ValidateRoutesPanel on:results. Row
   // filtering/sorting/CSV moved into RoutesDrawer.svelte with the drawer.
@@ -264,7 +286,7 @@
   // Map-layer (re)build lives in mapLayers.js — see setupMapLayers() there.
   // Called on first load AND after every basemap switch, with the current
   // toggle state passed explicitly.
-  const layerOpts = () => ({ maptilerKey: MAPTILER_KEY, showBuildings, showRoads });
+  const layerOpts = () => ({ maptilerKey: MAPTILER_KEY, showBuildings, showRoads, showHillshade, showForestry });
 
   onMount(() => {
     map = new maplibregl.Map({
@@ -288,10 +310,21 @@
       window.__conductorSeed = (state) => { projectStore.restoreState(state); };
       window.__conductorOpenPanel = (mode) => { rpMode = mode; };
       window.__conductorStore = projectStore;
+      // Lets the wireless spec exercise the REAL tile fetcher against intercepted
+      // requests without putting a key in the environment (which would make the
+      // basemap layers try to load real terrain). Absent from production builds.
+      window.__conductorMaptilerKey = null;
+      // Lets specs turn a lng/lat into a screen point so they can click map
+      // features through the real tools. Test mode only.
+      window.__conductorMap = map;
+      // Lets specs inspect the real THREE.js scene graph (tower-marker
+      // position, group children) rather than only pixels. Test mode only.
+      window.__conductorPoleLayer = getPoleLayer;
     }
 
     map.on('load', () => {
       setupMapLayers(map, layerOpts());
+      installSectorAiming(map, onSectorAim);
       // Enforce the current view's camera lock from the start (handler enable/disable
       // state lives on the Map instance and persists across basemap style reloads).
       applyCameraLock(is3D);
@@ -388,6 +421,24 @@
     rpMode = 'default';
   }
 
+  function onForestryImported(e) {
+    projectStore.setForestryStands(e.detail);
+    syncToMap(map);
+    if (projectStore.state.buildArea) applyForestryCookieCutter(map, projectStore.state.buildArea);
+    rpMode = 'default';
+  }
+
+  function onForestrySkipped() {
+    rpMode = 'default';
+  }
+
+  function onRecutForestry() {
+    if (map && projectStore.state.buildArea) {
+      applyForestryCookieCutter(map, projectStore.state.buildArea);
+      showToast('Forestry re-cut to the current build area.');
+    }
+  }
+
   function onDrawBuildArea() {
     clearTool(map);
     activeToolLabel = 'Draw Build Area';
@@ -402,6 +453,7 @@
     const attrs = e.detail;
     const feature = { ...pendingBuildArea, properties: attrs };
     applyCookieCutter(map, feature);
+    applyForestryCookieCutter(map, feature);
     projectStore.setBuildArea(feature);
     rpMode = 'default';
     pendingBuildArea = null;
@@ -460,6 +512,233 @@
     autoArmedStage = stage;
     if (stage === 'build-area') onDrawBuildArea();
     else onPlaceCabinet();
+  }
+
+  // ── Wireless layer ─────────────────────────────────────────────────────
+  // Store mutations go through projectStore (see wireless* methods); analysis
+  // and coverage are pure engines driven by wirelessController.js. Only the
+  // stored analysis is persisted — path profiles and the coverage grid live in
+  // memory for the session, and coverage is hidden the moment any wireless
+  // input changes (never shown stale).
+  let wPending = null;          // { kind, data } — create form open
+  let wEdit = null;             // { kind, id }    — edit form open
+  let wProfiles = new Map();
+  let wCoverage = null;
+  let wBusy = '';
+  let wWarning = '';
+  let wSelectedLink = '';
+  $: wState = (storeVersion, projectStore.state);
+  $: wPlanState = wirelessPlanState(wState);
+  $: wSettings = resolveWirelessSettings(wState.wirelessSettings);
+  $: wCoverageStale = !!wCoverage && wCoverage.inputHash !== hashWirelessInputs(wState);
+  $: if (map && wCoverageStale) setCoverageOverlay(map, null);
+
+  const W_KIND_ACTIVATE = {
+    site: activateWirelessSiteTool, sector: activateWirelessSectorTool, link: activateWirelessLinkTool,
+  };
+  const W_LABEL = {
+    site: 'Place Wireless Site — click the map',
+    sector: 'Add Sector — click a wireless site',
+    link: 'Draw PtP Link — click one site, then the other',
+  };
+
+  // New sectors: aim at the most premises within range that no other sector on
+  // the same site already covers. Pre-filled only; the designer can drag the
+  // map handle or type over it.
+  function otherSectorsOnSite(siteId, exceptId = '') {
+    return (projectStore.state.wirelessSectors || [])
+      .filter(f => f.properties?.site_id === siteId && f.properties?.sector_id !== exceptId)
+      .map(f => ({ azimuthDeg: Number(f.properties.azimuth_deg), beamwidthDeg: Number(f.properties.beamwidth_deg), rangeM: Number(f.properties.range_m) }));
+  }
+  function sectorAim(data) {
+    const d = carryDefaults('sector', projectStore.state.wirelessSectors);
+    const r = suggestAzimuth({ lng: data.lng, lat: data.lat }, projectStore.state.addressPoints,
+      { rangeM: Number(d.range_m), beamwidthDeg: Number(d.beamwidth_deg), existing: otherSectorsOnSite(data.site_id) });
+    return { azimuth: r.azimuthDeg };
+  }
+
+  // ── Aiming a sector on the map ──────────────────────────────────────────
+  // The open sector form owns its azimuth: dragging the ghost handle writes into
+  // the form (aimSet), typing in the form moves the ghost. Stored sectors' own
+  // handles save straight to the project when released.
+  let wAimSet = null, wAimSeq = 0, wAimNote = '';
+  function onSectorAim({ sectorId, azimuth, phase }) {
+    if (!sectorId) { if (phase === 'move') wAimSet = { deg: azimuth, n: ++wAimSeq }; return; }
+    if (phase === 'end') {
+      projectStore.updateWirelessProps('sector', sectorId, { azimuth_deg: azimuth });
+      syncToMap(map);
+      showToast(`${sectorId} aimed at ${azimuth}°. Re-run Coverage estimate.`);
+    }
+  }
+  function onSectorPreview(e) {
+    if (!map) return;
+    const { azimuth, beamwidth, range } = e.detail;
+    const editing = wEdit ? wFind(wEdit.kind, wEdit.id) : null;
+    const siteId = editing ? editing.properties.site_id : wPending?.data?.site_id;
+    const site = (projectStore.state.wirelessSites || []).find(s => s.properties?.site_id === siteId);
+    if (!site) return;
+    const [lng, lat] = site.geometry.coordinates;
+    const az = azimuth != null && azimuth >= 0 && azimuth < 360 ? azimuth : null;
+    const bw = beamwidth > 0 ? Math.min(beamwidth, 359) : 90, r = range > 0 ? range : 1000;
+    setSectorPreview(map, { lng, lat, azimuthDeg: az, beamwidthDeg: bw, rangeM: r });
+    const km = (r / 1000).toLocaleString('en-GB', { maximumFractionDigits: 1 });
+    if (az == null) {
+      wAimNote = `No aim yet. Drag the amber handle on the map to aim this sector, or type an azimuth (0 = north, 90 = east, 180 = south, 270 = west).`;
+      return;
+    }
+    const existing = otherSectorsOnSite(siteId, editing ? wEdit.id : '');
+    const c = countPremisesInBeam({ lng, lat }, projectStore.state.addressPoints, { azimuthDeg: az, rangeM: r, beamwidthDeg: bw, existing });
+    const auto = !editing && wPending?.data?.aim?.azimuth === az;
+    wAimNote = (auto ? 'Aimed automatically at the direction with the most premises. ' : '')
+      + `Pointing at ${c.inBeam} premises within ${km} km`
+      + (existing.length && c.uncovered !== c.inBeam ? ` (${c.uncovered} not already covered by this site's other sectors)` : '')
+      + '. Drag the amber handle on the map to aim it somewhere else.';
+  }
+  // While a form is open only its ghost is draggable; otherwise the ghost is cleared.
+  $: if (map) {
+    setAimHandlesHidden(map, rpMode === 'wireless-form');
+    if (rpMode !== 'wireless-form') setSectorPreview(map, null);
+  }
+
+  function armWireless(kind) {
+    const err = W_KIND_ACTIVATE[kind](map, (data) => {
+      if (kind === 'sector') data = { ...data, aim: sectorAim(data) };
+      wAimSet = null; wAimNote = '';
+      wPending = { kind, data };
+      wEdit = null;
+      rpMode = 'wireless-form';
+      activeToolLabel = '';
+    });
+    if (err) { showToast(err.error); activeToolLabel = ''; }
+  }
+  function onPlaceWireless(kind) {
+    clearTool(map);
+    activeToolLabel = W_LABEL[kind];
+    armWireless(kind);
+  }
+  function onWirelessMove() {
+    clearTool(map);
+    activeToolLabel = 'Move Wireless Site — click a site, then its new position';
+    const err = activateWirelessMoveTool(map, () => { activeToolLabel = ''; syncToMap(map); showToast('Site moved. Re-run Analyse links.'); });
+    if (err) { showToast(err.error); activeToolLabel = ''; }
+  }
+  function onOpenWirelessPanel() {
+    clearTool(map);
+    activeToolLabel = '';
+    rpMode = 'wireless-panel';
+  }
+
+  function onWirelessFormSaved(e) {
+    const props = e.detail;
+    if (wEdit) {
+      const editedKind = wEdit.kind;
+      projectStore.updateWirelessProps(wEdit.kind, wEdit.id, props);
+      wEdit = null;
+      syncToMap(map);
+      // A site's mast_height_m may have just changed: force the 3D tower-top
+      // marker to move now, rather than waiting on the pole layer's own
+      // per-frame heuristics (see the comment on PoleLayer.refresh()).
+      if (editedKind === 'site') getPoleLayer()?.refresh();
+      rpMode = 'wireless-panel';
+      return;
+    }
+    const { kind, data } = wPending;
+    let ok = false;
+    if (kind === 'site') {
+      ok = projectStore.addWirelessSite({ type: 'Feature', geometry: { type: 'Point', coordinates: [data.lng, data.lat] }, properties: { site_id: data.site_id, area_id: data.area_id, ...props } });
+    } else if (kind === 'sector') {
+      ok = projectStore.addWirelessSector({ type: 'Feature', geometry: { type: 'Point', coordinates: [data.lng, data.lat] }, properties: { sector_id: data.sector_id, site_id: data.site_id, ...props } });
+    } else {
+      ok = projectStore.addWirelessLink({ type: 'Feature', geometry: { type: 'LineString', coordinates: data.coordinates }, properties: { link_id: data.link_id, site_a: data.site_a, site_b: data.site_b, ...props } });
+    }
+    if (!ok) showToast('That ID already exists — nothing was added.');
+    wPending = null;
+    syncToMap(map);
+    rpMode = 'wireless-panel';
+    // Sites are usually placed in runs: keep the tool armed for the next one.
+    if (kind === 'site' && ok) { activeToolLabel = W_LABEL.site; armWireless('site'); }
+  }
+  function onWirelessFormCancelled() {
+    wPending = null; wEdit = null;
+    clearTool(map);
+    activeToolLabel = '';
+    rpMode = 'wireless-panel';
+  }
+
+  const W_COLL = { site: 'wirelessSites', sector: 'wirelessSectors', link: 'wirelessLinks' };
+  const W_ID = { site: 'site_id', sector: 'sector_id', link: 'link_id' };
+  const wFind = (kind, id) => projectStore.state[W_COLL[kind]]?.find(f => f.properties?.[W_ID[kind]] === id);
+
+  function onWirelessEdit(e) {
+    const { kind, id } = e.detail;
+    if (!wFind(kind, id)) return;
+    clearTool(map); activeToolLabel = '';
+    wAimSet = null; wAimNote = '';
+    wPending = null; wEdit = { kind, id };
+    rpMode = 'wireless-form';
+  }
+  function onWirelessRemove(e) {
+    const { kind, id } = e.detail;
+    if (kind === 'site') {
+      const r = projectStore.deleteWirelessSite(id);
+      if (r) showToast(`Deleted ${id}${r.removed.wirelessSectors || r.removed.wirelessLinks ? ` (also removed ${r.removed.wirelessSectors} sector(s) and ${r.removed.wirelessLinks} link(s))` : ''}.`);
+    } else if (kind === 'link') projectStore.deleteWirelessLink(id);
+    else projectStore.deleteWirelessSector(id);
+    if (!wFind('link', wSelectedLink)) wSelectedLink = '';
+    syncToMap(map);
+  }
+  function onWirelessZoom(e) {
+    const { kind, id } = e.detail;
+    const f = wFind(kind, id);
+    if (!f || !map) return;
+    if (kind === 'link') {
+      const c = f.geometry.coordinates;
+      const lngs = c.map(p => p[0]), lats = c.map(p => p[1]);
+      map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 120, duration: 600 });
+    } else {
+      map.easeTo({ center: f.geometry.coordinates, zoom: Math.max(map.getZoom(), 15), duration: 600 });
+    }
+  }
+
+  async function onWirelessAnalyse() {
+    if (wBusy) return;
+    wBusy = 'analysis'; wWarning = '';
+    try {
+      const r = await runWirelessAnalysis(projectStore.state, { maptilerKey: wirelessKey() });
+      projectStore.applyWirelessAnalysis(r.analysis);
+      wProfiles = r.profiles;
+      wWarning = r.warning || '';
+      if (!wSelectedLink && r.analysis.links[0]) wSelectedLink = r.analysis.links[0].link_id;
+      syncToMap(map);
+    } catch (err) {
+      console.error('[wireless] analysis failed:', err);
+      showError('The wireless analysis could not be completed. Nothing has been validated.');
+    } finally { wBusy = ''; }
+  }
+  async function onWirelessCoverage() {
+    if (wBusy) return;
+    wBusy = 'coverage'; wWarning = '';
+    try {
+      const r = await runWirelessCoverage(projectStore.state, { maptilerKey: wirelessKey() });
+      if (!r.ok) { wCoverage = null; setCoverageOverlay(map, null); wWarning = r.error; return; }
+      wCoverage = r;
+      wWarning = r.warning || '';
+      setCoverageOverlay(map, r.grid, r.settings.coverageMarginDb);
+    } catch (err) {
+      console.error('[wireless] coverage failed:', err);
+      wCoverage = null; setCoverageOverlay(map, null);
+      showError('The coverage estimate could not be completed.');
+    } finally { wBusy = ''; }
+  }
+  function onWirelessClearCoverage() { wCoverage = null; setCoverageOverlay(map, null); }
+  function onWirelessSettings(e) { projectStore.updateWirelessSettings(e.detail); }
+  function onWirelessBom(e) {
+    const isCsv = e.detail === 'csv';
+    const text = isCsv ? generateWirelessBomCsv(projectStore.state) : generateWirelessBomHtml(projectStore.state);
+    const name = `${(projectStore.project?.areaId || 'wireless')}-wireless-bom.${isCsv ? 'csv' : 'html'}`;
+    const url = URL.createObjectURL(new Blob([text], { type: isCsv ? 'text/csv' : 'text/html' }));
+    const a = document.createElement('a'); a.href = url; a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   // ── Asset placement registry ───────────────────────────────────────────
@@ -790,13 +1069,54 @@
     }
   }
 
+  const WIRELESS_ASSET_TYPES = { wirelessSite: 'site', wirelessSector: 'sector', wirelessLink: 'link' };
+
   function selectAsset(hit) {
+    const kind = WIRELESS_ASSET_TYPES[hit.assetType];
+    if (kind) { handleWirelessAssetPick(kind, hit.assetId); return; }
     selectedAsset = hit;
     // rpMode deliberately NOT changed here any more (was 'asset-selected').
     // AssetEditPanel now renders in-place inside the default view's
     // asset-section instead of replacing the whole panel — see the rpMode
     // fallback branch below. Selecting an asset no longer hides Validation
     // Summary / Engineer Outputs.
+  }
+
+  // A wireless asset picked via the generic Edit/Delete/Move Asset tools
+  // (same click-an-asset flow every other asset type uses) — AssetEditPanel
+  // has no idea how to show/edit/delete/move a wireless site, sector or link,
+  // so redirect straight to the exact flows the Wireless panel's own
+  // pencil/✕ buttons already use, keyed off which tool started this session.
+  function handleWirelessAssetPick(kind, id) {
+    if (sessionAction === 'delete') {
+      onWirelessRemove({ detail: { kind, id } });
+      if (activeSession) activeSession.rearm(() => armSelectTool(sessionHint));
+      return;
+    }
+    if (sessionAction === 'move') {
+      if (kind !== 'site') {
+        showToast(`A ${kind} follows its site — move the site instead.`);
+        if (activeSession) activeSession.rearm(() => armSelectTool(sessionHint));
+        return;
+      }
+      // activateWirelessMoveTool does its own click-to-pick internally (it
+      // isn't built to accept an already-resolved site), so this hands off
+      // to it fresh rather than reusing the click that got us here — one
+      // extra click on the same site to confirm, then click its new spot.
+      clearTool(map);
+      const err = activateWirelessMoveTool(map, () => {
+        activeToolLabel = ''; syncToMap(map); showToast('Site moved. Re-run Analyse links.');
+        if (activeSession) activeSession.rearm(() => armSelectTool(sessionHint));
+      });
+      if (err?.error) { showToast(err.error); if (activeSession) activeSession.rearm(() => armSelectTool(sessionHint)); }
+      return;
+    }
+    // 'edit' (the default action) — same form the Wireless panel's own
+    // pencil button opens. Left in place afterward rather than re-arming the
+    // generic picker: matches how editing an asset already works elsewhere.
+    wEdit = { kind, id };
+    wPending = null;
+    rpMode = 'wireless-form';
   }
 
   function onAssetPickerChoose(e) {
@@ -822,7 +1142,7 @@
   // something is selected and the asset panel is open. One continuous
   // session covers all three uniformly — see docs/conductor-web-context.md
   // (agreed 2 Jul 2026).
-  function startAssetSelectSession(hint) {
+  function startAssetSelectSession(hint, action = 'edit') {
     clearTool(map); // implicitly ends any dangling session as 'save' — see clearTool() in mapTools.js
     // Explicit reset needed here now: selecting an asset no longer forces
     // rpMode to a dedicated mode (see selectAsset() above), so if some other
@@ -830,6 +1150,7 @@
     // instead of the asset-section where AssetEditPanel actually lives.
     rpMode = 'default';
     sessionHint = hint;
+    sessionAction = action;
     const session = startToolSession(map, {
       onEnd: endSession,
       message: 'End this session? Save keeps everything edited, deleted or moved since you started; Cancel undoes it all.',
@@ -840,17 +1161,17 @@
 
   function onEditAsset() {
     if (stage !== 'design') return;
-    startAssetSelectSession('Click an asset to select it');
+    startAssetSelectSession('Click an asset to select it', 'edit');
   }
 
   function onDeleteAsset() {
     if (stage !== 'design') return;
-    startAssetSelectSession('Click an asset to delete it');
+    startAssetSelectSession('Click an asset to delete it', 'delete');
   }
 
   function onMoveAsset() {
     if (stage !== 'design') return;
-    startAssetSelectSession('Click an asset to move it');
+    startAssetSelectSession('Click an asset to move it', 'move');
   }
 
   function onAssetPanelSaved(e) {
@@ -1197,6 +1518,12 @@
     if (toolId === 'fibre-assign')        onFibreAssign();
     if (toolId === 'fibre-count')         onFibreCount();
     if (toolId === 'branch-classify')     onBranchClassify();
+    // Wireless
+    if (toolId === 'wireless-site')       onPlaceWireless('site');
+    if (toolId === 'wireless-sector')     onPlaceWireless('sector');
+    if (toolId === 'wireless-link')       onPlaceWireless('link');
+    if (toolId === 'wireless-move')       onWirelessMove();
+    if (toolId === 'wireless-panel')      { onOpenWirelessPanel(); activeToolLabel = ''; activeToolId = ''; }
   }
 
   // ✕ on the active-tool chip — full tool teardown. Extracted from the chip's
@@ -1245,6 +1572,18 @@
     if (map && map.getLayer('buildings-3d')) {
       map.setLayoutProperty('buildings-3d', 'visibility', showBuildings ? 'visible' : 'none');
     }
+  }
+
+  function toggleForestry() {
+    showForestry = !showForestry;
+    for (const id of ['forestry-3d', 'forestry-outline']) {
+      if (map && map.getLayer(id)) map.setLayoutProperty(id, 'visibility', showForestry ? 'visible' : 'none');
+    }
+  }
+
+  function toggleHillshade() {
+    showHillshade = !showHillshade;
+    if (map) setHillshadeVisible(map, showHillshade);
   }
 
   function toggleRoads() {
@@ -1437,7 +1776,9 @@
       {stage}
       {activeCat}
       {showBuildings}
+      {showForestry}
       {showRoads}
+      {showHillshade}
       basemaps={BASEMAPS}
       {currentBasemap}
       {basemapSwitching}
@@ -1449,7 +1790,11 @@
       on:deleteAsset={onDeleteAsset}
       on:moveAsset={onMoveAsset}
       on:toggleBuildings={toggleBuildings}
+      on:toggleForestry={toggleForestry}
+      on:importForestry={() => rpMode = 'forestry-import'}
+      on:recutForestry={onRecutForestry}
       on:toggleRoads={toggleRoads}
+      on:toggleHillshade={toggleHillshade}
       on:changeBasemap={(e) => changeBasemap(e.detail)}
     />
 
@@ -1482,6 +1827,8 @@
 
       {#if rpMode === 'address-import'}
         <AddressImporter on:imported={onAddressImported} on:skip={onAddressSkipped} />
+      {:else if rpMode === 'forestry-import'}
+        <ForestryImporter on:imported={onForestryImported} on:skip={onForestrySkipped} />
 
       {:else if rpMode === 'build-area-form'}
         <BuildAreaForm areaId={project?.areaId || ''} on:save={onBuildAreaSaved} on:cancel={onBuildAreaCancelled} />
@@ -1500,6 +1847,34 @@
 
       {:else if rpMode === 'cable-form'}
         <CableForm pending={pendingCable} on:save={onCableSaved} on:cancel={onCableCancelled} />
+
+      {:else if rpMode === 'wireless-form'}
+        {#if wEdit}
+          {@const f = wFind(wEdit.kind, wEdit.id)}
+          <WirelessForm kind={wEdit.kind} mode="edit" assetId={wEdit.id} existing={f?.properties} presets={presetOptions(wEdit.kind)}
+            note={wEdit.kind === 'sector' ? wAimNote : ''} aimSet={wAimSet} on:preview={onSectorPreview}
+            on:save={onWirelessFormSaved} on:cancel={onWirelessFormCancelled} />
+        {:else if wPending}
+          <WirelessForm kind={wPending.kind} mode="create" assetId={wPending.data[W_ID[wPending.kind]]}
+            subtitle={wPending.kind === 'link' ? `${wPending.data.site_a} ↔ ${wPending.data.site_b}` : wPending.kind === 'sector' ? `on site ${wPending.data.site_id}` : ''}
+            defaults={{ ...carryDefaults(wPending.kind, projectStore.state[W_COLL[wPending.kind]]),
+                        ...(wPending.data.aim?.azimuth != null ? { azimuth_deg: wPending.data.aim.azimuth } : {}) }}
+            presets={presetOptions(wPending.kind)}
+            note={wPending.kind === 'sector' ? wAimNote : ''} aimSet={wAimSet} on:preview={onSectorPreview}
+            on:save={onWirelessFormSaved} on:cancel={onWirelessFormCancelled} />
+        {/if}
+
+      {:else if rpMode === 'wireless-panel'}
+        <WirelessPanel
+          sites={wState.wirelessSites || []} links={wState.wirelessLinks || []} sectors={wState.wirelessSectors || []}
+          settings={wSettings} analysis={wState.wirelessAnalysis} planState={wPlanState}
+          profiles={wProfiles} coverage={wCoverage} coverageStale={wCoverageStale}
+          busy={wBusy} warning={wWarning} selectedLinkId={wSelectedLink}
+          on:analyse={onWirelessAnalyse} on:coverage={onWirelessCoverage} on:clearCoverage={onWirelessClearCoverage}
+          on:zoom={onWirelessZoom} on:edit={onWirelessEdit} on:remove={onWirelessRemove}
+          on:settings={onWirelessSettings} on:bom={onWirelessBom}
+          on:selectLink={(e) => wSelectedLink = e.detail}
+          on:close={() => rpMode = 'default'} />
 
       {:else if rpMode === 'pole-form'}
         <PlacePoleForm pending={pendingPole} on:save={onPoleSaved} on:cancel={onPoleCancelled} />

@@ -60,12 +60,15 @@ function buildId() {
   return `local.${stamp}`
 }
 const APP_VERSION = `${pkg.version}+${buildId()}`
+// UTC time this bundle was built, shown beside the commit so a stale browser tab or deploy is obvious.
+const BUILD_TIME = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC'
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [svelte()],
   define: {
     __APP_VERSION__: JSON.stringify(APP_VERSION),
+    __BUILD_TIME__: JSON.stringify(BUILD_TIME),
   },
   test: {
     // vitest's default include glob (**/*.{test,spec}.*) would otherwise

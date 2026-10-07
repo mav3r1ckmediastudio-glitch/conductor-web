@@ -148,6 +148,33 @@
         ` },
       ]
     },
+    wireless: {
+      label: 'Wireless',
+      tools: [
+        { id: 'wireless-site', label: 'Place Wireless Site', iconSvg: `
+          <line x1="10" y1="5" x2="10" y2="19" stroke-width="2"/>
+          <circle cx="10" cy="5" r="1.6" fill="currentColor" stroke="none"/>
+          <path d="M5.5,3 Q3,5 5.5,7"/><path d="M14.5,3 Q17,5 14.5,7"/>
+          <line x1="6" y1="19" x2="14" y2="19"/>
+        ` },
+        { id: 'wireless-sector', label: 'Add Sector', iconSvg: `
+          <path d="M10,17 L3,5 A13,13 0 0 1 17,5 Z"/>
+          <circle cx="10" cy="17" r="1.4" fill="currentColor" stroke="none"/>
+        ` },
+        { id: 'wireless-link', label: 'Draw PtP Link', iconSvg: `
+          <circle cx="4" cy="15" r="2"/><circle cx="16" cy="5" r="2"/>
+          <line x1="5.5" y1="13.5" x2="14.5" y2="6.5" stroke-dasharray="2 1.5"/>
+        ` },
+        { id: 'wireless-move', label: 'Move Wireless Site', iconSvg: `
+          <circle cx="10" cy="10" r="2.2"/>
+          <path d="M10,2 V5 M10,15 V18 M2,10 H5 M15,10 H18"/>
+        ` },
+        { id: 'wireless-panel', label: 'Analyse & Coverage', iconSvg: `
+          <path d="M2,16 L7,9 L11,13 L18,4"/>
+          <line x1="2" y1="18" x2="18" y2="18"/>
+        ` },
+      ]
+    },
     pia: {
       label: 'PIA Underground',
       tools: [

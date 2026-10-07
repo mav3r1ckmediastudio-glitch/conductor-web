@@ -205,9 +205,11 @@ describe('projectSchema — v1 -> v2 migration (release-audit P0-2)', () => {
     expect(r.state.physicalPlanInputHash).toBeNull();
   });
 
-  it('does NOT downgrade a genuine v2 project (no migration, status preserved)', () => {
+  it('does NOT downgrade a genuine v2 project (only the v2->v3 wireless migration runs, physical status preserved)', () => {
     const r = validateProjectState({ schemaVersion: 2, physicalPlanStatus: 'VALIDATED', physicalPlanInputHash: 'p2-abc-1', physicalAssignments: [], cables: [] });
-    expect(r.migrations).toHaveLength(0);
+    // Schema v3 (wireless) is purely additive: the ONLY migration is the v3 notice.
+    expect(r.migrations).toHaveLength(1);
+    expect(r.migrations[0]).toMatch(/v3/);
     expect(r.state.physicalPlanStatus).toBe('VALIDATED');
     expect(r.state.physicalPlanInputHash).toBe('p2-abc-1');
   });

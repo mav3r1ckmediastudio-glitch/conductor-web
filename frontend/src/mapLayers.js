@@ -24,8 +24,38 @@ import { ensureSources, ensureTerrainLayers, syncToMap } from './mapTools.js';
  * @param options.maptilerKey   API key for the terrain DEM tile URL.
  * @param options.showBuildings current buildings-toggle state to restore.
  * @param options.showRoads     current roads-toggle state to restore.
+ * @param options.showHillshade current terrain-relief toggle state to restore.
  */
-export function setupMapLayers(map, { maptilerKey, showBuildings, showRoads }) {
+// Terrain relief for wireless planning. Reuses the existing 'terrain' DEM
+// source (no extra tile requests). Hidden by default so the established dark
+// visual language is unchanged; toggled via setHillshadeVisible().
+export const HILLSHADE_LAYER_ID = 'terrain-hillshade';
+
+export function ensureHillshadeLayer(map, visible = false) {
+  if (!map.getSource('terrain') || map.getLayer(HILLSHADE_LAYER_ID)) return;
+  // Insert beneath our first custom layer so hillshade never covers assets.
+  const before = map.getLayer('wireless-coverage-layer') ? 'wireless-coverage-layer'
+    : map.getLayer('addresses-clusters') ? 'addresses-clusters' : undefined;
+  map.addLayer({
+    id: HILLSHADE_LAYER_ID,
+    type: 'hillshade',
+    source: 'terrain',
+    layout: { visibility: visible ? 'visible' : 'none' },
+    paint: {
+      'hillshade-exaggeration': 0.5,
+      'hillshade-shadow-color': '#000814',
+      'hillshade-highlight-color': '#4dc8ff',
+      'hillshade-accent-color': '#0a2a44',
+    },
+  }, before);
+}
+
+export function setHillshadeVisible(map, visible) {
+  if (!map.getLayer(HILLSHADE_LAYER_ID)) return;
+  map.setLayoutProperty(HILLSHADE_LAYER_ID, 'visibility', visible ? 'visible' : 'none');
+}
+
+export function setupMapLayers(map, { maptilerKey, showBuildings, showRoads, showHillshade = false, showForestry = true }) {
   // 1. GeoJSON sources + non-terrain symbol layers (chambers, joints, labels etc.)
   ensureSources(map);
 
@@ -45,6 +75,7 @@ export function setupMapLayers(map, { maptilerKey, showBuildings, showRoads }) {
       });
     }
     map.setTerrain({ source: 'terrain', exaggeration: 1.5 });
+    ensureHillshadeLayer(map, showHillshade);
   }
 
   // 3. Terrain-dependent line layers + 3D pole CustomLayerInterface
@@ -122,6 +153,10 @@ export function setupMapLayers(map, { maptilerKey, showBuildings, showRoads }) {
   const roadVis = showRoads ? 'visible' : 'none';
   if (map.getLayer('roads-glow')) map.setLayoutProperty('roads-glow', 'visibility', roadVis);
   if (map.getLayer('roads-neon')) map.setLayoutProperty('roads-neon', 'visibility', roadVis);
+  const forestryVis = showForestry ? 'visible' : 'none';
+  for (const id of ['forestry-3d', 'forestry-outline']) {
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', forestryVis);
+  }
 
   // 6. Push all stored GeoJSON data into sources
   syncToMap(map);

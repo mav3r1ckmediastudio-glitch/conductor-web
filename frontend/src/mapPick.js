@@ -116,6 +116,7 @@ const LAYER_TO_META = {
   'cables-pulse':   { collection: 'cables',    assetType: 'cable',   idProp: 'cable_id',   label: 'Cable' },
   'dropducts-layer':{ collection: 'dropDucts', assetType: 'dropduct',idProp: 'ddct_id',    label: 'Drop Duct' },
   'bundles-layer':  { collection: 'bundles',   assetType: 'bundle',  idProp: 'bundle_id',  label: 'Bundle' },
+  'wireless-links-layer': { collection: 'wirelessLinks', assetType: 'wirelessLink', idProp: 'link_id', label: 'Wireless Link' },
 };
 
 // Point asset screen-distance pick (same radius as snap, 20px).
@@ -128,6 +129,15 @@ function _pointAssetCandidates(map, lngLat, snapPx = 20) {
     { collection: 'joints',    assetType: 'joint',    idProp: 'joint_id',   label: 'Joint',        arr: projectStore.joints },
     { collection: 'poles',     assetType: 'pole',     idProp: 'pole_id',    label: 'Pole',         arr: projectStore.poles },
     { collection: 'cbts',      assetType: 'cbt',      idProp: 'cbt_id',     label: 'CBT',          arr: projectStore.cbts },
+    // Wireless sites and sectors both carry their own Point geometry (a
+    // sector's is set to its site's position at creation — see
+    // addWirelessSector's caller in App.svelte). assetType is prefixed
+    // 'wireless*' throughout this file to keep it unambiguous alongside the
+    // plain fibre-side names above, since App.svelte branches on it to
+    // redirect Edit/Delete/Move to the dedicated wireless flows instead of
+    // the generic AssetEditPanel (which knows nothing about wireless).
+    { collection: 'wirelessSites',   assetType: 'wirelessSite',   idProp: 'site_id',   label: 'Wireless Site',   arr: projectStore.wirelessSites },
+    { collection: 'wirelessSectors', assetType: 'wirelessSector', idProp: 'sector_id', label: 'Wireless Sector', arr: projectStore.wirelessSectors },
   ];
 
   for (const { collection, assetType, idProp, label, arr } of checks) {
